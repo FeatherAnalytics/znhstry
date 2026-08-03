@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapViewState, PickingInfo } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import { StatsPanel, type Totals } from "@/components/StatsPanel";
-import { StrataScrubber, type SeriesPoint } from "@/components/StrataScrubber";
 import {
   dayToDate,
   loadJsonGz,
@@ -15,7 +14,7 @@ import {
   type Meta,
 } from "@/lib/data";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
-import { HistoryPanel, type HistoryMode, type RangeKey } from "@/components/HistoryPanel";
+import { HistoryBar, type HistoryMode, type RangeKey } from "@/components/HistoryBar";
 import {
   buildSeries,
   loadFullHistory,
@@ -140,11 +139,6 @@ export default function Page() {
   const bounds = useMemo(() => {
     if (!series?.rows.length) return null;
     return { min: series.rows[0][0], max: series.rows[series.rows.length - 1][0] };
-  }, [series]);
-
-  const strata: SeriesPoint[] = useMemo(() => {
-    if (!series) return [];
-    return series.rows.map(([d, legion, swarm, faceless]) => ({ day: d, legion, swarm, faceless }));
   }, [series]);
 
   /** Rebuild zone state at `day` from the nearest checkpoint plus that year's events. */
@@ -354,39 +348,6 @@ export default function Page() {
             hovered={hovered}
           />
         )}
-        {ready && (
-          <HistoryPanel
-            series={history}
-            mode={selectedZone !== null ? "zone" : historyMode}
-            onModeChange={(m) => {
-              setSelectedZone(null);
-              setHistoryMode(m);
-            }}
-            range={range}
-            onRangeChange={setRange}
-            day={day}
-            epoch={meta.day_epoch}
-            title={
-              selectedZone !== null
-                ? names[selectedZone] || `Zone ${selectedZone}`
-                : historyMode === "viewport"
-                  ? "Bots in view"
-                  : `Bots · ${meta.scope.label}`
-            }
-            subtitle={
-              selectedZone !== null
-                ? "Single zone"
-                : historyMode === "viewport"
-                  ? "Current map bounds"
-                  : `${meta.scope.zone_count >= 1e6 ? `${(meta.scope.zone_count / 1e6).toFixed(1)}M` : `${(meta.scope.zone_count / 1e3).toFixed(0)}K`} zones`
-            }
-            status={historyStatus}
-            onClose={() => {
-              setSelectedZone(null);
-              setHistoryMode("scope");
-            }}
-          />
-        )}
         {status && (
           <div
             className="eyebrow"
@@ -399,13 +360,39 @@ export default function Page() {
       </div>
 
       {ready && (
-        <StrataScrubber
-          series={strata}
+        <HistoryBar
+          series={history}
+          mode={selectedZone !== null ? "zone" : historyMode}
+          onModeChange={(m) => {
+            setSelectedZone(null);
+            setHistoryMode(m);
+          }}
+          range={range}
+          onRangeChange={setRange}
           day={day}
           minDay={bounds.min}
           maxDay={bounds.max}
           onScrub={setDay}
           epoch={meta.day_epoch}
+          title={
+            selectedZone !== null
+              ? names[selectedZone] || `Zone ${selectedZone}`
+              : historyMode === "viewport"
+                ? "Bots in view"
+                : "Bots"
+          }
+          subtitle={
+            selectedZone !== null
+              ? "Single zone"
+              : historyMode === "viewport"
+                ? "Current map bounds"
+                : `${meta.scope.zone_count >= 1e6 ? `${(meta.scope.zone_count / 1e6).toFixed(1)}M` : `${(meta.scope.zone_count / 1e3).toFixed(0)}K`} zones`
+          }
+          status={historyStatus}
+          onClearZone={() => {
+            setSelectedZone(null);
+            setHistoryMode("scope");
+          }}
           gapYear={COLLECTION_GAP_YEAR}
         />
       )}

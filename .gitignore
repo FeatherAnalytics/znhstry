@@ -23,3 +23,7 @@ logs/
 
 # Generated export payloads (67MB, rebuildable)
 web/public/data/
+
+web/out/
+web/.next/
+web/node_modules/

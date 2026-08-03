@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -45,16 +46,47 @@ ZONE_ID_HEADROOM = 200_000
 DUCKDB_PATH = DATA / "znhstry.duckdb"
 WEB_DATA = ROOT / "web" / "public" / "data"
 
-# The first viewer ships one scope. Dallas, TX is ZoneId 1529645, the largest
-# zone in Texas by an order of magnitude.
-SCOPE_NAME = "dallas-1000mi"
-SCOPE_LABEL = "Dallas, TX - 1000 miles"
-SCOPE_LAT = 32.7831
-SCOPE_LON = -96.8067
-SCOPE_RADIUS_KM = 1609.344  # 1000 statute miles
-
 EARTH_RADIUS_KM = 6371.0088
+
+
+@dataclass(frozen=True)
+class Scope:
+    """A geographic slice to export.
+
+    `global` is the destination; the Dallas radius is a smaller fixture to
+    develop the viewer against. Both go through the same code path so nothing
+    has to be rewritten to scale up.
+    """
+
+    name: str
+    label: str
+    lat: float | None = None
+    lon: float | None = None
+    radius_km: float | None = None
+    # 1,087,353 zones have never recorded a single bot in fourteen years. They
+    # cannot render and cannot be queried usefully, so they are excluded by
+    # default -- a 40% cut to the two largest global payloads.
+    active_only: bool = True
+
+
+SCOPES = {
+    # Dallas, TX is ZoneId 1529645, the largest zone in Texas by an order of magnitude.
+    "dallas-1000mi": Scope(
+        name="dallas-1000mi",
+        label="Dallas, TX - 1000 miles",
+        lat=32.7831,
+        lon=-96.8067,
+        radius_km=1609.344,  # 1000 statute miles
+    ),
+    "global": Scope(name="global", label="Global"),
+}
+
+DEFAULT_SCOPE = "dallas-1000mi"
 
 # Day numbers in the packed event stream count from here, so they fit a uint16
 # (max 65,535 days ~ 179 years of headroom).
-DAY_EPOCH = date(2012, 1, 1)
+#
+# 2010, not 2012: the 29 nonzero backfill sentinel rows are dated 2010-01-01,
+# and any epoch after them makes their day offset negative. Under a uint16 that
+# underflows into a plausible-looking future date instead of failing.
+DAY_EPOCH = date(2010, 1, 1)

@@ -108,15 +108,51 @@ against a threshold, because thresholds on upstream drift are brittle.
 
 ## Export format
 
-`web/public/data/` is generated (`uv run python -m znhstry export`) and gitignored -
-67 MB, fully rebuildable. Binaries are plain columnar dumps: each column is a contiguous
-run of one fixed-width dtype, concatenated in the order `meta.json` lists them, so the
-client reads typed-array views over one ArrayBuffer with no decoding library.
+`uv run python -m znhstry export --scope {dallas-1000mi,global}` writes to
+`web/public/data/<scope>/`. Global is the destination; Dallas is a smaller fixture for
+developing the viewer. Both use the same code path.
 
-A viewer needs `meta.json` + `zones.bin` (1.7 MB) + one checkpoint (~2.4 MB) + one year
-of events (~5.3 MB) to render and scrub a year: under 10 MB, before gzip.
+| Scope | Zones | Events | Size |
+|---|---|---|---|
+| dallas-1000mi | 143,883 | 1.77M | 16.4 MB |
+| global | 1,595,086 | 9.87M | 97.7 MB |
 
-Series JSON is **sparse** - only days a value changed. Carry the previous value forward.
+Every `.gz` is a gzip stream over a columnar dump: each column is a contiguous run of one
+fixed-width dtype, concatenated in the order `meta.json` lists it. Decompress with the
+browser-native `DecompressionStream('gzip')`, then take typed-array views at running
+offsets. **No decoding library.** A column marked `delta` holds successive differences;
+prefix-sum to recover it.
+
+- **Delta-encoding the index beats quantising the counts.** Sorted index columns become
+  runs of small numbers that gzip crushes: 5.7x on a checkpoint vs 3.2x for gzip alone,
+  and lossless. Log-quantising counts to uint16 gets 6.6x but costs precision for less.
+- **Events are ordered by (zone idx, day), not by timestamp.** Grouping each zone's
+  trajectory is what compresses (4.0x vs 3.1x). The client rebuilds a day index on load.
+- Series JSON is **sparse** - only days a value changed. Carry the previous value forward.
+- `zones.bin.gz` excludes the 1.09M zones that have never recorded a bot (`active_only`),
+  a 40% cut to the two largest global payloads.
+
+### Committed data and nightly updates
+
+The export is committed, so the site needs no rebuild to deploy and the API is hit only
+by the nightly top-up. Two rules keep git from bloating, both because **gzip output
+changes wholesale with its input, so git cannot delta it** - a rewritten file costs its
+full size in history every single night:
+
+1. **Every shard must be immutable once written.** Events shard by *month*, not year, so
+   a nightly run rewrites only the current month (~22 KB early in a month, ~800 KB by the
+   end). Checkpoints are emitted only for boundaries `<= current_date`; a future boundary
+   is really "state as of now" and would churn ~4 MB nightly. The client derives current
+   state from the last checkpoint plus the event shards after it.
+2. **`idx` is a permanent handle, not a row number.** It is assigned once and preserved
+   across runs by reading the previous `zones.bin.gz`, which stores `zone_id` per index
+   and is therefore its own index manifest. New zones are appended; zones leaving the
+   scope stay as tombstones. Without this, any of the 1.09M dormant zones waking up would
+   be inserted mid-sequence, renumber everything after it, and invalidate all 97 MB over
+   one new zone. Verified: consecutive exports are byte-identical.
+
+Still churning nightly and not yet fixed: `series/*.json.gz` (~2 MB) rewrite in full.
+Shard them by year when it matters.
 
 ## Performance notes
 

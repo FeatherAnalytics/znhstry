@@ -16,8 +16,22 @@ import {
   type Columns,
   type Meta,
 } from "@/lib/data";
+import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 
-const BASE = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data/dallas-1000mi`;
+const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
+
+const SCOPES = {
+  "dallas-1000mi": {
+    label: "Dallas 1000mi",
+    view: { longitude: -96.8, latitude: 34.5, zoom: 4.1 },
+  },
+  global: {
+    label: "Global",
+    view: { longitude: 8, latitude: 26, zoom: 1.35 },
+  },
+} as const;
+
+type ScopeName = keyof typeof SCOPES;
 
 // Upstream lost most of 2019: 337,859 events against 627,035 in 2018 and
 // 1,438,855 in 2020. It is missing data, not a quiet year, so the scrubber
@@ -42,6 +56,8 @@ function valueAt(rows: number[][], day: number): number[] | null {
 }
 
 export default function Page() {
+  const [scope, setScope] = useState<ScopeName>("dallas-1000mi");
+  const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [zones, setZones] = useState<Columns | null>(null);
   const [names, setNames] = useState<string[]>([]);
@@ -68,20 +84,48 @@ export default function Page() {
   const checkpointCache = useRef(new Map<number, Columns>());
   const loadToken = useRef(0);
 
+  // Boundaries are scope-independent, so they load once and survive switching.
   useEffect(() => {
+    loadBoundaries(DATA_ROOT).then(setBoundaries).catch(() => setBoundaries([]));
+  }, []);
+
+  useEffect(() => {
+    const base = `${DATA_ROOT}/${scope}`;
+    let cancelled = false;
+
+    // Everything downstream is indexed by the scope's own zone index, so a
+    // switch has to drop all of it rather than reuse a single cached shard.
+    setMeta(null);
+    setZones(null);
+    setSeries(null);
+    setDay(null);
+    setNames([]);
+    shardCache.current.clear();
+    checkpointCache.current.clear();
+    loadToken.current++;
+    setStatus("Loading zones");
+    setViewState((current) => ({ ...current, ...SCOPES[scope].view }));
+
     (async () => {
-      const m = await loadMeta(BASE);
-      setMeta(m);
-      const z = await loadShard(BASE, m.zones);
-      setZones(z);
+      const m = await loadMeta(base);
+      if (cancelled) return;
+      const z = await loadShard(base, m.zones);
+      if (cancelled) return;
       stateRef.current = new ZoneState(m.zones.rows);
+      setMeta(m);
+      setZones(z);
       setStatus("Loading history");
-      const s = await loadJsonGz<SparseSeries>(BASE, m.series.scope_daily.path);
+      const s = await loadJsonGz<SparseSeries>(base, m.series.scope_daily.path);
+      if (cancelled) return;
       setSeries(s);
       setDay(s.rows[s.rows.length - 1][0]);
-      loadJsonGz<string[]>(BASE, m.zones.names.path).then(setNames);
-    })().catch((error) => setStatus(`Could not load data: ${error.message}`));
-  }, []);
+      loadJsonGz<string[]>(base, m.zones.names.path).then((n) => !cancelled && setNames(n));
+    })().catch((error) => !cancelled && setStatus(`Could not load data: ${error.message}`));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
 
   const bounds = useMemo(() => {
     if (!series?.rows.length) return null;
@@ -96,6 +140,11 @@ export default function Page() {
   /** Rebuild zone state at `day` from the nearest checkpoint plus that year's events. */
   useEffect(() => {
     if (!meta || !zones || day === null || !stateRef.current) return;
+    // `scope` updates a render before the matching meta/zones do, so without
+    // this the first run after a switch pairs the new scope's shard paths with
+    // the old scope's index -- writing global indices into a state array sized
+    // for Dallas, where everything past its length is silently dropped.
+    if (meta.scope.name !== scope) return;
     const token = ++loadToken.current;
 
     (async () => {
@@ -108,22 +157,14 @@ export default function Page() {
         .filter((y) => y <= year)
         .pop();
 
-      const state = stateRef.current!;
-      state.faction.fill(0);
-      state.legion.fill(0);
-      state.swarm.fill(0);
-      state.faceless.fill(0);
-      state.total.fill(0);
-
+      let checkpoint: Columns | undefined;
       if (checkpointYear !== undefined) {
-        let checkpoint = checkpointCache.current.get(checkpointYear);
+        checkpoint = checkpointCache.current.get(checkpointYear);
         if (!checkpoint) {
           const entry = meta.checkpoints.find((c) => c.year === checkpointYear)!;
-          checkpoint = await loadShard(`${BASE}/checkpoints`, entry);
+          checkpoint = await loadShard(`${DATA_ROOT}/${scope}/checkpoints`, entry);
           checkpointCache.current.set(checkpointYear, checkpoint);
         }
-        if (token !== loadToken.current) return;
-        state.applyRange(checkpoint, 0, checkpoint.idx.length);
       }
 
       // Replay every shard between the checkpoint and the target date. Months
@@ -133,27 +174,44 @@ export default function Page() {
         (e) => e.year! >= from && (e.year! < year || (e.year === year && e.month! <= month)),
       );
 
+      const ready: { columns: Columns; cutoff: number }[] = [];
       for (const entry of shards) {
         const key = entry.path;
         let loaded = shardCache.current.get(key);
         if (!loaded) {
-          loaded = sortByDay(await loadShard(`${BASE}/events`, entry));
+          loaded = sortByDay(await loadShard(`${DATA_ROOT}/${scope}/events`, entry));
           shardCache.current.set(key, loaded);
         }
-        if (token !== loadToken.current) return;
-        const cutoff =
-          entry.year === year && entry.month === month
-            ? upperBound(loaded.days, day)
-            : loaded.days.length;
-        state.applyRange(loaded.columns, 0, cutoff);
+        ready.push({
+          columns: loaded.columns,
+          cutoff:
+            entry.year === year && entry.month === month
+              ? upperBound(loaded.days, day)
+              : loaded.days.length,
+        });
       }
 
+      // Every await is done. Only now touch the shared ZoneState, and do it
+      // synchronously: this effect re-runs as meta, zones and day arrive
+      // separately, and an aborted run that had already zeroed the state would
+      // otherwise wipe a completed one. Fast scopes hid this; global did not.
       if (token !== loadToken.current) return;
+
+      const state = stateRef.current!;
+      state.faction.fill(0);
+      state.legion.fill(0);
+      state.swarm.fill(0);
+      state.faceless.fill(0);
+      state.total.fill(0);
+
+      if (checkpoint) state.applyRange(checkpoint, 0, checkpoint.idx.length);
+      for (const { columns, cutoff } of ready) state.applyRange(columns, 0, cutoff);
+
       setTotals(state.totals());
       setVersion((v) => v + 1);
       setStatus("");
     })().catch((error) => setStatus(`Could not load history: ${error.message}`));
-  }, [meta, zones, day]);
+  }, [meta, zones, day, scope]);
 
   const previous: Totals | null = useMemo(() => {
     if (!series || day === null) return null;
@@ -196,9 +254,23 @@ export default function Page() {
         <span className="display" style={{ fontSize: 16 }}>
           Zone History
         </span>
-        <span className="eyebrow" style={{ flex: 1 }}>
-          {meta?.scope.label ?? " "}
-        </span>
+        <nav style={{ display: "flex", gap: 2, flex: 1 }} aria-label="Scope">
+          {(Object.keys(SCOPES) as ScopeName[]).map((name) => (
+            <button
+              key={name}
+              className="eyebrow"
+              onClick={() => setScope(name)}
+              aria-current={scope === name}
+              style={{
+                padding: "3px 9px",
+                color: scope === name ? "var(--text)" : "var(--text-dim)",
+                border: `1px solid ${scope === name ? "var(--hairline-bright)" : "transparent"}`,
+              }}
+            >
+              {SCOPES[name].label}
+            </button>
+          ))}
+        </nav>
         <button
           className="eyebrow"
           onClick={() => setPalette((p) => (p === "canon" ? "accessible" : "canon"))}
@@ -215,6 +287,7 @@ export default function Page() {
             zones={zones}
             state={stateRef.current!}
             version={version}
+            boundaries={boundaries}
             viewState={viewState}
             onViewStateChange={setViewState}
             onHover={handleHover}

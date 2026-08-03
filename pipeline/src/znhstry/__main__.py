@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import export, extract
+from . import config, export, extract
 
 STEPS = {
     "all": extract.extract_all,
@@ -21,6 +21,12 @@ STEPS = {
 def main() -> int:
     parser = argparse.ArgumentParser(prog="znhstry", description="Extract QONQR data to Parquet.")
     parser.add_argument("step", choices=sorted(STEPS), nargs="?", default="all")
+    parser.add_argument(
+        "--scope",
+        choices=sorted(config.SCOPES),
+        default=config.DEFAULT_SCOPE,
+        help="Geographic slice to export (export step only).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -30,7 +36,10 @@ def main() -> int:
     )
     # httpx logs every request at INFO, which drowns out progress.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    STEPS[args.step]()
+    if args.step == "export":
+        export.export_all(args.scope)
+    else:
+        STEPS[args.step]()
     return 0
 
 

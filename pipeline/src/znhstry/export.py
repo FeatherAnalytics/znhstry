@@ -12,6 +12,7 @@ layer uses to make dormant zones free.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import math
@@ -20,6 +21,7 @@ from typing import Any
 
 import duckdb
 import numpy as np
+import polars as pl
 
 from . import config
 
@@ -57,61 +59,154 @@ def _bbox(lat: float, lon: float, radius_km: float) -> tuple[float, float, float
     )
 
 
-def _create_scope(con: duckdb.DuckDBPyConnection) -> int:
+def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path) -> int:
     """Materialise the zones in scope with a dense index.
 
     Haversine rather than the spatial extension: four lines of SQL against a
-    bbox prefilter is faster to run and one less dependency to install.
+    bbox prefilter is faster to run and one less dependency to install. A scope
+    with no radius covers the whole map.
     """
-    lat_min, lat_max, lon_min, lon_max = _bbox(
-        config.SCOPE_LAT, config.SCOPE_LON, config.SCOPE_RADIUS_KM
-    )
+    filters = ["latitude is not null"]
+
+    if scope.radius_km is not None:
+        lat_min, lat_max, lon_min, lon_max = _bbox(scope.lat, scope.lon, scope.radius_km)
+        filters.append(f"latitude between {lat_min} and {lat_max}")
+        filters.append(f"longitude between {lon_min} and {lon_max}")
+        filters.append(f"""
+            {config.EARTH_RADIUS_KM} * 2 * asin(sqrt(
+                pow(sin(radians(latitude - {scope.lat}) / 2), 2)
+                + cos(radians({scope.lat})) * cos(radians(latitude))
+                  * pow(sin(radians(longitude - {scope.lon}) / 2), 2)
+            )) <= {scope.radius_km}
+        """)
+
+    if scope.active_only:
+        filters.append("zone_id in (select zone_id from fct_zone_events)")
+
     con.execute(f"""
-        create or replace temp table scope as
-        select
-            cast(row_number() over (order by zone_id) - 1 as integer) as idx,
-            zone_id, zone_name, latitude, longitude, region_id, country_id
-        from dim_zone
-        where latitude between {lat_min} and {lat_max}
-          and longitude between {lon_min} and {lon_max}
-          and {config.EARTH_RADIUS_KM} * 2 * asin(sqrt(
-                pow(sin(radians(latitude - {config.SCOPE_LAT}) / 2), 2)
-                + cos(radians({config.SCOPE_LAT})) * cos(radians(latitude))
-                  * pow(sin(radians(longitude - {config.SCOPE_LON}) / 2), 2)
-              )) <= {config.SCOPE_RADIUS_KM}
+        create or replace temp view scope_members as
+        select zone_id from dim_zone where {" and ".join(filters)}
     """)
+
+    previous = _previous_index(out)
+    if previous is None:
+        con.execute("""
+            create or replace temp table scope as
+            select
+                cast(row_number() over (order by z.zone_id) - 1 as integer) as idx,
+                z.zone_id, z.zone_name, z.latitude, z.longitude, z.region_id, z.country_id
+            from dim_zone z join scope_members m on m.zone_id = z.zone_id
+        """)
+    else:
+        # idx is a permanent handle, not a row number. A dormant zone waking up
+        # would otherwise be inserted mid-sequence and renumber everything after
+        # it, invalidating every checkpoint and event shard already committed --
+        # 97MB rewritten over one new zone. Existing zones keep their index
+        # forever, new ones are appended, and zones that leave the scope stay as
+        # tombstones so nothing behind them moves.
+        con.register("previous_index", previous)
+        con.execute("""
+            create or replace temp table scope as
+            with assigned as (
+                select zone_id, idx from previous_index
+                union all
+                select m.zone_id,
+                       (select max(idx) from previous_index)
+                           + cast(row_number() over (order by m.zone_id) as integer)
+                from scope_members m
+                where m.zone_id not in (select zone_id from previous_index)
+            )
+            select cast(a.idx as integer) as idx,
+                   z.zone_id, z.zone_name, z.latitude, z.longitude, z.region_id, z.country_id
+            from assigned a join dim_zone z on z.zone_id = a.zone_id
+        """)
+        added = con.execute("select count(*) from scope").fetchone()[0] - previous.height
+        if added:
+            log.info("  %s zones appended to the stable index", f"{added:,}")
+
     return con.execute("select count(*) from scope").fetchone()[0]
 
 
+def _previous_index(out: Path) -> pl.DataFrame | None:
+    """Recover the zone_id -> idx assignment from a prior export.
+
+    zones.bin.gz already stores zone_id at each index, so it is its own index
+    manifest and there is no second file to keep in sync.
+    """
+    meta_path, zones_path = out / "meta.json", out / "zones.bin.gz"
+    if not (meta_path.exists() and zones_path.exists()):
+        return None
+
+    entry = json.loads(meta_path.read_text())["zones"]
+    rows = entry["rows"]
+    offset = 0
+    for name, dtype, _ in entry["columns"]:
+        if name == "zone_id":
+            break
+        offset += rows * np.dtype(dtype).itemsize
+    else:
+        raise ValueError(f"{zones_path} has no zone_id column to recover the index from")
+    buf = gzip.decompress(zones_path.read_bytes())
+    zone_ids = np.frombuffer(buf, dtype="int32", count=rows, offset=offset)
+    return pl.DataFrame({"zone_id": zone_ids, "idx": np.arange(rows, dtype="int32")})
+
+
 def _write_columnar(
-    path: Path, sql: str, columns: dict[str, str], con: duckdb.DuckDBPyConnection
+    path: Path,
+    sql: str,
+    columns: dict[str, str],
+    con: duckdb.DuckDBPyConnection,
+    delta: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Run `sql`, dump the named columns back to back, return a manifest entry."""
+    """Run `sql`, dump the named columns back to back, gzip, return a manifest entry.
+
+    Columns named in `delta` are stored as successive differences. Sorted index
+    columns become long runs of small numbers, which gzip squeezes hard: 5.7x
+    on a checkpoint versus 3.2x for gzip alone, and losslessly - better than
+    quantising the counts, which costs precision for less.
+
+    Output is gzip because browsers decompress it natively through
+    DecompressionStream, so the client needs no library.
+    """
     data = con.execute(sql).fetchnumpy()
     rows = len(next(iter(data.values()))) if data else 0
 
+    payload = bytearray()
+    spec: list[list[Any]] = []
+    for name, dtype in columns.items():
+        column = np.asarray(data[name])
+        if rows and dtype in (COUNT, DAY):
+            # Silent wraparound is the failure mode these dumps are most
+            # exposed to. A negative day would come from an event before
+            # DAY_EPOCH - the 2010 backfill rows - and underflow uint16
+            # into a plausible-looking date rather than an error.
+            low, high = int(column.min()), int(np.abs(column).max())
+            limit = np.iinfo(np.uint16 if dtype == DAY else np.int32).max
+            if high > limit:
+                raise OverflowError(f"{name} max {high:,} does not fit {dtype}")
+            if dtype == DAY and low < 0:
+                raise ValueError(f"{name} has values before DAY_EPOCH (min {low})")
+
+        encoding = None
+        if name in delta and rows:
+            column = np.diff(column.astype("int64"), prepend=np.int64(0))
+            if column.min() < 0:
+                raise ValueError(f"{name} must be sorted ascending to delta-encode")
+            encoding = "delta"
+
+        payload += np.ascontiguousarray(column, dtype=dtype).tobytes()
+        spec.append([name, dtype, encoding])
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as handle:
-        for name, dtype in columns.items():
-            column = np.asarray(data[name])
-            if rows and dtype in (COUNT, DAY):
-                # Silent wraparound is the failure mode these dumps are most
-                # exposed to. A negative day would come from an event before
-                # DAY_EPOCH - the 2010 backfill rows - and underflow uint16
-                # into a plausible-looking date rather than an error.
-                low, high = int(column.min()), int(np.abs(column).max())
-                limit = np.iinfo(np.uint16 if dtype == DAY else np.int32).max
-                if high > limit:
-                    raise OverflowError(f"{name} max {high:,} does not fit {dtype}")
-                if dtype == DAY and low < 0:
-                    raise ValueError(f"{name} has values before DAY_EPOCH (min {low})")
-            handle.write(np.ascontiguousarray(column, dtype=dtype).tobytes())
+    raw_bytes = len(payload)
+    path.write_bytes(gzip.compress(bytes(payload), 6))
 
     return {
         "path": path.name,
         "rows": int(rows),
-        "columns": [[name, dtype] for name, dtype in columns.items()],
+        "columns": spec,
         "bytes": path.stat().st_size,
+        "raw_bytes": raw_bytes,
     }
 
 
@@ -128,7 +223,7 @@ def _years(con: duckdb.DuckDBPyConnection, table: str, column: str) -> list[int]
 def _export_zones(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     """Static geometry, index-aligned. Positions never change."""
     entry = _write_columnar(
-        out / "zones.bin",
+        out / "zones.bin.gz",
         "select idx, zone_id, latitude, longitude from scope order by idx",
         {"latitude": "float32", "longitude": "float32", "zone_id": "int32"},
         con,
@@ -136,24 +231,33 @@ def _export_zones(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     # Names are only needed on hover, so they load lazily and stay out of the
     # binary. Index-aligned array, not a map, to keep it compact.
     names = [row[0] for row in con.execute("select zone_name from scope order by idx").fetchall()]
-    names_path = out / "zone_names.json"
-    names_path.write_text(json.dumps(names, ensure_ascii=False), encoding="utf-8")
+    names_path = out / "zone_names.json.gz"
+    names_path.write_bytes(
+        gzip.compress(json.dumps(names, ensure_ascii=False).encode("utf-8"), 6)
+    )
     entry["names"] = {"path": names_path.name, "bytes": names_path.stat().st_size}
     return entry
 
 
 def _export_checkpoints(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[str, Any]]:
     """Dense year-boundary snapshots, one file per boundary."""
+    # Past boundaries only. A boundary in the future is really "state as of
+    # now", so it would be rewritten every night -- and because gzip output
+    # changes wholesale with its input, git cannot delta it and would store the
+    # full file again each time. Every shard here is immutable once written;
+    # the client derives current state from the last checkpoint plus the event
+    # shards after it, which is the design intent anyway.
     years = [
         int(row[0])
         for row in con.execute(
-            "select distinct year(checkpoint_date) from fct_zone_checkpoints order by 1"
+            "select distinct year(checkpoint_date) from fct_zone_checkpoints "
+            "where checkpoint_date <= current_date order by 1"
         ).fetchall()
     ]
     entries = []
     for year in years:
         entry = _write_columnar(
-            out / "checkpoints" / f"{year}.bin",
+            out / "checkpoints" / f"{year}.bin.gz",
             f"""
             select s.idx, c.control_state, c.legion_count, c.swarm_count, c.faceless_count
             from fct_zone_checkpoints c
@@ -169,6 +273,7 @@ def _export_checkpoints(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[
                 "faceless_count": COUNT,
             },
             con,
+            delta=frozenset({"idx"}),
         )
         entry["year"] = year
         entries.append(entry)
@@ -177,11 +282,27 @@ def _export_checkpoints(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[
 
 
 def _export_events(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[str, Any]]:
-    """Intra-year event streams, ordered so the client can replay them."""
+    """Event streams, sharded by month.
+
+    Monthly rather than yearly so nightly updates stay cheap to commit: only
+    the current month's shard is rewritten and every earlier one is immutable,
+    so git stores each month once instead of once per night.
+
+    Rows are ordered by (zone, day) rather than by timestamp. Grouping a zone's
+    trajectory together is what makes the stream compress - 4x versus 3.1x for
+    timestamp order - and the client rebuilds a day index on load in
+    milliseconds.
+    """
+    months = con.execute("""
+        select distinct year(e.activity_date) as y, month(e.activity_date) as m
+        from fct_zone_events e join scope s on s.zone_id = e.zone_id
+        order by 1, 2
+    """).fetchall()
+
     entries = []
-    for year in _years(con, "fct_zone_events", "t.activity_date"):
+    for year, month in months:
         entry = _write_columnar(
-            out / "events" / f"{year}.bin",
+            out / "events" / f"{year:04d}-{month:02d}.bin.gz",
             f"""
             select
                 s.idx,
@@ -189,8 +310,8 @@ def _export_events(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[str, 
                 e.control_state, e.legion_count, e.swarm_count, e.faceless_count
             from fct_zone_events e
             join scope s on s.zone_id = e.zone_id
-            where year(e.activity_date) = {year}
-            order by e.observed_at
+            where year(e.activity_date) = {year} and month(e.activity_date) = {month}
+            order by s.idx, e.activity_date
             """,
             {
                 "idx": IDX,
@@ -201,10 +322,12 @@ def _export_events(con: duckdb.DuckDBPyConnection, out: Path) -> list[dict[str, 
                 "faceless_count": COUNT,
             },
             con,
+            delta=frozenset({"idx"}),
         )
-        entry["year"] = year
+        entry["year"], entry["month"] = int(year), int(month)
         entries.append(entry)
-        log.info("  events %d: %s rows, %s KB", year, f"{entry['rows']:,}", entry["bytes"] // 1024)
+    total = sum(e["rows"] for e in entries)
+    log.info("  events: %s rows across %d monthly shards", f"{total:,}", len(entries))
     return entries
 
 
@@ -288,22 +411,25 @@ def _export_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
         ("scope_daily", scope_series),
         ("country_daily", country_series),
     ):
-        path = out / "series" / f"{name}.json"
+        path = out / "series" / f"{name}.json.gz"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        written[name] = {"path": f"series/{name}.json", "bytes": path.stat().st_size}
+        path.write_bytes(
+            gzip.compress(json.dumps(payload, separators=(",", ":")).encode("utf-8"), 6)
+        )
+        written[name] = {"path": f"series/{name}.json.gz", "bytes": path.stat().st_size}
         log.info("  series %s: %s KB", name, path.stat().st_size // 1024)
     return written
 
 
-def export_all(out: Path | None = None) -> None:
-    out = out or config.WEB_DATA
+def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
+    scope = config.SCOPES[scope_name or config.DEFAULT_SCOPE]
+    out = out or (config.WEB_DATA / scope.name)
     out.mkdir(parents=True, exist_ok=True)
 
     con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
     try:
-        zone_count = _create_scope(con)
-        log.info("scope %s: %s zones", config.SCOPE_NAME, f"{zone_count:,}")
+        zone_count = _create_scope(con, scope, out)
+        log.info("scope %s: %s zones", scope.name, f"{zone_count:,}")
 
         zones = _export_zones(con, out)
         log.info("zones: %s KB (+ %s KB names)", zones["bytes"] // 1024, zones["names"]["bytes"] // 1024)
@@ -319,10 +445,11 @@ def export_all(out: Path | None = None) -> None:
 
         meta = {
             "scope": {
-                "name": config.SCOPE_NAME,
-                "label": config.SCOPE_LABEL,
-                "center": [config.SCOPE_LAT, config.SCOPE_LON],
-                "radius_km": config.SCOPE_RADIUS_KM,
+                "name": scope.name,
+                "label": scope.label,
+                "center": [scope.lat, scope.lon] if scope.radius_km else None,
+                "radius_km": scope.radius_km,
+                "active_only": scope.active_only,
                 "zone_count": zone_count,
             },
             "day_epoch": config.DAY_EPOCH.isoformat(),
@@ -332,6 +459,17 @@ def export_all(out: Path | None = None) -> None:
             "checkpoints": checkpoints,
             "events": events,
             "series": series,
+            "encoding": {
+                "container": "gzip",
+                "note": (
+                    "Every .gz is a gzip stream over a columnar dump: each column is a "
+                    "contiguous run of one fixed-width dtype, concatenated in the order "
+                    "listed. Decompress with DecompressionStream('gzip'), then take "
+                    "typed-array views at the running offsets. A column marked 'delta' "
+                    "holds successive differences; prefix-sum it to recover values."
+                ),
+                "event_order": "(zone idx, day) - build a day index on load, not file order",
+            },
             "notes": [
                 "Series are sparse: carry the previous value forward across gaps.",
                 "2019 has an upstream collection gap and is not a real lull.",
@@ -340,11 +478,19 @@ def export_all(out: Path | None = None) -> None:
         }
         (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-        total = sum(
-            entry["bytes"]
-            for group in (checkpoints, events)
-            for entry in group
-        ) + zones["bytes"] + zones["names"]["bytes"] + sum(s["bytes"] for s in series.values())
-        log.info("export complete: %s MB across %s files", f"{total / 1e6:.1f}", len(checkpoints) + len(events) + 5)
+        groups = (checkpoints, events)
+        total = (
+            sum(entry["bytes"] for group in groups for entry in group)
+            + zones["bytes"]
+            + zones["names"]["bytes"]
+            + sum(s["bytes"] for s in series.values())
+        )
+        raw = sum(entry["raw_bytes"] for group in groups for entry in group) + zones["raw_bytes"]
+        log.info(
+            "export complete: %s MB across %s files (%.1fx smaller than raw)",
+            f"{total / 1e6:.1f}",
+            len(checkpoints) + len(events) + 5,
+            raw / total if total else 0,
+        )
     finally:
         con.close()

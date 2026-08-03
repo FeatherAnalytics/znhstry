@@ -39,3 +39,22 @@ MONTHLY_FROM_YEAR = 2020
 # the previous maximum over time, and a stale constant would silently skip them.
 ZONE_ID_CHUNK = 200_000
 ZONE_ID_HEADROOM = 200_000
+
+# --- Export ---------------------------------------------------------------
+
+DUCKDB_PATH = DATA / "znhstry.duckdb"
+WEB_DATA = ROOT / "web" / "public" / "data"
+
+# The first viewer ships one scope. Dallas, TX is ZoneId 1529645, the largest
+# zone in Texas by an order of magnitude.
+SCOPE_NAME = "dallas-1000mi"
+SCOPE_LABEL = "Dallas, TX - 1000 miles"
+SCOPE_LAT = 32.7831
+SCOPE_LON = -96.8067
+SCOPE_RADIUS_KM = 1609.344  # 1000 statute miles
+
+EARTH_RADIUS_KM = 6371.0088
+
+# Day numbers in the packed event stream count from here, so they fit a uint16
+# (max 65,535 days ~ 179 years of headroom).
+DAY_EPOCH = date(2012, 1, 1)

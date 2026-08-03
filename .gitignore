@@ -27,3 +27,6 @@ web/public/data/
 web/out/
 web/.next/
 web/node_modules/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

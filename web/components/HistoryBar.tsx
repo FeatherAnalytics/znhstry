@@ -113,24 +113,46 @@ export function HistoryBar({
     const bands = [series.legion, series.swarm, series.faceless];
 
     const last = Math.min(series.days.length - 1, maxDay);
-    let peak = 1;
-    for (let d = minDay; d <= last; d++) peak = Math.max(peak, bands[0][d] + bands[1][d] + bands[2][d]);
 
-    const baseline = new Float64Array(last - minDay + 1);
+    // One line per faction against a shared axis, not stacked areas. Stacking
+    // only lets the bottom band be read against a flat baseline; the two above
+    // it are displaced by whatever is underneath, so comparing factions means
+    // eyeballing thicknesses. Lines are directly comparable and the axis
+    // labels then describe each faction rather than a running total.
+    let peak = 1;
+    for (let d = minDay; d <= last; d++) {
+      peak = Math.max(peak, bands[0][d], bands[1][d], bands[2][d]);
+    }
+
+    // Gridlines before the lines so they read as background.
+    ctx.font = '9px var(--font-mono), ui-monospace, monospace';
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    const step = niceStep(peak, 3);
+    for (let v = step; v <= peak * 1.001; v += step) {
+      const y = Math.round(plotHeight - (v / peak) * plotHeight) + 0.5;
+      ctx.strokeStyle = "rgba(230,234,242,0.10)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(plotWidth, y);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(124,135,152,0.95)";
+      ctx.fillText(compact(v), plotWidth + 5, y);
+    }
+
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
     bands.forEach((band, i) => {
       ctx.beginPath();
       for (let d = minDay; d <= last; d++) {
-        const y = plotHeight - ((baseline[d - minDay] + band[d]) / peak) * plotHeight;
+        const y = plotHeight - (band[d] / peak) * plotHeight;
         d === minDay ? ctx.moveTo(x(d), y) : ctx.lineTo(x(d), y);
       }
-      for (let d = last; d >= minDay; d--) {
-        ctx.lineTo(x(d), plotHeight - (baseline[d - minDay] / peak) * plotHeight);
-      }
-      ctx.closePath();
-      ctx.fillStyle = colors[i];
-      ctx.globalAlpha = 0.82;
-      ctx.fill();
-      for (let d = minDay; d <= last; d++) baseline[d - minDay] += band[d];
+      ctx.strokeStyle = colors[i];
+      ctx.lineWidth = 1.6;
+      ctx.globalAlpha = 0.95;
+      ctx.stroke();
     });
     ctx.globalAlpha = 1;
 
@@ -156,22 +178,6 @@ export function HistoryBar({
       ctx.lineTo(to, plotHeight);
       ctx.stroke();
       ctx.setLineDash([]);
-    }
-
-    // Y axis: round bot counts, labelled in the right gutter.
-    ctx.font = '9px var(--font-mono), ui-monospace, monospace';
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "left";
-    const step = niceStep(peak, 3);
-    for (let v = step; v <= peak * 1.001; v += step) {
-      const y = Math.round(plotHeight - (v / peak) * plotHeight) + 0.5;
-      ctx.strokeStyle = "rgba(230,234,242,0.10)";
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(plotWidth, y);
-      ctx.stroke();
-      ctx.fillStyle = "rgba(124,135,152,0.95)";
-      ctx.fillText(compact(v), plotWidth + 5, y);
     }
 
     // Playhead.

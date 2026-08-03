@@ -37,12 +37,16 @@ zone / region / country / global / viewport grain. Done = deployed to
   - [x] `git init` + initial commit on master
   - [x] dbt project on branch `feat/dbt-models`: 5 staging, 1 intermediate, 5 marts,
         9 tests. Full build 27s, 20/20 pass.
-- Now: [→] dbt layer built and verified; ready to commit and merge
-- Next: export layer — marts -> packed binary (map) + JSON (charts)
+  - [x] Export layer: 146,537 zones, 67MB, 35 files, ~5s. Merged to `main`.
+        Primary branch renamed master -> main.
+- Now: [→] Pipeline complete end to end (extract -> dbt -> export). Viewer not started.
+- Next: Next.js + deck.gl viewer against `web/public/data/`
 - Remaining:
-  - [ ] Next.js + deck.gl viewer, Dallas 1000mi scope first
   - [ ] Region-grain and H3 tile marts (deferred; only global + country built so far)
   - [ ] Nightly incremental GitHub Action + Pages deploy
+  - [ ] Decide how generated data reaches Pages: rebuild in CI (90s extract + 30s dbt
+        + 5s export) vs committing the 67MB. Leaning CI rebuild, nightly only, so
+        deploys don't hammer the Auckland endpoint.
 
 ## Open Questions
 

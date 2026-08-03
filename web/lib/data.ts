@@ -141,6 +141,27 @@ export class ZoneState {
     this.applyRange(checkpoint, 0, checkpoint.idx.length);
   }
 
+  /** Apply every event on or before `maxDay`.
+   *
+   * Rows are in file order, (zone, day), so a zone's own events are still
+   * chronological and skipping later ones is safe. This replaces a global
+   * day-sort that cost O(n log n) per shard to serve a cutoff needed by only
+   * the one partial month.
+   */
+  applyUpToDay(columns: Columns, maxDay: number): void {
+    const { idx, day, control_state, legion_count, swarm_count, faceless_count } = columns;
+    const n = idx.length;
+    for (let i = 0; i < n; i++) {
+      if (day[i] > maxDay) continue;
+      const z = idx[i];
+      this.faction[z] = control_state[i];
+      this.legion[z] = legion_count[i];
+      this.swarm[z] = swarm_count[i];
+      this.faceless[z] = faceless_count[i];
+      this.total[z] = legion_count[i] + swarm_count[i] + faceless_count[i];
+    }
+  }
+
   applyRange(columns: Columns, from: number, to: number): void {
     const { idx, control_state, legion_count, swarm_count, faceless_count } = columns;
     for (let i = from; i < to; i++) {
@@ -168,38 +189,3 @@ export class ZoneState {
   }
 }
 
-/**
- * Event shards are ordered by (zone, day) because that is what compresses.
- * Scrubbing needs them in day order, so we sort once on load and keep the
- * permutation. 300k rows sorts in a few milliseconds.
- */
-export function sortByDay(columns: Columns): { columns: Columns; days: Uint16Array } {
-  const n = columns.day.length;
-  const order = new Uint32Array(n);
-  for (let i = 0; i < n; i++) order[i] = i;
-  const day = columns.day as Uint16Array;
-  order.sort((a, b) => day[a] - day[b]);
-
-  const out: Columns = {};
-  for (const key of Object.keys(columns)) {
-    const source = columns[key] as unknown as { [i: number]: number };
-    const target = new (columns[key].constructor as new (n: number) => never)(n) as never as {
-      [i: number]: number;
-    };
-    for (let i = 0; i < n; i++) target[i] = source[order[i]];
-    out[key] = target as never;
-  }
-  return { columns: out, days: out.day as Uint16Array };
-}
-
-/** First index whose day is strictly greater than `day`. */
-export function upperBound(days: Uint16Array, day: number): number {
-  let low = 0;
-  let high = days.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (days[mid] <= day) low = mid + 1;
-    else high = mid;
-  }
-  return low;
-}

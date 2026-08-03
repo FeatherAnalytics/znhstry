@@ -10,15 +10,19 @@ import {
   loadJsonGz,
   loadMeta,
   loadShard,
-  sortByDay,
-  upperBound,
   ZoneState,
   type Columns,
   type Meta,
 } from "@/lib/data";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 import { HistoryPanel, type HistoryMode, type RangeKey } from "@/components/HistoryPanel";
-import { buildSeries, loadFullHistory, viewportFilter, type HistorySeries } from "@/lib/history";
+import {
+  buildSeries,
+  loadFullHistory,
+  singleZoneFilter,
+  viewportFilter,
+  type HistorySeries,
+} from "@/lib/history";
 
 const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
 
@@ -75,11 +79,12 @@ export default function Page() {
   });
 
   const stateRef = useRef<ZoneState | null>(null);
-  const shardCache = useRef(new Map<string, { columns: Columns; days: Uint16Array }>());
+  const shardCache = useRef(new Map<string, Columns>());
   const checkpointCache = useRef(new Map<number, Columns>());
   const loadToken = useRef(0);
   const fullShards = useRef<Columns[] | null>(null);
   const historyToken = useRef(0);
+  const maxDayRef = useRef(0);
   // Bounds are read when a series is built rather than tracked in state, so
   // panning does not rebuild 9.87M events on every frame.
   const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
@@ -122,7 +127,8 @@ export default function Page() {
       const s = await loadJsonGz<SparseSeries>(base, m.series.scope_daily.path);
       if (cancelled) return;
       setSeries(s);
-      setDay(s.rows[s.rows.length - 1][0]);
+      maxDayRef.current = s.rows[s.rows.length - 1][0];
+      setDay(maxDayRef.current);
       loadJsonGz<string[]>(base, m.zones.names.path).then((n) => !cancelled && setNames(n));
     })().catch((error) => !cancelled && setStatus(`Could not load data: ${error.message}`));
 
@@ -178,21 +184,15 @@ export default function Page() {
         (e) => e.year! >= from && (e.year! < year || (e.year === year && e.month! <= month)),
       );
 
-      const ready: { columns: Columns; cutoff: number }[] = [];
+      const ready: Columns[] = [];
       for (const entry of shards) {
         const key = entry.path;
         let loaded = shardCache.current.get(key);
         if (!loaded) {
-          loaded = sortByDay(await loadShard(`${DATA_ROOT}/global/events`, entry));
+          loaded = await loadShard(`${DATA_ROOT}/global/events`, entry);
           shardCache.current.set(key, loaded);
         }
-        ready.push({
-          columns: loaded.columns,
-          cutoff:
-            entry.year === year && entry.month === month
-              ? upperBound(loaded.days, day)
-              : loaded.days.length,
-        });
+        ready.push(loaded);
       }
 
       // Every await is done. Only now touch the shared ZoneState, and do it
@@ -209,7 +209,7 @@ export default function Page() {
       state.total.fill(0);
 
       if (checkpoint) state.applyRange(checkpoint, 0, checkpoint.idx.length);
-      for (const { columns, cutoff } of ready) state.applyRange(columns, 0, cutoff);
+      for (const columns of ready) state.applyUpToDay(columns, day);
 
       setTotals(state.totals());
       setVersion((v) => v + 1);
@@ -270,13 +270,17 @@ export default function Page() {
 
       const filter =
         selectedZone !== null
-          ? (idx: number) => idx === selectedZone
+          ? singleZoneFilter(meta.zones.rows, selectedZone)
           : viewportFilter(zones, viewportBounds.current);
 
-      setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, day));
+      // Built to the end of the record, not to the scrub position: the
+      // cumulative series is the same regardless of where the playhead sits,
+      // and the chart already clips to its own window. Rebuilding per scrub
+      // walked all 9.87M events on every drag frame.
+      setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, maxDayRef.current));
       setHistoryStatus(null);
     })().catch((error) => setHistoryStatus(`Could not build series: ${error.message}`));
-  }, [meta, zones, day, series, historyMode, selectedZone]);
+  }, [meta, zones, series, historyMode, selectedZone]);
 
   const previous: Totals | null = useMemo(() => {
     if (!series || day === null) return null;

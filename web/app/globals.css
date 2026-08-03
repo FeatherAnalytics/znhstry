@@ -1,0 +1,93 @@
+:root {
+  /* The interface has no colour of its own. All saturation belongs to the
+     data, and the three faction colours are deliberately not harmonised --
+     they are the game's own colours, and they are enemies. */
+  --ink: #07090e;
+  --ink-raised: #0e1218;
+  --hairline: #1c2230;
+  --hairline-bright: #2a3346;
+
+  --legion: #ff4d4d;
+  --swarm: #22d07e;
+  --faceless: #9b6dff;
+  --dormant: #4a5568;
+
+  --text: #e6eaf2;
+  --text-dim: #7c8798;
+
+  --panel-blur: saturate(140%) blur(14px);
+}
+
+/* Canon faction colours are red/green/violet, which is the worst possible
+   pairing for deuteranopia. Players know the canon, so it stays the default
+   and this is a real alternative rather than a buried setting. */
+:root[data-palette="accessible"] {
+  --legion: #4d94ff;
+  --swarm: #ffa63d;
+  --faceless: #c77dff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* Display face is a wide grotesque -- the typographic register of an atlas
+   plate title, not a dashboard header. */
+.display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-variation-settings: "wdth" 118;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.prose {
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

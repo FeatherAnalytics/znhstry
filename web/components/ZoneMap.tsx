@@ -3,7 +3,7 @@
 import { useMemo, useRef } from "react";
 import DeckGL from "@deck.gl/react";
 import { ScatterplotLayer, PathLayer, LineLayer } from "@deck.gl/layers";
-import type { MapViewState, PickingInfo } from "@deck.gl/core";
+import { WebMercatorViewport, type MapViewState, type PickingInfo } from "@deck.gl/core";
 import type { Columns, ZoneState } from "@/lib/data";
 import type { BoundaryLayer } from "@/lib/boundaries";
 
@@ -38,6 +38,8 @@ export interface ZoneMapProps {
   viewState: MapViewState;
   onViewStateChange: (next: MapViewState) => void;
   onHover: (info: PickingInfo) => void;
+  onClickZone: (index: number | null) => void;
+  onBounds: (bounds: [number, number, number, number]) => void;
   paletteKey: string;
 }
 
@@ -49,6 +51,8 @@ export function ZoneMap({
   viewState,
   onViewStateChange,
   onHover,
+  onClickZone,
+  onBounds,
   paletteKey,
 }: ZoneMapProps) {
   const count = zones.latitude.length;
@@ -150,9 +154,23 @@ export function ZoneMap({
     <DeckGL
       viewState={viewState}
       controller={{ dragRotate: false }}
-      onViewStateChange={(e) => onViewStateChange(e.viewState as MapViewState)}
       layers={layers}
       onHover={onHover}
+      onClick={(info) => onClickZone(info.index >= 0 ? info.index : null)}
+      onViewStateChange={(e) => {
+        const vs = e.viewState as MapViewState;
+        onViewStateChange(vs);
+        // Bounds are pushed to a ref rather than React state: panning must not
+        // rebuild a 9.87M-event series on every frame.
+        const view = new WebMercatorViewport({
+          ...vs,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+        const [west, south] = view.unproject([0, view.height]);
+        const [east, north] = view.unproject([view.width, 0]);
+        onBounds([west, south, east, north]);
+      }}
       style={{ position: "absolute", inset: "0" }}
       getCursor={({ isDragging }) => (isDragging ? "grabbing" : "crosshair")}
     />

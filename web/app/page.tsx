@@ -2,14 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapViewState, PickingInfo } from "@deck.gl/core";
-import { ZoneMap } from "@/components/ZoneMap";
+import { ZoneMap, type OverviewTile } from "@/components/ZoneMap";
 import { StatsPanel, type Totals } from "@/components/StatsPanel";
 import {
+  checkpointUrl,
   dayToDate,
+  eventUrl,
   loadJsonGz,
   loadMeta,
   loadShard,
+  loadZones,
+  periodOf,
+  tileOf,
+  tilesInBounds,
   ZoneState,
+  type Bounds,
   type Columns,
   type Meta,
 } from "@/lib/data";
@@ -17,16 +24,29 @@ import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 import { HistoryBar, type HistoryMode, type RangeKey } from "@/components/HistoryBar";
 import {
   buildSeries,
-  loadFullHistory,
+  densify,
+  loadTileEvents,
+  loadTileSeries,
   singleZoneFilter,
-  viewportFilter,
+  sumTileSeries,
+  valueAt,
   type HistorySeries,
+  type TileSeries,
 } from "@/lib/history";
 
 const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
+const BASE = `${DATA_ROOT}/global`;
 
-const SCOPE = "global";
 const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
+
+/**
+ * Below this zoom the map draws one cell per tile from the pre-aggregated
+ * series and fetches no per-zone data at all: no `zones.bin.gz`, no
+ * checkpoints, no event shards. Four is where a z4 tile stops being a
+ * meaningful unit on screen - a viewport there spans roughly six tiles, which
+ * is a manageable number of shards to pull.
+ */
+const DETAIL_ZOOM = 4;
 
 // Upstream lost most of 2019: 337,859 events against 627,035 in 2018 and
 // 1,438,855 in 2020. It is missing data, not a quiet year, so the scrubber
@@ -38,27 +58,22 @@ interface SparseSeries {
   rows: number[][];
 }
 
-/** Step lookup over a sparse series: carry the last known value forward. */
-function valueAt(rows: number[][], day: number): number[] | null {
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (rows[mid][0] <= day) low = mid + 1;
-    else high = mid;
-  }
-  return low === 0 ? null : rows[low - 1];
+function leadingFaction(legion: number, swarm: number, faceless: number): number {
+  if (legion + swarm + faceless <= 0) return 0;
+  if (legion >= swarm && legion >= faceless) return 1;
+  return swarm >= faceless ? 2 : 3;
 }
 
 export default function Page() {
   const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [scopeSeries, setScopeSeries] = useState<SparseSeries | null>(null);
+  const [tileSeries, setTileSeries] = useState<TileSeries | null>(null);
   const [zones, setZones] = useState<Columns | null>(null);
   const [names, setNames] = useState<string[]>([]);
-  const [series, setSeries] = useState<SparseSeries | null>(null);
   const [day, setDay] = useState<number | null>(null);
   const [version, setVersion] = useState(0);
-  const [totals, setTotals] = useState<Totals>({ legion: 0, swarm: 0, faceless: 0, held: 0 });
+  const [heldInView, setHeldInView] = useState<number | null>(null);
   const [hovered, setHovered] = useState<{ name: string; total: number; faction: number } | null>(
     null,
   );
@@ -67,7 +82,8 @@ export default function Page() {
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySeries | null>(null);
   const [historyStatus, setHistoryStatus] = useState<string | null>(null);
-  const [status, setStatus] = useState("Loading zones");
+  const [status, setStatus] = useState("Loading");
+  const [visibleTiles, setVisibleTiles] = useState<string[]>([]);
 
   const [viewState, setViewState] = useState<MapViewState>({
     longitude: INITIAL_VIEW.longitude,
@@ -77,227 +93,299 @@ export default function Page() {
     bearing: 0,
   });
 
+  const detail = viewState.zoom >= DETAIL_ZOOM;
+
   const stateRef = useRef<ZoneState | null>(null);
   const shardCache = useRef(new Map<string, Columns>());
-  const checkpointCache = useRef(new Map<number, Columns>());
+  const loadedTiles = useRef(new Set<string>());
+  const zonesRequest = useRef<Promise<Columns> | null>(null);
   const loadToken = useRef(0);
-  const fullShards = useRef<Columns[] | null>(null);
   const historyToken = useRef(0);
   const maxDayRef = useRef(0);
   // Bounds are read when a series is built rather than tracked in state, so
-  // panning does not rebuild 9.87M events on every frame.
-  const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
+  // panning does not rebuild anything on every frame. The derived tile list
+  // *is* state, but only changes when the set of tiles does.
+  const viewportBounds = useRef<Bounds>([-180, -85, 180, 85]);
 
-  // Boundaries are scope-independent, so they load once and survive switching.
+  // Boundaries are scope-independent and small, so they load once up front.
   useEffect(() => {
     loadBoundaries(DATA_ROOT).then(setBoundaries).catch(() => setBoundaries([]));
   }, []);
 
+  /**
+   * Zone positions, on demand.
+   *
+   * 9.87 MB that only the detail view needs, so the world view never waits for
+   * it. Kicked off in the background once the cheap payloads are in, which
+   * usually means it has already arrived by the time anyone zooms in.
+   */
+  const ensureZones = useCallback((m: Meta): Promise<Columns> => {
+    if (!zonesRequest.current) {
+      zonesRequest.current = loadZones(BASE, m).then((loaded) => {
+        stateRef.current = new ZoneState(m.zones.rows);
+        setZones(loaded);
+        return loaded;
+      });
+    }
+    return zonesRequest.current;
+  }, []);
+
+  // Startup: the manifest, the whole-scope series, and every tile's daily
+  // series. About 1.9 MB, and enough for a scrubable world map on its own.
   useEffect(() => {
-    const base = `${DATA_ROOT}/global`;
     let cancelled = false;
 
-    // Everything downstream is indexed by the scope's own zone index, so a
-    // switch has to drop all of it rather than reuse a single cached shard.
-    setMeta(null);
-    setZones(null);
-    setSeries(null);
-    setDay(null);
-    setNames([]);
-    shardCache.current.clear();
-    checkpointCache.current.clear();
-    fullShards.current = null;
-    setHistory(null);
-    setSelectedZone(null);
-    setHistoryMode("scope");
-    loadToken.current++;
-    setStatus("Loading zones");
-    setViewState((current) => ({ ...current, ...INITIAL_VIEW }));
-
     (async () => {
-      const m = await loadMeta(base);
+      const m = await loadMeta(BASE);
       if (cancelled) return;
-      const z = await loadShard(base, m.zones);
-      if (cancelled) return;
-      stateRef.current = new ZoneState(m.zones.rows);
       setMeta(m);
-      setZones(z);
-      setStatus("Loading history");
-      const s = await loadJsonGz<SparseSeries>(base, m.series.scope_daily.path);
+      setVisibleTiles(Object.keys(m.tiles));
+
+      const s = await loadJsonGz<SparseSeries>(BASE, m.series.scope_daily.path);
       if (cancelled) return;
-      setSeries(s);
+      setScopeSeries(s);
       maxDayRef.current = s.rows[s.rows.length - 1][0];
       setDay(maxDayRef.current);
-      loadJsonGz<string[]>(base, m.zones.names.path).then((n) => !cancelled && setNames(n));
+
+      setStatus("Loading overview");
+      const tiles = await loadTileSeries(BASE, m);
+      if (cancelled) return;
+      setTileSeries(tiles);
+      setStatus("");
+
+      // Warm zone positions in the background so the first zoom-in does not
+      // stall on 9.87 MB. Failures are not fatal: the detail effect retries
+      // through the same promise. Names are 8 MB and only ever used for a
+      // hover readout in the detail view, so they wait until there is one.
+      ensureZones(m).catch(() => {
+        zonesRequest.current = null;
+      });
     })().catch((error) => !cancelled && setStatus(`Could not load data: ${error.message}`));
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [ensureZones]);
 
-  const bounds = useMemo(() => {
-    if (!series?.rows.length) return null;
-    return { min: series.rows[0][0], max: series.rows[series.rows.length - 1][0] };
-  }, [series]);
+  const dayBounds = useMemo(() => {
+    if (!scopeSeries?.rows.length) return null;
+    return { min: scopeSeries.rows[0][0], max: scopeSeries.rows[scopeSeries.rows.length - 1][0] };
+  }, [scopeSeries]);
 
-  /** Rebuild zone state at `day` from the nearest checkpoint plus that year's events. */
+  /**
+   * Detail view: rebuild per-zone state at `day` for the visible tiles only.
+   *
+   * Each tile is the nearest year checkpoint plus that year's event shards up
+   * to the target month. Tiles are applied one at a time and the map is
+   * repainted after each *new* one, so a fresh viewport fills in progressively
+   * rather than staying blank until the last shard lands. Repaints are skipped
+   * for tiles already fetched, which is the scrubbing case - there the work is
+   * pure replay over cached shards and one repaint at the end.
+   */
   useEffect(() => {
-    if (!meta || !zones || day === null || !stateRef.current) return;
-    // `scope` updates a render before the matching meta/zones do, so without
-    // this the first run after a switch pairs the new scope's shard paths with
-    // the old scope's index -- writing global indices into a state array sized
-    // for Dallas, where everything past its length is silently dropped.
-    if (meta.scope.name !== SCOPE) return;
+    if (!meta || !detail || day === null) return;
     const token = ++loadToken.current;
 
     (async () => {
-      const target = dayToDate(meta.day_epoch, day);
-      const year = target.getUTCFullYear();
-      const month = target.getUTCMonth() + 1;
-
-      const checkpointYear = meta.checkpoints
-        .map((c) => c.year!)
-        .filter((y) => y <= year)
-        .pop();
-
-      let checkpoint: Columns | undefined;
-      if (checkpointYear !== undefined) {
-        checkpoint = checkpointCache.current.get(checkpointYear);
-        if (!checkpoint) {
-          const entry = meta.checkpoints.find((c) => c.year === checkpointYear)!;
-          checkpoint = await loadShard(`${DATA_ROOT}/global/checkpoints`, entry);
-          checkpointCache.current.set(checkpointYear, checkpoint);
-        }
-      }
-
-      // Replay every shard between the checkpoint and the target date. Months
-      // are already in order, so applying them in sequence is chronological.
-      const from = checkpointYear ?? 0;
-      const shards = meta.events.filter(
-        (e) => e.year! >= from && (e.year! < year || (e.year === year && e.month! <= month)),
-      );
-
-      const ready: Columns[] = [];
-      for (const entry of shards) {
-        const key = entry.path;
-        let loaded = shardCache.current.get(key);
-        if (!loaded) {
-          loaded = await loadShard(`${DATA_ROOT}/global/events`, entry);
-          shardCache.current.set(key, loaded);
-        }
-        ready.push(loaded);
-      }
-
-      // Every await is done. Only now touch the shared ZoneState, and do it
-      // synchronously: this effect re-runs as meta, zones and day arrive
-      // separately, and an aborted run that had already zeroed the state would
-      // otherwise wipe a completed one. Fast scopes hid this; global did not.
+      if (!zones) setStatus("Loading zone positions");
+      await ensureZones(meta);
       if (token !== loadToken.current) return;
 
+      const period = periodOf(meta.day_epoch, day);
+      const year = period.slice(0, 4);
+      const checkpointYear = Object.keys(meta.checkpoints)
+        .filter((y) => y <= year)
+        .sort()
+        .pop();
+      // Period keys are "YYYY-MM", so a lexical compare is a chronological one.
+      const from = `${checkpointYear ?? "0000"}-01`;
+      const periods = Object.keys(meta.events)
+        .filter((p) => p >= from && p <= period)
+        .sort();
+
       const state = stateRef.current!;
-      state.faction.fill(0);
-      state.legion.fill(0);
-      state.swarm.fill(0);
-      state.faceless.fill(0);
-      state.total.fill(0);
+      state.clear();
+      setStatus(visibleTiles.length > 8 ? `Loading ${visibleTiles.length} tiles` : "");
 
-      if (checkpoint) state.applyRange(checkpoint, 0, checkpoint.idx.length);
-      for (const columns of ready) state.applyUpToDay(columns, day);
+      for (const tile of visibleTiles) {
+        const fresh = !loadedTiles.current.has(tile);
 
-      setTotals(state.totals());
+        const checkpoint = checkpointYear && meta.checkpoints[checkpointYear][tile];
+        if (checkpoint) {
+          const key = `c${checkpointYear}/${tile}`;
+          let columns = shardCache.current.get(key);
+          if (!columns) {
+            columns = await loadShard(
+              checkpointUrl(BASE, checkpointYear, tile),
+              meta.schemas.checkpoint,
+              checkpoint[0],
+            );
+            shardCache.current.set(key, columns);
+          }
+          if (token !== loadToken.current) return;
+          state.applyAll(columns);
+        }
+
+        for (const p of periods) {
+          const shard = meta.events[p][tile];
+          if (!shard) continue;
+          const key = `${p}/${tile}`;
+          let columns = shardCache.current.get(key);
+          if (!columns) {
+            columns = await loadShard(eventUrl(BASE, p, tile), meta.schemas.event, shard[0]);
+            shardCache.current.set(key, columns);
+          }
+          if (token !== loadToken.current) return;
+          state.applyUpToDay(columns, day);
+        }
+
+        loadedTiles.current.add(tile);
+        if (fresh) setVersion((v) => v + 1);
+      }
+
+      if (token !== loadToken.current) return;
+      setHeldInView(state.heldCount());
       setVersion((v) => v + 1);
       setStatus("");
-    })().catch((error) => setStatus(`Could not load history: ${error.message}`));
-  }, [meta, zones, day]);
+    })().catch((error) => {
+      if (token === loadToken.current) setStatus(`Could not load detail: ${error.message}`);
+    });
+  }, [meta, detail, day, visibleTiles, zones, ensureZones]);
 
-
-  // Series for the panel. Scope mode reuses the precomputed sparse series, so
-  // it is instant; viewport and single-zone modes need per-event deltas across
-  // all time, which means every shard. They are cached, so the cost is paid
-  // once per scope.
   useEffect(() => {
-    if (!meta || !zones || day === null || meta.scope.name !== SCOPE) return;
+    if (!detail) setHeldInView(null);
+  }, [detail]);
+
+  // Zone names, 8 MB, fetched the first time a detail view could show one.
+  const namesRequested = useRef(false);
+  useEffect(() => {
+    if (!meta || !detail || namesRequested.current) return;
+    namesRequested.current = true;
+    loadJsonGz<string[]>(BASE, meta.zones.names.path)
+      .then(setNames)
+      .catch(() => (namesRequested.current = false));
+  }, [meta, detail]);
+
+  /**
+   * The chart.
+   *
+   * Whole-scope and viewport modes read pre-aggregated tile totals, so both
+   * are instant and neither touches an event shard. Only a single selected
+   * zone needs per-event deltas, and then only over its own tile.
+   */
+  useEffect(() => {
+    if (!meta || day === null || !dayBounds) return;
     const token = ++historyToken.current;
-    const needsFull = historyMode === "viewport" || selectedZone !== null;
+    const span = maxDayRef.current + 1;
 
     (async () => {
-      if (!needsFull) {
-        if (!series) return;
-        // Widen the sparse scope series into a dense one the chart can index.
-        const span = series.rows[series.rows.length - 1][0] + 1;
-        const out: HistorySeries = {
-          days: new Int32Array(span),
-          legion: new Float64Array(span),
-          swarm: new Float64Array(span),
-          faceless: new Float64Array(span),
-        };
-        let r = 0;
-        let l = 0, sw = 0, f = 0;
-        for (let d = 0; d < span; d++) {
-          while (r < series.rows.length && series.rows[r][0] <= d) {
-            [, l, sw, f] = series.rows[r];
-            r++;
-          }
-          out.days[d] = d;
-          out.legion[d] = l;
-          out.swarm[d] = sw;
-          out.faceless[d] = f;
-        }
-        setHistory(out);
+      if (selectedZone !== null) {
+        if (!zones) return;
+        const tile = tileOf(
+          meta,
+          (zones.latitude as Float32Array)[selectedZone],
+          (zones.longitude as Float32Array)[selectedZone],
+        );
+        setHistoryStatus("Reading zone history");
+        const shards = await loadTileEvents(
+          BASE,
+          meta,
+          tile,
+          shardCache.current,
+          (done, total) =>
+            token === historyToken.current &&
+            setHistoryStatus(`Reading zone history ${Math.round((done / total) * 100)}%`),
+        );
+        if (token !== historyToken.current) return;
+        setHistory(
+          buildSeries(shards, meta.zones.rows, singleZoneFilter(meta.zones.rows, selectedZone), maxDayRef.current),
+        );
         setHistoryStatus(null);
         return;
       }
 
-      if (!fullShards.current) {
-        setHistoryStatus("Reading full history");
-        fullShards.current = await loadFullHistory(
-          `${DATA_ROOT}/global`,
-          meta,
-          shardCache.current,
-          (done, total) =>
-            token === historyToken.current &&
-            setHistoryStatus(`Reading full history ${Math.round((done / total) * 100)}%`),
-        );
+      if (historyMode === "viewport") {
+        if (!tileSeries) return;
+        setHistory(sumTileSeries(tileSeries, visibleTiles, span));
+        setHistoryStatus(null);
+        return;
       }
-      if (token !== historyToken.current) return;
 
-      const filter =
-        selectedZone !== null
-          ? singleZoneFilter(meta.zones.rows, selectedZone)
-          : viewportFilter(zones, viewportBounds.current);
-
-      // Built to the end of the record, not to the scrub position: the
-      // cumulative series is the same regardless of where the playhead sits,
-      // and the chart already clips to its own window. Rebuilding per scrub
-      // walked all 9.87M events on every drag frame.
-      setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, maxDayRef.current));
+      if (!scopeSeries) return;
+      setHistory(densify(scopeSeries.rows, span));
       setHistoryStatus(null);
     })().catch((error) => setHistoryStatus(`Could not build series: ${error.message}`));
-  }, [meta, zones, series, historyMode, selectedZone]);
+  }, [meta, dayBounds, scopeSeries, tileSeries, historyMode, selectedZone, visibleTiles, zones, day]);
 
-  const previous: Totals | null = useMemo(() => {
-    if (!series || day === null) return null;
-    const row = valueAt(series.rows, day - 365);
+  /** One aggregated cell per tile at the current day, for the low-zoom map. */
+  const overview = useMemo<OverviewTile[]>(() => {
+    if (!meta || !tileSeries || day === null) return [];
+    return Object.entries(meta.tiles).map(([key, info]) => {
+      const row = valueAt(tileSeries[key] ?? [], day);
+      return {
+        key,
+        bbox: info.bbox,
+        legion: row?.[1] ?? 0,
+        swarm: row?.[2] ?? 0,
+        faceless: row?.[3] ?? 0,
+      };
+    });
+  }, [meta, tileSeries, day]);
+
+  // Panel totals are the exact whole-scope figures at `day`, not a sum over
+  // whatever tiles happen to be loaded. They are instant and never wrong
+  // mid-load; the chart's Viewport mode is where in-view numbers live.
+  const totals = useMemo<Totals>(() => {
+    const row = scopeSeries && day !== null ? valueAt(scopeSeries.rows, day) : null;
+    return { legion: row?.[1] ?? 0, swarm: row?.[2] ?? 0, faceless: row?.[3] ?? 0 };
+  }, [scopeSeries, day]);
+
+  const previous = useMemo<Totals | null>(() => {
+    if (!scopeSeries || day === null) return null;
+    const row = valueAt(scopeSeries.rows, day - 365);
     if (!row) return null;
-    return { legion: row[1], swarm: row[2], faceless: row[3], held: 0 };
-  }, [series, day]);
+    return { legion: row[1], swarm: row[2], faceless: row[3] };
+  }, [scopeSeries, day]);
+
+  const handleBounds = useCallback(
+    (b: Bounds) => {
+      viewportBounds.current = b;
+      if (!meta) return;
+      const next = tilesInBounds(meta, b);
+      setVisibleTiles((prev) =>
+        prev.length === next.length && prev.every((tile, i) => tile === next[i]) ? prev : next,
+      );
+    },
+    [meta],
+  );
 
   const handleHover = useCallback(
     (info: PickingInfo) => {
-      const index = info.index;
+      if (info.layer?.id === "overview" && info.object) {
+        const tile = info.object as OverviewTile;
+        const total = tile.legion + tile.swarm + tile.faceless;
+        setHovered({
+          name: `Tile ${tile.key}`,
+          total,
+          faction: leadingFaction(tile.legion, tile.swarm, tile.faceless),
+        });
+        return;
+      }
       const state = stateRef.current;
-      if (index === undefined || index < 0 || !state) return setHovered(null);
-      setHovered({
-        name: names[index] ?? "",
-        total: state.total[index],
-        faction: state.faction[index],
-      });
+      if (info.layer?.id === "zones" && info.index >= 0 && state) {
+        setHovered({
+          name: names[info.index] ?? "",
+          total: state.total[info.index],
+          faction: state.faction[info.index],
+        });
+        return;
+      }
+      setHovered(null);
     },
     [names],
   );
 
-  const ready = meta && zones && series && day !== null && bounds;
+  const ready = meta && scopeSeries && tileSeries && day !== null && dayBounds;
 
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
@@ -322,20 +410,19 @@ export default function Page() {
         {ready && (
           <ZoneMap
             zones={zones}
-            state={stateRef.current!}
+            state={stateRef.current}
             version={version}
+            detail={detail}
+            overview={overview}
             boundaries={boundaries}
             viewState={viewState}
             onViewStateChange={setViewState}
             onHover={handleHover}
             onClickZone={(index) => {
               setSelectedZone(index);
-              if (index !== null) setHistoryMode("zone");
-              else setHistoryMode("scope");
+              setHistoryMode(index !== null ? "zone" : "scope");
             }}
-            onBounds={(b) => {
-              viewportBounds.current = b;
-            }}
+            onBounds={handleBounds}
           />
         )}
         {ready && (
@@ -345,6 +432,7 @@ export default function Page() {
             previous={previous}
             zoneCount={meta.scope.zone_count}
             scopeLabel={meta.scope.label}
+            held={detail ? heldInView : null}
             hovered={hovered}
           />
         )}
@@ -370,8 +458,8 @@ export default function Page() {
           range={range}
           onRangeChange={setRange}
           day={day}
-          minDay={bounds.min}
-          maxDay={bounds.max}
+          minDay={dayBounds.min}
+          maxDay={dayBounds.max}
           onScrub={setDay}
           epoch={meta.day_epoch}
           title={
@@ -385,8 +473,8 @@ export default function Page() {
             selectedZone !== null
               ? "Single zone"
               : historyMode === "viewport"
-                ? "Current map bounds"
-                : `${meta.scope.zone_count >= 1e6 ? `${(meta.scope.zone_count / 1e6).toFixed(1)}M` : `${(meta.scope.zone_count / 1e3).toFixed(0)}K`} zones`
+                ? `${visibleTiles.length} of ${Object.keys(meta.tiles).length} tiles`
+                : `${(meta.scope.zone_count / 1e6).toFixed(1)}M zones`
           }
           status={historyStatus}
           onClearZone={() => {

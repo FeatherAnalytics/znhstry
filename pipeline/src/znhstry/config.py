@@ -48,6 +48,18 @@ WEB_DATA = ROOT / "web" / "public" / "data"
 
 EARTH_RADIUS_KM = 6371.0088
 
+# Checkpoints, events and chart series shard by web-mercator tile so a viewport
+# fetches only what it can see. Zoom 4 measured best: 128 of the 256 tiles hold
+# any zone at all, and the heaviest (North America, x=8 y=5) is 19% of zones and
+# 27% of events -- a real cut without splitting into thousands of tiny files.
+#
+# Tile assignment derives from latitude and longitude, which never change, so a
+# zone's tile is stable forever. That is what lets the shards stay immutable.
+TILE_ZOOM = 4
+# Web mercator is undefined at the poles; this is where the projection is
+# conventionally truncated to make the world square.
+MERCATOR_LAT_LIMIT = 85.05112878
+
 
 @dataclass(frozen=True)
 class Scope:

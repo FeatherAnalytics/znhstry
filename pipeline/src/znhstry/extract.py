@@ -166,8 +166,12 @@ def extract_baseline() -> None:
 
 
 def extract_zones() -> None:
+    zone_id_max = query("SELECT MAX(ZoneId) AS m FROM zones")[0]["m"]
+    log.info("zones: max ZoneId is %s", f"{zone_id_max:,}")
+
     jobs = []
-    for lo in range(0, config.ZONE_ID_MAX + 1, config.ZONE_ID_CHUNK):
+    upper = zone_id_max + config.ZONE_ID_HEADROOM
+    for lo in range(0, upper, config.ZONE_ID_CHUNK):
         hi = lo + config.ZONE_ID_CHUNK
         sql = (
             f"SELECT {', '.join(ZONE_COLUMNS)} FROM zones "

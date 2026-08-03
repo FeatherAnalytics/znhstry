@@ -1,0 +1,8 @@
+znhstry:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Relative to the dbt working directory (transform/).
+      path: ../data/znhstry.duckdb
+      threads: 4

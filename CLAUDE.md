@@ -65,6 +65,38 @@ needed for nightly incremental top-ups.
 - Per-player data (`battlestats_players.csv`, `player_details.csv`) is **not in the
   database**, only in the upstream repo `../QONQR_zonedata`.
 
+### changelog does not perfectly reconcile to zones
+
+Cumulative deltas from `changelog` land ~0.004% above the `zones` table. The gap
+decomposes exactly, with no remainder:
+
+| Faction | Total gap | 3 orphan zones | 1,429 divergent zones |
+|---|---|---|---|
+| Legion | 441,292 | 0 | 441,292 |
+| Swarm | 1,070,874 | 722,697 | 348,177 |
+| Faceless | 160,730 | 0 | 160,730 |
+
+- **3 orphan zones** (`2836390`, `2836391`, `2836392`) exist in `changelog` but not in
+  `zones`. They land in `fct_zone_events` with a null `country_id`, so they count toward
+  `fct_global_daily` but not `fct_country_daily`. Do not "fix" this by inner-joining.
+- **1,429 zones (0.09%)** have a last `changelog` row that disagrees with their `zones`
+  row, always with `changelog` higher. The data dictionary claims these always match;
+  they match for 99.91%. Upstream runs `import_mysql.py` and `import_mysql_changelog.py`
+  as separate steps, so the two can drift.
+
+0.004% of bots is immaterial for a visualization. It is documented rather than tested
+against a threshold, because thresholds on upstream drift are brittle.
+
+### Fixed bugs worth not reintroducing
+
+- **`fct_zone_checkpoints` must compare timestamps, not dates.** Casting to date drops
+  every boundary an event lands on -- the preceding event fails `next > B` and the event
+  itself fails `B > observed`, so no row matches. This silently lost 19,062 checkpoints.
+  `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
+- **Do not hardcode a max ZoneId.** New zones appear above the previous maximum;
+  `extract_zones()` discovers it at runtime and adds headroom.
+- `matched` is a reserved word in DuckDB. Don't use it as a column alias.
+
 ## Performance notes
 
 - Query cost is dominated by planning, not transfer. Bigger chunks beat more chunks.

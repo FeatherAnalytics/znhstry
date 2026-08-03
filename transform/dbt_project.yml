@@ -1,0 +1,16 @@
+name: znhstry
+version: "0.1.0"
+profile: znhstry
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  znhstry:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: table
+    marts:
+      +materialized: table

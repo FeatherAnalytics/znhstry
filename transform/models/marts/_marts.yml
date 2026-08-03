@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: dim_zone
+    description: "Grain: one row per zone. Geography, current state, current holder."
+    columns:
+      - name: zone_id
+        description: The only unique key. zone_name is deliberately not unique.
+        data_tests: [unique, not_null]
+
+  - name: fct_zone_events
+    description: >
+      Grain: one row per zone per observation. The event spine. Deltas are
+      computed against each zone's own previous observation, so they span
+      whatever gap that was - never assume a fixed window.
+
+  - name: fct_zone_checkpoints
+    description: >
+      Grain: one row per zone per year boundary. Dense snapshots that let the
+      viewer render dormant zones without loading fourteen years of events.
+    columns:
+      - name: checkpoint_date
+        data_tests: [not_null]
+
+  - name: fct_global_daily
+    description: "Grain: one row per calendar day. Dense, cumulative bot counts by faction."
+    columns:
+      - name: activity_date
+        data_tests: [unique, not_null]
+      - name: total_bots
+        data_tests: [not_null]
+
+  - name: fct_country_daily
+    description: "Grain: one row per country per calendar day. Dense within the observed span."
+    columns:
+      - name: country_id
+        data_tests: [not_null]

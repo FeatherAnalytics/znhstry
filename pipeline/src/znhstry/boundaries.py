@@ -28,7 +28,6 @@ from __future__ import annotations
 import gzip
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,18 +45,11 @@ SOURCE = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/
 SIMPLIFY_TOLERANCE = 0.01
 
 
-@dataclass(frozen=True)
-class Layer:
-    source: str
-    #: Loaded with the page, or only once the detail view needs it. Country
-    #: outlines orient the world view; province lines only matter zoomed in,
-    #: and at 2.3 MB they would otherwise more than double first paint.
-    deferred: bool
-
-
+# Country borders read slightly brighter than internal divisions, so they stay
+# separate layers rather than one merged path set.
 LAYERS = {
-    "admin0": Layer("ne_50m_admin_0_countries", deferred=False),
-    "admin1": Layer("ne_10m_admin_1_states_provinces", deferred=True),
+    "admin0": "ne_50m_admin_0_countries",
+    "admin1": "ne_10m_admin_1_states_provinces",
 }
 
 
@@ -164,28 +156,26 @@ def export_boundaries(out: Path | None = None) -> None:
         "layers": {},
     }
 
-    for key, layer in LAYERS.items():
-        positions, starts, dropped = _flatten(_fetch(layer.source), SIMPLIFY_TOLERANCE)
+    for key, source in LAYERS.items():
+        positions, starts, dropped = _flatten(_fetch(source), SIMPLIFY_TOLERANCE)
         payload = positions.tobytes() + starts.tobytes()
         path = out / f"boundaries_{key}.bin.gz"
         path.write_bytes(gzip.compress(payload, 6))
 
         manifest["layers"][key] = {
             "path": path.name,
-            "source": layer.source,
+            "source": source,
             "points": int(positions.size // 2),
             "paths": int(starts.size - 1),
             "bytes": path.stat().st_size,
-            "deferred": layer.deferred,
         }
         log.info(
-            "  %s: %s paths, %s points (%s simplified away), %s KB%s",
+            "  %s: %s paths, %s points (%s simplified away), %s KB",
             key,
             f"{starts.size - 1:,}",
             f"{positions.size // 2:,}",
             f"{dropped:,}",
             path.stat().st_size // 1024,
-            " [deferred]" if layer.deferred else "",
         )
 
     (out / "boundaries.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

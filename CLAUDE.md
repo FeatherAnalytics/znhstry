@@ -37,23 +37,22 @@ hits it. `npm run dev` is unaffected and exercises the same code.
 
 ## The viewer
 
-Two modes, switched at zoom 4 (`DETAIL_ZOOM` in `app/page.tsx`):
+**One mode: every zone, at every zoom.** The map draws all 1.6M zones as individual
+points, from `zones.bin.gz` plus the nearest year checkpoint and that year's event
+shards. Hovering a zone gives its name, region, country and `ZoneId`.
 
-- **Below it**, the map is one cell per tile drawn from `series/tiles*.json.gz`. No zone
-  positions, no checkpoints, no event shards - 9 requests, ~1.9 MB, and scrubbing is
-  instant because every frame is already in memory.
-- **At or above it**, visible tiles' checkpoints and event shards load and the map draws
-  individual zones. `zones.bin.gz` (9.87 MB) is prefetched in the background during the
-  overview so the first zoom-in does not stall on it; `zone_names.json.gz` (8.2 MB) waits
-  until there is a detail view to hover.
+### Do not reintroduce a zoom-based LOD
 
-Measured: world view 9 requests / 1.9 MB. Zoomed into the north-eastern US, 11 tiles,
-68 requests / 21.5 MB total - of which 18.1 MB is zone positions and names, and only
-1.7 MB is tiled history.
+This was tried: below zoom 4 the map drew one aggregated cell per web-mercator tile
+instead of individual zones, which cut first paint from ~21 MB to 1.9 MB. It was
+rejected, and the reason is not performance — **the point of this map is the 1.6M dots
+tracing the world**. A 16x16 grid of coloured blocks is cheaper and says less. If first
+paint needs to come down, take it out of `zones.bin.gz` (11.0 MB) and
+`zone_names.json.gz` (8.0 MB), which are the actual cost, and keep every zone on screen.
 
-The stats panel always shows exact whole-scope totals read from `scope_daily`, never a
-sum over whichever tiles happen to be loaded, so it is right during a partial load. The
-one in-view number is "zones held in view", which says so.
+The tiled export and its LOD live on branch `feat/tiled-export` if the measurements are
+ever wanted again. Everything worth keeping from that work — the `observed_at`
+determinism fix, region and country on zones, the boundary rebuild — was carried over.
 
 ### Boundaries come from polygons, not the boundary-line layers
 
@@ -67,9 +66,7 @@ reason the map looked arbitrary:
 
 Rings are simplified with Douglas-Peucker at `SIMPLIFY_TOLERANCE = 0.01` degrees
 (~1.1 km), which takes admin1 from 1.30M points to 382k — still far more detailed than
-the 50m data it replaces. admin0 is 0.49 MB and loads with the page; admin1 is 2.32 MB
-and is marked `deferred` in `boundaries.json`, so it loads on first detail view alongside
-the other zoomed-in payloads.
+the 50m data it replaces. admin0 is 0.49 MB, admin1 is 2.32 MB; both load with the page.
 
 Rebuild with `uv run python -m znhstry boundaries`. That step was previously reachable
 only by importing the module by hand.
@@ -181,7 +178,12 @@ developing the viewer. Both use the same code path.
 
 | Scope | Zones | Events | Files | Size |
 |---|---|---|---|---|
-| global | 1,595,086 | 9.87M | 12,264 | 103.1 MB |
+| global | 1,595,086 | 9.87M | 194 | 99.0 MB |
+
+`export_all` clears `checkpoints/`, `events/` and `series/` before writing, so a layout
+change cannot leave orphans behind. It is safe because unchanged shards are rewritten
+byte-for-byte, which git records as no change. This is not hypothetical: switching layouts
+once left 187 orphaned directories and ~12,000 stale files still being served.
 
 Every `.gz` is a gzip stream over a columnar dump: each column is a contiguous run of one
 fixed-width dtype, concatenated in the order `meta.json` lists it. Decompress with the
@@ -205,62 +207,6 @@ prefix-sum to recover it.
   being repeated 1.6M times. `zoneIdentity()` in `lib/data.ts` resolves them and applies
   the country-wins rule above.
 
-### Tiling
-
-Checkpoints and events shard by web-mercator tile at **zoom 4** as well as by time, so a
-viewport downloads only what it can see. Paths are `checkpoints/{year}/{x}-{y}.bin.gz`
-and `events/{year}-{month}/{x}-{y}.bin.gz`; `meta.json` lists every tile with its bbox,
-so the client intersects the viewport without reimplementing the projection.
-
-127 of the 256 tiles hold any zone. The distribution is extremely skewed - **central
-Europe** (`8-5`: Germany 66k, France 47k, Poland 39k) is 19% of zones and 27% of events -
-which is exactly why tiling pays: zooming anywhere other than there drops nearly
-everything. Europe outweighs the US here because the zone set follows named populated
-places, and Europe has far more of them per square kilometre.
-
-| | full history, all shards | files |
-|---|---|---|
-| untiled (before) | ~64 MB | 187 |
-| `8-5` central Europe, the worst case | 13.4 MB | 172 |
-| `4-6` eastern US (86,687 of its 91,258 zones) | 7.0 MB | 168 |
-| `12-7` | 1.0 MB | 167 |
-
-Tiling costs 5.6% in total size (97.7 -> 103.1 MB): more, smaller gzip streams compress
-slightly worse. That is the trade.
-
-- **`idx` is global and stable across tiles, never per-tile.** Tiled shards index into
-  one flat client-side array. Renumbering within a tile would break every other shard.
-- **Tile assignment derives from lat/lon**, which never change, so a zone's tile is
-  stable forever and shards stay immutable.
-- **`meta.json` hoists the column schema out of the shards.** With over ten thousand
-  entries, repeating the schema per shard would dwarf the manifest. It is also written
-  compact rather than indented: 695 KB -> 223 KB (70 KB gzipped over the wire).
-
-### Per-tile series carry both the chart and the low-zoom map
-
-`series/tiles.json.gz` (1.5 MB) plus `series/tiles.{year}.json.gz` (76 KB) hold a sparse
-daily faction total for every tile, keyed by tile. Split at the current year so the
-immutable past is fetched once and only the small live file churns nightly. One combined
-file per half rather than one per tile: the client wants all 127 up front, and 127
-requests to assemble 1.5 MB is worse on every axis.
-
-They do two jobs:
-
-1. **The viewport chart** sums the visible tiles. No event shard is touched.
-2. **The map below zoom 4** draws one cell per tile straight from this, so a world view
-   needs no `zones.bin.gz`, no checkpoint and no event shard at all - 9 requests and
-   ~1.9 MB to a scrubable world map.
-
-**Do not rebuild the viewport chart by delta-walking per-zone events.** A per-zone delta
-needs every event that zone ever had. Once events are tiled, a zone whose earlier history
-sits in a tile the viewer never loaded has no prior value to subtract from, so its first
-loaded event books its entire lifetime as one day's change. Summing pre-aggregated tiles
-has no such state and is exact: verified against the untiled `scope_daily` series at
-max abs difference **0** across 6,059 days.
-
-Only a **single selected zone** still needs a per-event delta walk, and it only ever
-reads its own tile's shards.
-
 ### Immutability and nightly updates
 
 **`web/public/data/` is currently gitignored, so nothing here is committed yet.** The
@@ -273,19 +219,20 @@ input, so git cannot delta it** - a rewritten file costs its full size in histor
 single night:
 
 1. **Every shard must be immutable once written.** Events shard by *month*, not year, so
-   a nightly run rewrites only the current month's tiles. Checkpoints are emitted only
-   for boundaries `<= current_date`; a future boundary is really "state as of now" and
-   would churn ~4 MB nightly. The client derives current state from the last checkpoint
-   plus the event shards after it.
+   a nightly run rewrites only the current month (~22 KB early in a month, ~800 KB by the
+   end). Checkpoints are emitted only for boundaries `<= current_date`; a future boundary
+   is really "state as of now" and would churn ~3.7 MB nightly. The client derives current
+   state from the last checkpoint plus the event shards after it.
 2. **`idx` is a permanent handle, not a row number.** It is assigned once and preserved
    across runs by reading the previous `zones.bin.gz`, which stores `zone_id` per index
    and is therefore its own index manifest. New zones are appended; zones leaving the
    scope stay as tombstones. Without this, any of the 1.09M dormant zones waking up would
-   be inserted mid-sequence, renumber everything after it, and invalidate all 103 MB over
+   be inserted mid-sequence, renumber everything after it, and invalidate all 99 MB over
    one new zone.
 
 Immutability is only real if the export is **deterministic**, which it was not until the
-`observed_at` sort fix above. Check it after any change to shard ordering or contents:
+`observed_at` sort fix above. Verified: all 193 `.gz` files byte-identical across two
+consecutive runs. Re-check after any change to shard ordering or contents:
 
 ```bash
 find web/public/data/global -name '*.gz' -exec md5sum {} + | sort > /tmp/a
@@ -293,17 +240,12 @@ cd pipeline && uv run python -m znhstry export --scope global && cd ..
 find web/public/data/global -name '*.gz' -exec md5sum {} + | sort | diff /tmp/a -
 ```
 
-`export_all` clears `checkpoints/`, `events/` and `series/` before writing so a reshard
-leaves nothing stale behind. That is safe precisely because immutable shards come back
-byte-identical, which git records as no change at all.
-
 `_previous_index` hands the stable index to DuckDB **through a temporary Parquet file**,
 not `con.register`. Passing a polars frame directly goes through Arrow and so needs
 pyarrow, a large dependency for one handoff; both sides speak Parquet natively.
 
 Still churning nightly and not yet fixed: `series/country_daily.json.gz` (~1.8 MB)
-rewrites in full. Shard it by year when it matters. `meta.json` (223 KB) also rewrites,
-which is small enough to leave alone.
+rewrites in full. Shard it by year when it matters.
 
 ## Performance notes
 

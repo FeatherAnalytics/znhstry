@@ -1,24 +1,15 @@
 /**
- * Time series, at three grains.
+ * Time series for an arbitrary subset of zones.
  *
- * Whole-scope and viewport series come from pre-aggregated **per-tile daily
- * totals**, summed. That is deliberate and not merely convenient: a per-zone
- * delta walk needs every event a zone ever had, so with events tiled, a zone
- * whose earlier history sits in an unloaded tile has nothing to subtract from
- * and its first loaded event books the zone's whole lifetime as one day's
- * change. Summing pre-aggregated tiles carries no such state and is exact.
- *
- * A single selected zone is the one case that still needs per-event deltas.
- * It only ever needs one tile's shards, so the cost is bounded by that tile.
+ * Events store absolute counts, so a series needs per-event deltas. Recovering
+ * them is a linear pass because the shards are already ordered by (zone, day)
+ * -- the same layout chosen for compression turns out to be the one this walk
+ * wants. Carry a last-seen value per zone across shards in chronological
+ * order, subtract, bucket by day, then cumulative-sum: the identical
+ * trick the dbt layer uses, and it carries dormant zones forward for free.
  */
 
-import {
-  eventUrl,
-  loadJsonGz,
-  loadShard,
-  type Columns,
-  type Meta,
-} from "./data";
+import { loadShard, type Columns, type Meta, type ShardEntry } from "./data";
 
 export interface HistorySeries {
   days: Int32Array;
@@ -29,129 +20,24 @@ export interface HistorySeries {
 
 export type ZoneFilter = Uint8Array | null;
 
-/** Sparse [day, legion, swarm, faceless] rows, per tile. */
-export type TileSeries = Record<string, number[][]>;
-
-/**
- * Every tile's daily series, in two files.
- *
- * The past is immutable and cached hard; only the current year's file changes
- * between nightly runs. Concatenating them is correct because both hold
- * absolute cumulative totals, so the current-year rows simply continue.
- */
-export async function loadTileSeries(base: string, meta: Meta): Promise<TileSeries> {
-  const parts = [meta.series.tiles.base, meta.series.tiles.current].filter(Boolean);
-  const loaded = await Promise.all(
-    parts.map((part) => loadJsonGz<{ tiles: TileSeries }>(base, part!.path)),
-  );
-
-  const merged: TileSeries = {};
-  for (const { tiles } of loaded) {
-    for (const [tile, rows] of Object.entries(tiles)) {
-      merged[tile] = merged[tile] ? merged[tile].concat(rows) : rows;
-    }
-  }
-  return merged;
-}
-
-/** Step lookup over a sparse series: the last row at or before `day`. */
-export function valueAt(rows: number[][], day: number): number[] | null {
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (rows[mid][0] <= day) low = mid + 1;
-    else high = mid;
-  }
-  return low === 0 ? null : rows[low - 1];
-}
-
-function empty(span: number): HistorySeries {
-  const days = new Int32Array(span);
-  for (let d = 0; d < span; d++) days[d] = d;
-  return {
-    days,
-    legion: new Float64Array(span),
-    swarm: new Float64Array(span),
-    faceless: new Float64Array(span),
-  };
-}
-
-/** Widen one sparse series into a dense one the chart can index by day. */
-export function densify(rows: number[][], span: number): HistorySeries {
-  const out = empty(span);
-  let r = 0;
-  let l = 0;
-  let s = 0;
-  let f = 0;
-  for (let d = 0; d < span; d++) {
-    while (r < rows.length && rows[r][0] <= d) {
-      [, l, s, f] = rows[r];
-      r++;
-    }
-    out.legion[d] = l;
-    out.swarm[d] = s;
-    out.faceless[d] = f;
-  }
-  return out;
-}
-
-/**
- * Sum the named tiles into one dense series.
- *
- * Each tile is carried forward independently before being added, which is the
- * whole point: a tile with no row on a given day has not gone to zero, it has
- * simply not changed.
- */
-export function sumTileSeries(
-  series: TileSeries,
-  tiles: string[],
-  span: number,
-): HistorySeries {
-  const out = empty(span);
-  for (const tile of tiles) {
-    const rows = series[tile];
-    if (!rows?.length) continue;
-    let r = 0;
-    let l = 0;
-    let s = 0;
-    let f = 0;
-    for (let d = 0; d < span; d++) {
-      while (r < rows.length && rows[r][0] <= d) {
-        [, l, s, f] = rows[r];
-        r++;
-      }
-      out.legion[d] += l;
-      out.swarm[d] += s;
-      out.faceless[d] += f;
-    }
-  }
-  return out;
-}
-
-/** Every event shard for one tile, chronological. Cached across calls. */
-export async function loadTileEvents(
+/** Every event shard, in chronological order. Cached across calls. */
+export async function loadFullHistory(
   base: string,
   meta: Meta,
-  tile: string,
   cache: Map<string, Columns>,
   onProgress?: (done: number, total: number) => void,
 ): Promise<Columns[]> {
-  const periods = Object.keys(meta.events)
-    .filter((period) => meta.events[period][tile])
-    .sort();
-
+  const shards = [...meta.events].sort((a, b) => a.year! - b.year! || a.month! - b.month!);
   const out: Columns[] = [];
-  for (const [i, period] of periods.entries()) {
-    const key = `${period}/${tile}`;
-    let loaded = cache.get(key);
+
+  for (const [i, entry] of shards.entries()) {
+    let loaded = cache.get(entry.path);
     if (!loaded) {
-      const [rows] = meta.events[period][tile];
-      loaded = await loadShard(eventUrl(base, period, tile), meta.schemas.event, rows);
-      cache.set(key, loaded);
+      loaded = await loadShard(`${base}/events`, entry as ShardEntry);
+      cache.set(entry.path, loaded);
     }
     out.push(loaded);
-    onProgress?.(i + 1, periods.length);
+    onProgress?.(i + 1, shards.length);
   }
   return out;
 }
@@ -162,9 +48,6 @@ export async function loadTileEvents(
  * Shards must be chronological. Within one shard the rows are grouped by zone
  * rather than by day, which is fine: a delta only ever compares a zone against
  * its own previous value, and days are bucketed independently.
- *
- * Only correct when `shards` holds a zone's *complete* history, which is why
- * this is reserved for single-zone mode over that zone's own tile.
  */
 export function buildSeries(
   shards: Columns[],
@@ -198,22 +81,44 @@ export function buildSeries(
           dFaceless[d] += f - lastFaceless[z];
         }
       }
+      // Tracked regardless of the filter so a zone entering the viewport later
+      // is compared against its own history, not against zero.
       lastLegion[z] = l;
       lastSwarm[z] = s;
       lastFaceless[z] = f;
     }
   }
 
-  const out = empty(span);
+  const days = new Int32Array(span);
+  const legion = new Float64Array(span);
+  const swarm = new Float64Array(span);
+  const faceless = new Float64Array(span);
   let cl = 0;
   let cs = 0;
   let cf = 0;
   for (let d = 0; d < span; d++) {
-    out.legion[d] = cl += dLegion[d];
-    out.swarm[d] = cs += dSwarm[d];
-    out.faceless[d] = cf += dFaceless[d];
+    days[d] = d;
+    legion[d] = cl += dLegion[d];
+    swarm[d] = cs += dSwarm[d];
+    faceless[d] = cf += dFaceless[d];
   }
-  return out;
+  return { days, legion, swarm, faceless };
+}
+
+/** Mask of zones inside the current map bounds. */
+export function viewportFilter(
+  zones: Columns,
+  bounds: [number, number, number, number],
+): ZoneFilter {
+  const [west, south, east, north] = bounds;
+  const lat = zones.latitude as Float32Array;
+  const lon = zones.longitude as Float32Array;
+  const n = lat.length;
+  const mask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    mask[i] = lon[i] >= west && lon[i] <= east && lat[i] >= south && lat[i] <= north ? 1 : 0;
+  }
+  return mask;
 }
 
 export function singleZoneFilter(zoneCount: number, idx: number): ZoneFilter {

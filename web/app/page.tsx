@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapViewState, PickingInfo } from "@deck.gl/core";
 import { ZoneMap, type OverviewTile } from "@/components/ZoneMap";
-import { StatsPanel, type Totals } from "@/components/StatsPanel";
+import { StatsPanel, type HoveredZone, type Totals } from "@/components/StatsPanel";
 import {
   checkpointUrl,
   dayToDate,
@@ -15,9 +15,11 @@ import {
   periodOf,
   tileOf,
   tilesInBounds,
+  zoneIdentity,
   ZoneState,
   type Bounds,
   type Columns,
+  type Lookups,
   type Meta,
 } from "@/lib/data";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
@@ -71,12 +73,11 @@ export default function Page() {
   const [tileSeries, setTileSeries] = useState<TileSeries | null>(null);
   const [zones, setZones] = useState<Columns | null>(null);
   const [names, setNames] = useState<string[]>([]);
+  const [lookups, setLookups] = useState<Lookups | null>(null);
   const [day, setDay] = useState<number | null>(null);
   const [version, setVersion] = useState(0);
   const [heldInView, setHeldInView] = useState<number | null>(null);
-  const [hovered, setHovered] = useState<{ name: string; total: number; faction: number } | null>(
-    null,
-  );
+  const [hovered, setHovered] = useState<HoveredZone | null>(null);
   const [historyMode, setHistoryMode] = useState<HistoryMode>("scope");
   const [range, setRange] = useState<RangeKey>("1y");
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
@@ -107,10 +108,22 @@ export default function Page() {
   // *is* state, but only changes when the set of tiles does.
   const viewportBounds = useRef<Bounds>([-180, -85, 180, 85]);
 
-  // Boundaries are scope-independent and small, so they load once up front.
+  // Country outlines up front - they are what makes the tile grid locatable.
   useEffect(() => {
     loadBoundaries(DATA_ROOT).then(setBoundaries).catch(() => setBoundaries([]));
   }, []);
+
+  // Province lines cover every country now rather than the nine the old
+  // Natural Earth line layer carried, which costs 2.3 MB. Worth it once
+  // zoomed in far enough to read one, not before.
+  const provincesRequested = useRef(false);
+  useEffect(() => {
+    if (!detail || provincesRequested.current) return;
+    provincesRequested.current = true;
+    loadBoundaries(DATA_ROOT, true)
+      .then((extra) => setBoundaries((current) => [...current, ...extra]))
+      .catch(() => (provincesRequested.current = false));
+  }, [detail]);
 
   /**
    * Zone positions, on demand.
@@ -140,6 +153,11 @@ export default function Page() {
       if (cancelled) return;
       setMeta(m);
       setVisibleTiles(Object.keys(m.tiles));
+
+      // 38 KB, and every hover readout needs it.
+      loadJsonGz<Lookups>(BASE, m.lookups.path)
+        .then((l) => !cancelled && setLookups(l))
+        .catch(() => undefined);
 
       const s = await loadJsonGz<SparseSeries>(BASE, m.series.scope_daily.path);
       if (cancelled) return;
@@ -373,16 +391,20 @@ export default function Page() {
       }
       const state = stateRef.current;
       if (info.layer?.id === "zones" && info.index >= 0 && state) {
+        const identity = zones && lookups ? zoneIdentity(zones, lookups, info.index) : null;
         setHovered({
           name: names[info.index] ?? "",
           total: state.total[info.index],
           faction: state.faction[info.index],
+          zoneId: identity?.zoneId,
+          region: identity?.region,
+          country: identity?.country,
         });
         return;
       }
       setHovered(null);
     },
-    [names],
+    [names, zones, lookups],
   );
 
   const ready = meta && scopeSeries && tileSeries && day !== null && dayBounds;
@@ -471,7 +493,15 @@ export default function Page() {
           }
           subtitle={
             selectedZone !== null
-              ? "Single zone"
+              ? zones && lookups
+                ? [
+                    zoneIdentity(zones, lookups, selectedZone).region,
+                    zoneIdentity(zones, lookups, selectedZone).country,
+                    `#${zoneIdentity(zones, lookups, selectedZone).zoneId}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : "Single zone"
               : historyMode === "viewport"
                 ? `${visibleTiles.length} of ${Object.keys(meta.tiles).length} tiles`
                 : `${(meta.scope.zone_count / 1e6).toFixed(1)}M zones`

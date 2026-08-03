@@ -368,17 +368,61 @@ def _clear_shards(out: Path) -> None:
         shutil.rmtree(out / name, ignore_errors=True)
 
 
-def _export_zones(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
-    """Static geometry, index-aligned. Positions never change.
+def _export_lookups(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    """Region and country names, so the client can label a zone.
 
-    Not tiled: every view needs positions to place anything at all, and 9.6MB
-    of coordinates compresses well enough that splitting it would cost more in
-    requests than it saves in bytes.
+    Small enough to be one file: 251 countries and 3,799 regions. Keyed by id
+    because `zones.bin.gz` stores the ids, not the strings -- 1.6M repeated
+    country names would dwarf everything else in the export.
+    """
+    countries = {
+        str(row[0]): [row[1], row[2]]
+        for row in con.execute(
+            "select country_id, country_code, country_name from stg_countries order by 1"
+        ).fetchall()
+    }
+    regions = {
+        str(row[0]): [row[2], row[1]]
+        for row in con.execute(
+            "select region_id, country_id, region_name from stg_regions order by 1"
+        ).fetchall()
+    }
+    payload = {
+        "countries": countries,  # id -> [iso_code, name]
+        "regions": regions,  # id -> [name, country_id]
+        "note": (
+            "A zone's country_id is authoritative. Where regions[region_id][1] disagrees "
+            "with it the region is wrong, not the country -- verified against coordinates. "
+            "Suppress the region label in that case."
+        ),
+    }
+    size = _write_json_gz(out / "lookups.json.gz", payload)
+    log.info("lookups: %d countries, %d regions, %s KB", len(countries), len(regions), size // 1024)
+    return {"path": "lookups.json.gz", "bytes": size, "countries": len(countries), "regions": len(regions)}
+
+
+def _export_zones(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    """Static geometry and administrative ids, index-aligned.
+
+    Not tiled: every view needs positions to place anything at all, and the
+    file compresses well enough that splitting it would cost more in requests
+    than it saves in bytes.
+
+    `region_id` and `country_id` ride along as uint16 rather than being looked
+    up per zone at runtime. They sort into long runs -- region ids are grouped
+    by country upstream, and the index is zone_id order -- so gzip gives them
+    away nearly free.
     """
     entry = _write_columnar(
         out / "zones.bin.gz",
-        "select idx, zone_id, latitude, longitude from scope order by idx",
-        {"latitude": "float32", "longitude": "float32", "zone_id": "int32"},
+        "select idx, zone_id, latitude, longitude, region_id, country_id from scope order by idx",
+        {
+            "latitude": "float32",
+            "longitude": "float32",
+            "zone_id": "int32",
+            "region_id": "uint16",
+            "country_id": "uint16",
+        },
         con,
     )
     # Names are only needed on hover, so they load lazily and stay out of the
@@ -709,6 +753,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         log.info("scope %s: %s zones", scope.name, f"{zone_count:,}")
 
         _clear_shards(out)
+        lookups = _export_lookups(con, out)
         zones = _export_zones(con, out)
         log.info("zones: %s KB (+ %s KB names)", zones["bytes"] // 1024, zones["names"]["bytes"] // 1024)
 
@@ -737,6 +782,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             "date_range": [span[0].isoformat(), span[1].isoformat()],
             "factions": {"0": "uncaptured", "1": "legion", "2": "swarm", "3": "faceless"},
             "zones": zones,
+            "lookups": lookups,
             "tiling": {
                 "zoom": config.TILE_ZOOM,
                 "scheme": "xyz",

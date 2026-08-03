@@ -21,7 +21,17 @@ interface Props {
   scopeLabel: string;
   /** Zones held in the loaded tiles, or null when no per-zone data is loaded. */
   held: number | null;
-  hovered: { name: string; total: number; faction: number } | null;
+  hovered: HoveredZone | null;
+}
+
+export interface HoveredZone {
+  name: string;
+  total: number;
+  faction: number;
+  /** Absent for an aggregated tile, which has no single id or place. */
+  zoneId?: number;
+  region?: string | null;
+  country?: string | null;
 }
 
 const FACTION_NAMES = ["Uncaptured", "Legion", "Swarm", "Faceless"];
@@ -127,12 +137,24 @@ export function StatsPanel({
       })}
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "12px 0 10px" }} />
-      <div style={{ minHeight: 32 }}>
+      <div style={{ minHeight: 46 }}>
         {hovered ? (
           <>
             <div style={{ fontWeight: 600 }}>{hovered.name || "Unnamed zone"}</div>
+            {/* Region is omitted, not blanked, when the upstream region_id
+                contradicts the zone's own country. */}
+            {(hovered.region || hovered.country) && (
+              <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                {[hovered.region, hovered.country].filter(Boolean).join(" · ")}
+              </div>
+            )}
             <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
               {FACTION_NAMES[hovered.faction]} &middot; {compact(hovered.total)} bots
+              {hovered.zoneId !== undefined && (
+                <span className="tabular" style={{ marginLeft: 6, opacity: 0.75 }}>
+                  #{hovered.zoneId}
+                </span>
+              )}
             </div>
           </>
         ) : (

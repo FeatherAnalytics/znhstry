@@ -47,7 +47,11 @@ zone / region / country / global / viewport grain. Done = deployed to
   - [x] **Tiling, client side + zoom LOD.** The viewer runs against the tiled
         layout and is an MVP: world view is 9 requests / 1.9 MB, zoomed-in
         detail loads only the visible tiles. Verified in a browser end to end.
-- Now: [→] MVP is working. Next real gap is deployment (see Remaining).
+  - [x] **Zone identity + boundary fix.** `zones.bin.gz` now carries `region_id` and
+        `country_id`; `lookups.json.gz` (38 KB) names them. Boundaries rebuilt from
+        Natural Earth polygons — admin1 went from 9 countries to 251.
+- Now: [→] MVP is working, but the zone-identity and boundary changes have NOT been
+      seen in a browser (see Open Questions). Verify visually, then deployment.
 - Remaining:
   - [ ] Region-grain and H3 tile marts (deferred; only global + country built so far)
   - [ ] Nightly incremental GitHub Action + Pages deploy
@@ -107,6 +111,13 @@ payload, so the once-planned `tiles/{year}-{month}.bin.gz` was never needed.
   Both are deferred out of the world view, so they no longer block first paint,
   but they are the obvious next optimisation. Splitting them by tile would
   complicate `idx` recovery, since `zones.bin.gz` is also the index manifest.
+- UNCONFIRMED: the zone-identity readout (zID / region / country in StatsPanel and the
+  chart subtitle) and the rebuilt boundary layers have **not been seen rendered**. The
+  browser tooling disconnected mid-session. Verified instead: types clean, every payload
+  serves 200, `zoneIdentity()`'s logic reproduced in Python against the real export
+  (Dallas -> Texas / United States / #1529645; 417 bad regions suppressed; 0 zones
+  without a country), and both boundary binaries decode to their exact expected byte
+  length with valid coordinate ranges. What is unproven is purely the rendering.
 - UNCONFIRMED: `npm run build` cannot complete locally — `OneDrive.Sync.Service`
   holds `web/out` open, so `next build` fails at the final rmdir. Compile, types
   and all four static pages succeed first, so it looks environmental, but a

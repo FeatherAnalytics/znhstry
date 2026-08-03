@@ -55,6 +55,25 @@ The stats panel always shows exact whole-scope totals read from `scope_daily`, n
 sum over whichever tiles happen to be loaded, so it is right during a partial load. The
 one in-view number is "zones held in view", which says so.
 
+### Boundaries come from polygons, not the boundary-line layers
+
+`boundaries.py` traces **polygon rings**, because Natural Earth's line layers were the
+reason the map looked arbitrary:
+
+| | old (lines) | new (polygon rings) |
+|---|---|---|
+| admin0 | `ne_50m_admin_0_boundary_lines_land`, land borders only — island nations had **no outline at all** | `ne_50m_admin_0_countries`, **242** countries, coasts included |
+| admin1 | `ne_50m_admin_1_states_provinces_lines`, 581 features across **9 countries** | `ne_10m_admin_1_states_provinces`, **251** countries |
+
+Rings are simplified with Douglas-Peucker at `SIMPLIFY_TOLERANCE = 0.01` degrees
+(~1.1 km), which takes admin1 from 1.30M points to 382k — still far more detailed than
+the 50m data it replaces. admin0 is 0.49 MB and loads with the page; admin1 is 2.32 MB
+and is marked `deferred` in `boundaries.json`, so it loads on first detail view alongside
+the other zoomed-in payloads.
+
+Rebuild with `uv run python -m znhstry boundaries`. That step was previously reachable
+only by importing the module by hand.
+
 ## Upstream API
 
 `https://api-proxy.auckland-cer.cloud.edu.au/QONQR/<url-encoded SQL>` — SQL in the URL
@@ -93,6 +112,14 @@ needed for nightly incremental top-ups.
   `TotalDelta` is also absolute (churn), never negative. Not extracted.
 - **`Description` is not unique** — many zones share a name. `ZoneId` is the only key.
   Dallas, TX is `ZoneId 1529645` at (32.7831, -96.8067).
+- **`zones.CountryId` is authoritative; `RegionId` is not.** For 447 zones the region's
+  own `countryid` contradicts the zone's `CountryId`, and coordinates settle it every
+  time in the country's favour: 155 zones the data files under West Pomeranian
+  Voivodeship (Poland) sit at 161°E, -10° in the Solomon Islands; 135 filed under
+  Northwest Territories (Canada) are at 27°E, -10° in the DRC; likewise Tonga↔Azerbaijan
+  (87) and East Timor↔Ukraine (68). The data dictionary documents both join paths as
+  equivalent. They are not. Trust `CountryId`, and drop the region label when it
+  disagrees rather than printing a contradiction. 417 of these fall in the active scope.
 - **`battlestats` column names contain spaces** and need backticks.
   `Country = 'Atlantis'` marks test/tutorial zones — exclude.
 - Per-player data (`battlestats_players.csv`, `player_details.csv`) is **not in the
@@ -171,6 +198,12 @@ prefix-sum to recover it.
 - Series JSON is **sparse** - only days a value changed. Carry the previous value forward.
 - `zones.bin.gz` excludes the 1.09M zones that have never recorded a bot (`active_only`),
   a 40% cut to the two largest global payloads.
+- `zones.bin.gz` carries `latitude, longitude, zone_id, region_id, country_id`. The two
+  id columns cost 1.35 MB on 1.6M zones (9.6 -> 11.0 MB) because they gzip into long
+  runs: region ids are grouped by country upstream and the file is in zone_id order.
+  Names come from `lookups.json.gz` (38 KB, 251 countries + 3,799 regions) rather than
+  being repeated 1.6M times. `zoneIdentity()` in `lib/data.ts` resolves them and applies
+  the country-wins rule above.
 
 ### Tiling
 

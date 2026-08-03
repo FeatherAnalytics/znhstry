@@ -33,12 +33,19 @@ export interface ZonesEntry {
   names: { path: string; bytes: number };
 }
 
+/** id -> [iso_code, name] and id -> [name, country_id]. */
+export interface Lookups {
+  countries: Record<string, [string, string]>;
+  regions: Record<string, [string, number]>;
+}
+
 export interface Meta {
   scope: { name: string; label: string; zone_count: number; radius_km: number | null };
   day_epoch: string;
   date_range: [string, string];
   factions: Record<string, string>;
   zones: ZonesEntry;
+  lookups: { path: string; bytes: number };
   tiling: { zoom: number; scheme: string; key: string };
   tiles: Record<string, TileInfo>;
   schemas: { checkpoint: ColumnSpec[]; event: ColumnSpec[] };
@@ -133,6 +140,44 @@ export async function loadJsonGz<T>(base: string, path: string): Promise<T> {
 
 export function loadZones(base: string, meta: Meta): Promise<Columns> {
   return loadShard(`${base}/${meta.zones.path}`, meta.zones.columns, meta.zones.rows);
+}
+
+/** What a zone is, in words: its id and where it is. */
+export interface ZoneIdentity {
+  zoneId: number;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+}
+
+/**
+ * Resolve a zone's administrative labels.
+ *
+ * `country_id` is authoritative and `region_id` is not: 447 zones carry a
+ * region belonging to a different country, and checking their coordinates
+ * settles it every time - zones the data files under a Polish voivodeship sit
+ * at 161E in the Solomon Islands. So the region is shown only when its own
+ * country agrees with the zone's, and dropped rather than printed as nonsense.
+ */
+export function zoneIdentity(
+  zones: Columns,
+  lookups: Lookups,
+  index: number,
+): ZoneIdentity {
+  const zoneId = (zones.zone_id as Int32Array)[index];
+  const countryId = (zones.country_id as Uint16Array)[index];
+  const regionId = (zones.region_id as Uint16Array)[index];
+
+  const country = lookups.countries[String(countryId)] ?? null;
+  const region = lookups.regions[String(regionId)] ?? null;
+  const regionAgrees = region !== null && region[1] === countryId;
+
+  return {
+    zoneId,
+    region: regionAgrees ? region[0] : null,
+    country: country ? country[1] : null,
+    countryCode: country ? country[0] : null,
+  };
 }
 
 export function checkpointUrl(base: string, year: string, tile: string): string {

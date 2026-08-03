@@ -33,11 +33,15 @@ zone / region / country / global / viewport grain. Done = deployed to
   - [x] Project scaffold, config, polite API client
   - [x] Extractor (idempotent, resumable, atomic writes)
   - [x] CLAUDE.md + README with measured data facts
-- Now: [→] Full extraction running in background (zones + lookups done; changelog ~88 chunks)
-- Next: dbt project — staging -> int_zone_events (deltas) -> checkpoints + daily marts
+  - [x] Full extraction: 9.87M events, 2.68M zones, 221MB Parquet, ~90s
+  - [x] `git init` + initial commit on master
+  - [x] dbt project on branch `feat/dbt-models`: 5 staging, 1 intermediate, 5 marts,
+        9 tests. Full build 27s, 20/20 pass.
+- Now: [→] dbt layer built and verified; ready to commit and merge
+- Next: export layer — marts -> packed binary (map) + JSON (charts)
 - Remaining:
-  - [ ] Export layer: marts -> packed binary (map) + JSON (charts)
   - [ ] Next.js + deck.gl viewer, Dallas 1000mi scope first
+  - [ ] Region-grain and H3 tile marts (deferred; only global + country built so far)
   - [ ] Nightly incremental GitHub Action + Pages deploy
 
 ## Open Questions

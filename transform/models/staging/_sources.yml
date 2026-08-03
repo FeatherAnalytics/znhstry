@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Parquet written by the extraction pipeline (`uv run python -m znhstry all`).
+      Read in place by DuckDB; nothing is copied into the warehouse.
+    tables:
+      - name: changelog
+        description: >
+          Append-only event stream, one row per zone per observation. A row exists
+          only when a zone's counts or control state changed, so spacing is
+          irregular. Includes the 29 pre-2012 sentinel rows that carry bots.
+        meta:
+          external_location: "read_parquet('../data/raw/changelog/*.parquet')"
+      - name: zones
+        description: Current state and geography for every zone. One row per zone.
+        meta:
+          external_location: "read_parquet('../data/raw/zones/*.parquet')"
+      - name: countries
+        meta:
+          external_location: "read_parquet('../data/raw/lookups/countries.parquet')"
+      - name: regions
+        meta:
+          external_location: "read_parquet('../data/raw/lookups/regions.parquet')"
+      - name: factions
+        meta:
+          external_location: "read_parquet('../data/raw/lookups/factions.parquet')"

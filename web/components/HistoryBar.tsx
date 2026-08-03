@@ -123,18 +123,32 @@ export function HistoryBar({
     // it are displaced by whatever is underneath, so comparing factions means
     // eyeballing thicknesses. Lines are directly comparable and the axis
     // labels then describe each faction rather than a running total.
-    let peak = 1;
+    // Auto-scaled to the visible window rather than zero-based. Over a short
+    // range the factions move a few percent, and a zero baseline crushes all
+    // three lines into the top of the plot. The axis labels carry the absolute
+    // values so the scale is never implied to start at zero.
+    let lowest = Infinity;
+    let highest = -Infinity;
     for (let d = first; d <= last; d++) {
-      peak = Math.max(peak, bands[0][d], bands[1][d], bands[2][d]);
+      for (const band of bands) {
+        if (band[d] < lowest) lowest = band[d];
+        if (band[d] > highest) highest = band[d];
+      }
     }
+    if (!isFinite(lowest) || !isFinite(highest)) return;
+    const pad = (highest - lowest) * 0.12 || Math.max(1, highest * 0.05);
+    const yMin = Math.max(0, lowest - pad);
+    const yMax = highest + pad;
+    const yRange = Math.max(1e-9, yMax - yMin);
+    const yOf = (v: number) => plotHeight - ((v - yMin) / yRange) * plotHeight;
 
     // Gridlines before the lines so they read as background.
     ctx.font = '9px var(--font-mono), ui-monospace, monospace';
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
-    const step = niceStep(peak, 3);
-    for (let v = step; v <= peak * 1.001; v += step) {
-      const y = Math.round(plotHeight - (v / peak) * plotHeight) + 0.5;
+    const step = niceStep(yRange, 3);
+    for (let v = Math.ceil(yMin / step) * step; v <= yMax; v += step) {
+      const y = Math.round(yOf(v)) + 0.5;
       ctx.strokeStyle = "rgba(230,234,242,0.10)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -150,7 +164,7 @@ export function HistoryBar({
     bands.forEach((band, i) => {
       ctx.beginPath();
       for (let d = first; d <= last; d++) {
-        const y = plotHeight - (band[d] / peak) * plotHeight;
+        const y = yOf(band[d]);
         d === first ? ctx.moveTo(x(d), y) : ctx.lineTo(x(d), y);
       }
       ctx.strokeStyle = colors[i];

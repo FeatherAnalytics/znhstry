@@ -29,6 +29,54 @@ interface Props {
   onClose?: () => void;
 }
 
+/** Largest of 1/2/5 x 10^n that yields at most `target` gridlines. */
+function niceStep(peak: number, target: number): number {
+  const rough = peak / target;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)));
+  // Largest nice value at or below the ideal spacing. Taking the smallest one
+  // at or above it overshoots and can leave a single gridline.
+  let best = magnitude;
+  for (const m of [1, 2, 5, 10]) {
+    if (magnitude * m <= rough) best = magnitude * m;
+  }
+  return best;
+}
+
+function xTicks(lo: number, hi: number, epoch: string): { day: number; label: string }[] {
+  const span = hi - lo;
+  const out: { day: number; label: string }[] = [];
+  const start = dayToDate(epoch, lo);
+  const end = dayToDate(epoch, hi);
+
+  if (span > 1500) {
+    // Multi-year window: label whole years.
+    const stride = span > 4000 ? 2 : 1;
+    for (let y = start.getUTCFullYear() + 1; y <= end.getUTCFullYear(); y += stride) {
+      out.push({ day: lo + (Date.UTC(y, 0, 1) - start.getTime()) / 86_400_000, label: String(y) });
+    }
+  } else if (span > 200) {
+    // Roughly a year: label quarters.
+    const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+    while (cursor <= end) {
+      out.push({
+        day: lo + (cursor.getTime() - start.getTime()) / 86_400_000,
+        label: cursor.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }),
+      });
+      cursor.setUTCMonth(cursor.getUTCMonth() + 3);
+    }
+  } else {
+    const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+    while (cursor <= end) {
+      out.push({
+        day: lo + (cursor.getTime() - start.getTime()) / 86_400_000,
+        label: cursor.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }),
+      });
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+  }
+  return out;
+}
+
 function compact(value: number): string {
   const sign = value < 0 ? "-" : "";
   const v = Math.abs(value);
@@ -66,6 +114,12 @@ export function HistoryPanel({
     ctx.clearRect(0, 0, width, height);
     if (!series || !series.days.length) return;
 
+    // Room on the right for value labels and below for date labels.
+    const Y_LABEL_GUTTER = 40;
+    const X_LABEL_GUTTER = 14;
+    const plotWidth = Math.max(10, width - Y_LABEL_GUTTER);
+    const plotHeight = Math.max(10, height - X_LABEL_GUTTER);
+
     const window_ = RANGES.find((r) => r.key === range)!.days;
     const lo = Math.max(0, window_ === Infinity ? 0 : day - window_);
     const hi = Math.min(series.days.length - 1, day);
@@ -80,17 +134,17 @@ export function HistoryPanel({
     let peak = 1;
     for (let d = lo; d <= hi; d++) peak = Math.max(peak, bands[0][d] + bands[1][d] + bands[2][d]);
 
-    const x = (d: number) => ((d - lo) / (hi - lo)) * width;
+    const x = (d: number) => ((d - lo) / (hi - lo)) * plotWidth;
     const baseline = new Float64Array(hi - lo + 1);
 
     bands.forEach((band, i) => {
       ctx.beginPath();
       for (let d = lo; d <= hi; d++) {
-        const y = height - ((baseline[d - lo] + band[d]) / peak) * height;
+        const y = plotHeight - ((baseline[d - lo] + band[d]) / peak) * plotHeight;
         d === lo ? ctx.moveTo(x(d), y) : ctx.lineTo(x(d), y);
       }
       for (let d = hi; d >= lo; d--) {
-        ctx.lineTo(x(d), height - (baseline[d - lo] / peak) * height);
+        ctx.lineTo(x(d), plotHeight - (baseline[d - lo] / peak) * plotHeight);
       }
       ctx.closePath();
       ctx.fillStyle = colors[i];
@@ -100,13 +154,46 @@ export function HistoryPanel({
     });
 
     ctx.globalAlpha = 1;
+
+    // Axes. Y ticks are "nice" round bot counts rather than even divisions of
+    // the peak, so the labels read as quantities instead of arbitrary
+    // fractions. X ticks are dates chosen to suit the visible span.
+    ctx.font = '9px var(--font-mono), ui-monospace, monospace';
+    ctx.textBaseline = "middle";
+
+    const step = niceStep(peak, 3);
+    ctx.strokeStyle = "rgba(230,234,242,0.09)";
+    ctx.fillStyle = "rgba(124,135,152,0.95)";
+    ctx.textAlign = "left";
+    for (let v = step; v <= peak; v += step) {
+      const y = Math.round(plotHeight - (v / peak) * plotHeight) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(plotWidth, y);
+      ctx.stroke();
+      ctx.fillText(compact(v), plotWidth + 4, y);
+    }
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(124,135,152,0.95)";
+    for (const tick of xTicks(lo, hi, epoch)) {
+      const px = x(tick.day);
+      if (px < 8 || px > plotWidth - 8) continue;
+      ctx.strokeStyle = "rgba(230,234,242,0.09)";
+      ctx.beginPath();
+      ctx.moveTo(px + 0.5, plotHeight - 3);
+      ctx.lineTo(px + 0.5, plotHeight);
+      ctx.stroke();
+      ctx.fillText(tick.label, px, plotHeight + 7);
+    }
+
     ctx.strokeStyle = "rgba(230,234,242,0.6)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x(hi) - 0.5, 0);
-    ctx.lineTo(x(hi) - 0.5, height);
+    ctx.lineTo(x(hi) - 0.5, plotHeight);
     ctx.stroke();
-  }, [series, range, day]);
+  }, [series, range, day, epoch]);
 
   useEffect(() => {
     draw();
@@ -177,7 +264,7 @@ export function HistoryPanel({
 
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: 78, display: "block", margin: "10px 0 8px" }}
+        style={{ width: "100%", height: 96, display: "block", margin: "10px 0 8px" }}
       />
 
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>

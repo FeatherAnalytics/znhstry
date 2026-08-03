@@ -9,7 +9,7 @@
  * trick the dbt layer uses, and it carries dormant zones forward for free.
  */
 
-import { loadShard, sortByDay, type Columns, type Meta, type ShardEntry } from "./data";
+import { loadShard, type Columns, type Meta, type ShardEntry } from "./data";
 
 export interface HistorySeries {
   days: Int32Array;
@@ -18,13 +18,13 @@ export interface HistorySeries {
   faceless: Float64Array;
 }
 
-export type ZoneFilter = ((idx: number) => boolean) | null;
+export type ZoneFilter = Uint8Array | null;
 
 /** Every event shard, in chronological order. Cached across calls. */
 export async function loadFullHistory(
   base: string,
   meta: Meta,
-  cache: Map<string, { columns: Columns; days: Uint16Array }>,
+  cache: Map<string, Columns>,
   onProgress?: (done: number, total: number) => void,
 ): Promise<Columns[]> {
   const shards = [...meta.events].sort((a, b) => a.year! - b.year! || a.month! - b.month!);
@@ -33,10 +33,10 @@ export async function loadFullHistory(
   for (const [i, entry] of shards.entries()) {
     let loaded = cache.get(entry.path);
     if (!loaded) {
-      loaded = sortByDay(await loadShard(`${base}/events`, entry as ShardEntry));
+      loaded = await loadShard(`${base}/events`, entry as ShardEntry);
       cache.set(entry.path, loaded);
     }
-    out.push(loaded.columns);
+    out.push(loaded);
     onProgress?.(i + 1, shards.length);
   }
   return out;
@@ -73,7 +73,7 @@ export function buildSeries(
       const s = swarm_count[i];
       const f = faceless_count[i];
 
-      if (!filter || filter(z)) {
+      if (!filter || filter[z] === 1) {
         const d = day[i];
         if (d <= maxDay) {
           dLegion[d] += l - lastLegion[z];
@@ -113,6 +113,16 @@ export function viewportFilter(
   const [west, south, east, north] = bounds;
   const lat = zones.latitude as Float32Array;
   const lon = zones.longitude as Float32Array;
-  return (idx: number) =>
-    lon[idx] >= west && lon[idx] <= east && lat[idx] >= south && lat[idx] <= north;
+  const n = lat.length;
+  const mask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    mask[i] = lon[i] >= west && lon[i] <= east && lat[i] >= south && lat[i] <= north ? 1 : 0;
+  }
+  return mask;
+}
+
+export function singleZoneFilter(zoneCount: number, idx: number): ZoneFilter {
+  const mask = new Uint8Array(zoneCount);
+  mask[idx] = 1;
+  return mask;
 }

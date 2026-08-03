@@ -64,7 +64,6 @@ jobs:
       - name: Export payloads
         working-directory: pipeline
         run: |
-          uv run python -m znhstry export --scope dallas-1000mi
           uv run python -m znhstry export --scope global
 
       - name: Build site

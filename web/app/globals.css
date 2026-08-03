@@ -18,15 +18,6 @@
   --panel-blur: saturate(140%) blur(14px);
 }
 
-/* Canon faction colours are red/green/violet, which is the worst possible
-   pairing for deuteranopia. Players know the canon, so it stays the default
-   and this is a real alternative rather than a buried setting. */
-:root[data-palette="accessible"] {
-  --legion: #4d94ff;
-  --swarm: #ffa63d;
-  --faceless: #c77dff;
-}
-
 * {
   box-sizing: border-box;
 }

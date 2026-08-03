@@ -85,9 +85,12 @@ export function HistoryBar({
   const trackRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
 
-  const span = Math.max(1, maxDay - minDay);
   const windowDays = RANGES.find((r) => r.key === range)!.days;
-  const windowStart = Math.max(minDay, windowDays === Infinity ? minDay : day - windowDays);
+  // The visible window ends at the playhead, so scrubbing back walks the
+  // window with it. Selecting All restores whole-record navigation.
+  const viewEnd = day;
+  const viewStart = Math.max(minDay, windowDays === Infinity ? minDay : day - windowDays);
+  const span = Math.max(1, viewEnd - viewStart);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -104,7 +107,7 @@ export function HistoryBar({
 
     const plotWidth = Math.max(10, width - Y_GUTTER);
     const plotHeight = height;
-    const x = (d: number) => ((d - minDay) / span) * plotWidth;
+    const x = (d: number) => ((d - viewStart) / span) * plotWidth;
 
     const styles = getComputedStyle(document.documentElement);
     const colors = ["--legion", "--swarm", "--faceless"].map((v) =>
@@ -112,7 +115,8 @@ export function HistoryBar({
     );
     const bands = [series.legion, series.swarm, series.faceless];
 
-    const last = Math.min(series.days.length - 1, maxDay);
+    const first = Math.max(0, viewStart);
+    const last = Math.min(series.days.length - 1, viewEnd);
 
     // One line per faction against a shared axis, not stacked areas. Stacking
     // only lets the bottom band be read against a flat baseline; the two above
@@ -120,7 +124,7 @@ export function HistoryBar({
     // eyeballing thicknesses. Lines are directly comparable and the axis
     // labels then describe each faction rather than a running total.
     let peak = 1;
-    for (let d = minDay; d <= last; d++) {
+    for (let d = first; d <= last; d++) {
       peak = Math.max(peak, bands[0][d], bands[1][d], bands[2][d]);
     }
 
@@ -145,9 +149,9 @@ export function HistoryBar({
     ctx.lineCap = "round";
     bands.forEach((band, i) => {
       ctx.beginPath();
-      for (let d = minDay; d <= last; d++) {
+      for (let d = first; d <= last; d++) {
         const y = plotHeight - (band[d] / peak) * plotHeight;
-        d === minDay ? ctx.moveTo(x(d), y) : ctx.lineTo(x(d), y);
+        d === first ? ctx.moveTo(x(d), y) : ctx.lineTo(x(d), y);
       }
       ctx.strokeStyle = colors[i];
       ctx.lineWidth = 1.6;
@@ -155,13 +159,6 @@ export function HistoryBar({
       ctx.stroke();
     });
     ctx.globalAlpha = 1;
-
-    // Range selection shades what is outside it rather than cropping.
-    if (windowDays !== Infinity) {
-      ctx.fillStyle = "rgba(7,9,14,0.62)";
-      ctx.fillRect(0, 0, x(windowStart), plotHeight);
-      if (day < maxDay) ctx.fillRect(x(day), 0, plotWidth - x(day), plotHeight);
-    }
 
     // The upstream collection gap, marked so the dip does not read as history.
     if (gapYear) {
@@ -187,7 +184,7 @@ export function HistoryBar({
     ctx.moveTo(Math.round(x(day)) + 0.5, 0);
     ctx.lineTo(Math.round(x(day)) + 0.5, plotHeight);
     ctx.stroke();
-  }, [series, minDay, maxDay, span, day, windowDays, windowStart, epoch, gapYear]);
+  }, [series, viewStart, viewEnd, span, day, epoch, gapYear]);
 
   useEffect(() => {
     draw();
@@ -203,9 +200,9 @@ export function HistoryBar({
       const rect = track.getBoundingClientRect();
       const plotWidth = Math.max(10, rect.width - Y_GUTTER);
       const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / plotWidth));
-      onScrub(Math.round(minDay + ratio * span));
+      onScrub(Math.round(viewStart + ratio * span));
     },
-    [minDay, span, onScrub],
+    [viewStart, span, onScrub],
   );
 
   useEffect(() => {
@@ -224,21 +221,37 @@ export function HistoryBar({
       ? series.legion[day] + series.swarm[day] + series.faceless[day]
       : 0;
   const before =
-    series && windowStart < series.days.length
-      ? series.legion[windowStart] + series.swarm[windowStart] + series.faceless[windowStart]
+    series && viewStart < series.days.length
+      ? series.legion[viewStart] + series.swarm[viewStart] + series.faceless[viewStart]
       : 0;
   const change = before > 0 ? ((total - before) / before) * 100 : null;
 
-  const years: { day: number; label: string }[] = [];
+  // Year, quarter or month labels depending on how much time is on screen.
+  const ticks: { day: number; label: string }[] = [];
   {
     const epochMs = new Date(`${epoch}T00:00:00Z`).getTime();
-    const from = dayToDate(epoch, minDay).getUTCFullYear();
-    const to = dayToDate(epoch, maxDay).getUTCFullYear();
-    for (let y = from + 1; y <= to; y += span > 4000 ? 2 : 1) {
-      years.push({
-        day: Math.floor((Date.UTC(y, 0, 1) - epochMs) / 86_400_000),
-        label: String(y),
-      });
+    const start = dayToDate(epoch, viewStart);
+    const end = dayToDate(epoch, viewEnd);
+    const dayOf = (d: Date) => Math.floor((d.getTime() - epochMs) / 86_400_000);
+
+    if (span > 1500) {
+      const stride = span > 4000 ? 2 : 1;
+      for (let y = start.getUTCFullYear() + 1; y <= end.getUTCFullYear(); y += stride) {
+        ticks.push({ day: dayOf(new Date(Date.UTC(y, 0, 1))), label: String(y) });
+      }
+    } else {
+      const stepMonths = span > 400 ? 3 : span > 120 ? 1 : 1;
+      const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+      while (cursor <= end) {
+        ticks.push({
+          day: dayOf(cursor),
+          label:
+            cursor.getUTCMonth() === 0
+              ? String(cursor.getUTCFullYear())
+              : cursor.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }),
+        });
+        cursor.setUTCMonth(cursor.getUTCMonth() + stepMonths);
+      }
     }
   }
 
@@ -329,12 +342,12 @@ export function HistoryBar({
       </div>
 
       <div className="eyebrow tabular" style={{ position: "relative", height: 16, marginTop: 2 }}>
-        {years.map((tick) => (
+        {ticks.map((tick) => (
           <span
-            key={tick.label}
+            key={`${tick.day}-${tick.label}`}
             style={{
               position: "absolute",
-              left: `calc(${((tick.day - minDay) / span) * 100}% - ${Y_GUTTER * ((tick.day - minDay) / span)}px)`,
+              left: `calc(${((tick.day - viewStart) / span) * 100}% - ${Y_GUTTER * ((tick.day - viewStart) / span)}px)`,
               transform: "translateX(-50%)",
             }}
           >

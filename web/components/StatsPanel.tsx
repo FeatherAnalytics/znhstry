@@ -1,9 +1,10 @@
 "use client";
 
+// Alphabetical, so the reading order does not imply a ranking.
 const FACTIONS = [
+  { key: "faceless", label: "Faceless", color: "var(--faceless)" },
   { key: "legion", label: "Legion", color: "var(--legion)" },
   { key: "swarm", label: "Swarm", color: "var(--swarm)" },
-  { key: "faceless", label: "Faceless", color: "var(--faceless)" },
 ] as const;
 
 export interface Totals {

@@ -20,3 +20,6 @@ target/
 dbt_packages/
 logs/
 .user.yml
+
+# Generated export payloads (67MB, rebuildable)
+web/public/data/

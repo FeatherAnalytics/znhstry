@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import extract
+from . import export, extract
 
 STEPS = {
     "all": extract.extract_all,
@@ -14,6 +14,7 @@ STEPS = {
     "zones": extract.extract_zones,
     "changelog": extract.extract_changelog,
     "baseline": extract.extract_baseline,
+    "export": export.export_all,
 }
 
 

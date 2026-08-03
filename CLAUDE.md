@@ -95,7 +95,28 @@ against a threshold, because thresholds on upstream drift are brittle.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
 - **Do not hardcode a max ZoneId.** New zones appear above the previous maximum;
   `extract_zones()` discovers it at runtime and adds headroom.
+- **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
+  degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded
+  box is narrower than its radius and clips edge zones before haversine runs.
+  `_BBOX_MARGIN = 1.05` in `export.py`. The true count within 1000 mi of Dallas is
+  **146,537**; the 146,469 quoted during feasibility work was clipped by exactly this
+  mistake in the hand-written API query.
+- **Guard packed integer columns for overflow and sign.** `day` is a uint16 offset from
+  `DAY_EPOCH` (2012-01-01); a 2010 backfill row would underflow into a plausible-looking
+  date rather than failing. `_write_columnar` checks bounds before writing.
 - `matched` is a reserved word in DuckDB. Don't use it as a column alias.
+
+## Export format
+
+`web/public/data/` is generated (`uv run python -m znhstry export`) and gitignored -
+67 MB, fully rebuildable. Binaries are plain columnar dumps: each column is a contiguous
+run of one fixed-width dtype, concatenated in the order `meta.json` lists them, so the
+client reads typed-array views over one ArrayBuffer with no decoding library.
+
+A viewer needs `meta.json` + `zones.bin` (1.7 MB) + one checkpoint (~2.4 MB) + one year
+of events (~5.3 MB) to render and scrub a year: under 10 MB, before gzip.
+
+Series JSON is **sparse** - only days a value changed. Carry the previous value forward.
 
 ## Performance notes
 

@@ -39,7 +39,7 @@ zone / region / country / global / viewport grain. Done = deployed to
         9 tests. Full build 27s, 20/20 pass.
   - [x] Export layer: 146,537 zones, 67MB, 35 files, ~5s. Merged to `main`.
         Primary branch renamed master -> main.
-- Now: [→] Pipeline complete end to end (extract -> dbt -> export). Viewer not started.
+- Now: [→] Viewer complete and verified. Viewport tiling / LOD is the next phase (see below).
 - Next: Next.js + deck.gl viewer against `web/public/data/`
 - Remaining:
   - [ ] Region-grain and H3 tile marts (deferred; only global + country built so far)
@@ -47,6 +47,49 @@ zone / region / country / global / viewport grain. Done = deployed to
   - [ ] Decide how generated data reaches Pages: rebuild in CI (90s extract + 30s dbt
         + 5s export) vs committing the 67MB. Leaning CI rebuild, nightly only, so
         deploys don't hammer the Auckland endpoint.
+
+## Next Phase: viewport tiling / LOD  [→ NOT STARTED]
+
+The last substantial piece. Everything else works end to end.
+
+**Problem, measured.** The viewer loads `zones.bin.gz` (9.6MB) + a checkpoint
+(~4MB) + event shards regardless of zoom, and viewport/zone chart modes pull
+every shard (~60MB, ~190MB resident as typed arrays). Rendering 1.6M points is
+*not* the bottleneck -- deck.gl handles that fine. Data volume is.
+
+**Design.**
+
+1. `export.py`: assign each zone a quadkey at z4 (256 tiles; most are empty,
+   so expect ~80 populated). Shard `checkpoints/` and `events/` by tile:
+   `checkpoints/{year}/{quadkey}.bin.gz`, `events/{year}-{month}/{quadkey}.bin.gz`.
+   Keep `zones.bin.gz` whole -- 9.6MB of positions is needed for any view and
+   compresses well.
+2. `meta.json` gains a `tiles` map: quadkey -> {zone_count, bytes per shard}, so
+   the client can skip empty tiles without a request.
+3. Client: derive visible quadkeys from `viewportBounds`, fetch only those,
+   merge into `ZoneState`. Tiles already loaded stay cached.
+4. Zoom LOD: below z3, do not fetch per-zone data at all -- serve a
+   pre-aggregated `tiles/{year}-{month}.bin.gz` with per-tile faction totals and
+   render one mark per tile. Switch to per-zone above the threshold.
+
+**Watch out for.**
+
+- `idx` is a *global* stable index, not per-tile. Tiled shards must keep storing
+  global idx so `ZoneState` stays one flat array. Do not renumber per tile.
+- Delta-encoding idx within a tile still works (values ascend within a shard),
+  but deltas get much larger. Measure before assuming the 5.7x holds.
+- The nightly immutability rule still applies: tiled shards must be immutable
+  once written, so tile assignment must be stable. It derives from lat/lon,
+  which never change, so this is safe.
+- `buildSeries` currently needs *all* events for a correct delta walk. With
+  tiles, a zone outside the loaded set has no `last[]` history, so its first
+  loaded event would count its whole lifetime as one day. Either keep a
+  per-tile `last[]` seeded from that tile's checkpoint, or restrict chart
+  viewport mode to loaded tiles and say so in the UI.
+
+That last point is the real trap and the reason to do the export side first
+and verify a tile's series against the untiled answer before touching the
+client.
 
 ## Open Questions
 

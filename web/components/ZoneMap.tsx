@@ -112,26 +112,6 @@ export function ZoneMap({
       getWidth: 1,
       pickable: false,
     }),
-    ...boundaries.map(
-      (layer) =>
-        new PathLayer({
-          id: `boundary-${layer.id}`,
-          data: {
-            length: layer.pathCount,
-            startIndices: layer.startIndices,
-            attributes: { getPath: { value: layer.positions, size: 2 } },
-          },
-          _pathType: "open",
-          // Hairlines, not terrain. Country borders sit a little brighter
-          // than internal divisions so the hierarchy reads at world zoom.
-          getColor: layer.id === "admin0" ? [70, 84, 110] : [44, 54, 74],
-          getWidth: layer.id === "admin0" ? 1.2 : 0.8,
-          widthUnits: "pixels",
-          widthMinPixels: 0.6,
-          pickable: false,
-          parameters: { depthTest: false },
-        }),
-    ),
     new ScatterplotLayer({
       id: "zones",
       data: {
@@ -149,6 +129,30 @@ export function ZoneMap({
       pickable: true,
       updateTriggers: { getFillColor: version, getRadius: version },
     }),
+    // Borders draw *over* the zones, not under them. Underneath, 1.6M dots
+    // bury them exactly where the map is densest and a border is most useful.
+    // They stay hairlines and semi-transparent so they read as an overlay
+    // rather than cutting the data up.
+    ...boundaries.map(
+      (layer) =>
+        new PathLayer({
+          id: `boundary-${layer.id}`,
+          data: {
+            length: layer.pathCount,
+            startIndices: layer.startIndices,
+            attributes: { getPath: { value: layer.positions, size: 2 } },
+          },
+          _pathType: "open",
+          // Country borders sit brighter than internal divisions so the
+          // hierarchy still reads once both are over a dense field of dots.
+          getColor: layer.id === "admin0" ? [150, 168, 200, 205] : [104, 120, 150, 150],
+          getWidth: layer.id === "admin0" ? 1.1 : 0.7,
+          widthUnits: "pixels",
+          widthMinPixels: 0.5,
+          pickable: false,
+          parameters: { depthTest: false },
+        }),
+    ),
   ];
 
   return (

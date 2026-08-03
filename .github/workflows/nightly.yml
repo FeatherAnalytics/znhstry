@@ -1,0 +1,90 @@
+name: Nightly update
+
+# Rebuilds the site from a small incremental fetch and force-pushes it to an
+# orphan branch. Force-pushing an orphan discards the previous commit instead
+# of stacking on it, so the deploy branch stays permanently one commit deep --
+# which matters because gzip output cannot be delta-compressed, and a growing
+# branch would cost the full size of every rewritten file every night.
+
+on:
+  schedule:
+    # 09:17 UTC, comfortably after QONQR publishes its daily CSVs. Off the hour
+    # because everything on GitHub's cron queues up there.
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Never let two runs extract at once -- the upstream endpoint is a shared
+# research box and concurrent runs would double our request rate.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Carries data/raw between runs so the nightly fetch is ~16 requests
+      # instead of 88. A miss just means a full extraction, which is correct
+      # but slower and heavier on upstream -- so the key rolls every run and
+      # restore-keys picks up the most recent.
+      - name: Restore extracted data
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+
+      - name: Fetch what changed
+        working-directory: pipeline
+        run: uv run python -m znhstry update
+
+      - name: Build warehouse
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt build
+
+      - name: Export payloads
+        working-directory: pipeline
+        run: |
+          uv run python -m znhstry export --scope dallas-1000mi
+          uv run python -m znhstry export --scope global
+
+      - name: Build site
+        working-directory: web
+        env:
+          NEXT_PUBLIC_BASE_PATH: /znhstry
+        run: |
+          npm ci
+          npm run build
+
+      - name: Report payload size
+        run: du -sh web/out web/out/data/* | sort -h
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: web/out
+          publish_branch: gh-pages
+          # The whole point: one commit, always. Without this the branch
+          # accumulates ~70MB a month of undeltable binaries.
+          force_orphan: true
+          commit_message: "data: nightly update ${{ github.run_number }}"

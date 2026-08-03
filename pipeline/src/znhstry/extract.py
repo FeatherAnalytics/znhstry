@@ -207,3 +207,37 @@ def extract_all() -> None:
     extract_zones()
     extract_changelog()
     extract_baseline()
+
+
+def _current_window_label(today: date | None = None) -> str:
+    today = today or date.today()
+    for label, start, end in changelog_windows(today):
+        if start <= today < end:
+            return label
+    raise RuntimeError(f"no changelog window covers {today}")
+
+
+def extract_update() -> None:
+    """Nightly refresh: refetch only what can have changed.
+
+    `zones` is overwritten in place upstream, so its shards are always stale.
+    `changelog` is append-only, so only the window covering today can have
+    grown -- everything older is immutable and skipped by the idempotent
+    check. That is roughly 16 requests a night against a shared research box,
+    rather than the 88 a full extraction costs.
+
+    Deleting before re-running rather than adding a force flag keeps one code
+    path: the extractor's only rule is still "fetch what is not on disk".
+    """
+    label = _current_window_label()
+    current = config.RAW / "changelog" / f"changelog_{label}.parquet"
+    if current.exists():
+        current.unlink()
+        log.info("update: refetching changelog window %s", label)
+
+    stale = list((config.RAW / "zones").glob("*.parquet"))
+    for shard in stale:
+        shard.unlink()
+    log.info("update: refetching %d zone shards", len(stale))
+
+    extract_all()

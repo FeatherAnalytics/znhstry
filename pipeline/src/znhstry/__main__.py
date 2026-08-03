@@ -14,6 +14,7 @@ STEPS = {
     "zones": extract.extract_zones,
     "changelog": extract.extract_changelog,
     "baseline": extract.extract_baseline,
+    "update": extract.extract_update,
     "export": export.export_all,
 }
 

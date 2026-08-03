@@ -1,0 +1,23 @@
+[project]
+name = "znhstry"
+version = "0.1.0"
+description = "Zone History — extraction and modelling pipeline"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28",
+    "polars>=1.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/znhstry"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

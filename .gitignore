@@ -1,0 +1,16 @@
+# Extracted data — rebuildable from the API, never committed
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env
+.env

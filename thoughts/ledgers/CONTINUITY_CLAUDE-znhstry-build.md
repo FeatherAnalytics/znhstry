@@ -41,16 +41,14 @@ zone / region / country / global / viewport grain. Done = deployed to
         Primary branch renamed master -> main.
   - [x] Viewer complete and verified (map + scrubber + single linked chart).
   - [x] **Tiling, export side.** Branch `feat/tiled-export`, commit `13d1b34`.
-        Checkpoints and events shard by zoom-4 web-mercator tile; new per-tile
-        daily series backs the viewport chart. 12,264 files, 103.1 MB, ~75s.
+        Checkpoints and events shard by zoom-4 web-mercator tile; per-tile
+        daily series backs the chart. 12,045 files, 103.1 MB, ~75s.
         All verified — see "Tiling: what was verified" below.
-- Now: [→] Tiling, client side. Nothing in `web/` reads the new layout yet, so the
-      viewer is broken on this branch until it lands.
+  - [x] **Tiling, client side + zoom LOD.** The viewer runs against the tiled
+        layout and is an MVP: world view is 9 requests / 1.9 MB, zoomed-in
+        detail loads only the visible tiles. Verified in a browser end to end.
+- Now: [→] MVP is working. Next real gap is deployment (see Remaining).
 - Remaining:
-  - [ ] Zoom LOD: below ~z3, render one mark per tile from a pre-aggregated
-        `tiles/{year}-{month}.bin.gz` rather than fetching per-zone data at all.
-        Not built; the per-tile *series* that exists is daily totals for charts,
-        not a per-frame map payload.
   - [ ] Region-grain and H3 tile marts (deferred; only global + country built so far)
   - [ ] Nightly incremental GitHub Action + Pages deploy
   - [ ] Decide how generated data reaches Pages: rebuild in CI (90s extract + 30s dbt
@@ -82,22 +80,20 @@ viewport chart sums instead. Stateless, exact, ~80 KB per tile, four fetches.
 gzip streams compress slightly worse. Delta-encoded `idx` still pays off despite
 larger within-tile gaps — 5.3x overall vs raw.
 
-**Client side, not started.** Nothing in `web/` reads the new layout, so the
-viewer is broken on this branch. Needed:
+**Client side: done.** Two modes split at `DETAIL_ZOOM = 4` in `app/page.tsx`.
+Details in `CLAUDE.md` under "The viewer". Measured in a real browser:
 
-1. `lib/data.ts` — `Meta` type is stale: `checkpoints`/`events` are now maps
-   keyed by period then tile, holding `[rows, bytes]`, and the column schema
-   moved to a shared `meta.schemas.{checkpoint,event}`. `loadShard` takes its
-   schema as an argument now instead of reading it off the entry.
-2. Derive visible tiles by intersecting `viewportBounds` with `meta.tiles[k].bbox`
-   — the bbox is in the manifest precisely so the client need not project.
-   Fetch only those, cache what is loaded, merge into the one flat `ZoneState`.
-3. Chart: replace `loadFullHistory` + `buildSeries` for viewport mode with a sum
-   over `meta.series.tiles`. Each tile has a `base` file and, if it has activity
-   this year, a `current` one; concatenate them and carry values forward.
-   Single-zone mode still needs that one zone's tile event shards.
-4. `idx` stays global. `ZoneState` remains one array of `zone_count`; tiles fill
-   in slices of it. Never renumber within a tile.
+| view | requests | bytes |
+|---|---|---|
+| world (overview) | 9 | 1.9 MB |
+| zoomed to NE US, 11 tiles | 68 | 21.5 MB (18.1 of it zone positions + names) |
+
+Checked working: overview scrub, zoom into detail, per-zone colouring, viewport
+chart mode ("11 of 127 tiles"), scrub back to 2013 across an early checkpoint
+(282 zones held, 8.7M bots — correct for the early record), no console errors.
+
+The low-zoom LOD reuses the per-tile *series* rather than a new per-frame map
+payload, so the once-planned `tiles/{year}-{month}.bin.gz` was never needed.
 
 ## Open Questions
 
@@ -106,11 +102,16 @@ viewer is broken on this branch. Needed:
   deciding to annotate vs interpolate.
 - Whether display name should be "Zone History" everywhere or slug-only in some surfaces —
   user accepted the split but hasn't seen it rendered.
-- `zones.bin.gz` is now the dominant fixed cost: 9.87 MB every view pays before
-  seeing anything, against 0.8–13.4 MB of tiled data. Deliberate (positions are
-  needed to render at all), but it is the next thing worth attacking if first
-  paint is slow. Splitting it by tile is possible; it would complicate `idx`
-  recovery, since that file is also the index manifest.
+- `zones.bin.gz` (9.87 MB) + `zone_names.json.gz` (8.2 MB) are now the dominant
+  cost of the detail view — 18.1 MB against 1.7 MB of actual tiled history.
+  Both are deferred out of the world view, so they no longer block first paint,
+  but they are the obvious next optimisation. Splitting them by tile would
+  complicate `idx` recovery, since `zones.bin.gz` is also the index manifest.
+- UNCONFIRMED: `npm run build` cannot complete locally — `OneDrive.Sync.Service`
+  holds `web/out` open, so `next build` fails at the final rmdir. Compile, types
+  and all four static pages succeed first, so it looks environmental, but a
+  real static export has **not** been produced or served yet. Confirm on a
+  Linux CI runner (or with OneDrive paused) before trusting the Pages deploy.
 
 Resolved since the last revision:
 
@@ -120,8 +121,8 @@ Resolved since the last revision:
 ## Working Set
 
 - `GitHub/znhstry/pipeline/src/znhstry/` — config.py, api.py, extract.py, export.py
-- `GitHub/znhstry/web/` — app/, components/ (ZoneMap, HistoryBar, StatsPanel),
-  lib/ (data.ts, history.ts, boundaries.ts). All still on the untiled format.
+- `GitHub/znhstry/web/` — app/page.tsx (mode orchestration), components/
+  (ZoneMap, HistoryBar, StatsPanel), lib/ (data.ts, history.ts, boundaries.ts)
 - `GitHub/znhstry/data/` — gitignored Parquet + `znhstry.duckdb`
 - `web/public/data/` — gitignored; 12,264 files, 103 MB, rebuilt by `export`
 - Reference: `GitHub/QONQR` (existing current-state map), `GitHub/QONQR_zonedata` (upstream,

@@ -531,18 +531,24 @@ def _write_json_gz(path: Path, payload: Any) -> int:
 
 
 def _export_tile_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
-    """Sparse daily faction totals per tile - what the viewport chart reads.
+    """Sparse daily faction totals per tile. Two files, every tile in both.
 
-    This is what makes tiling safe for the chart. Summing a per-tile series
+    This carries the whole low-zoom view. It is what the viewport chart sums,
+    and it is also what the map draws below the detail threshold: one mark per
+    tile, so a world view needs no per-zone data at all and never touches
+    `zones.bin.gz` or a single event shard.
+
+    It is also what makes tiling safe for the chart. Summing a per-tile series
     needs no per-zone history, so a zone whose earlier events live in a tile
     the viewer never loaded cannot book its whole lifetime as one day's change.
     Sum the visible tiles and the answer is exact.
 
-    Split at the current year: everything before it is immutable and ships as
-    one file per tile, while only the small current-year file is rewritten by
-    the nightly run. Without the split, 128 whole-history files would churn
-    every night, and gzip output changes wholesale with its input, so git could
-    not delta any of them.
+    One combined file rather than one per tile: the client wants all 127 up
+    front for the overview, and 127 requests to assemble 1.5 MB is worse on
+    every axis than one request. Split at the current year so the immutable
+    past is fetched once and only the small current-year file churns nightly --
+    gzip output changes wholesale with its input, so git cannot delta a
+    rewritten file.
     """
     day = f"cast(date_diff('day', date '{config.DAY_EPOCH}', activity_date) as integer)"
     data = con.execute(f"""
@@ -573,10 +579,9 @@ def _export_tile_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     """).fetchnumpy()
 
     current_year = date.today().year
-    manifest: dict[str, dict[str, Any]] = {}
     keys = np.asarray(data["tile_key"])
     if not len(keys):
-        return manifest
+        return {}
 
     unique, starts = np.unique(keys, return_index=True)
     edges = [*starts.tolist(), len(keys)]
@@ -585,27 +590,31 @@ def _export_tile_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         [np.asarray(data[name]) for name in ("day", "legion", "swarm", "faceless")], axis=1
     ).astype("int64")
 
+    split: dict[str, dict[str, list[list[int]]]] = {"base": {}, "current": {}}
     for i, key in enumerate(unique.tolist()):
         lo, hi = edges[i], edges[i + 1]
         name = _tile_name(key)
-        rows = values[lo:hi]
-        is_past = years[lo:hi] < current_year
-
-        entry: dict[str, Any] = {}
+        rows, is_past = values[lo:hi], years[lo:hi] < current_year
         for label, subset in (("base", rows[is_past]), ("current", rows[~is_past])):
-            if not len(subset):
-                continue
-            path = out / "series" / "tiles" / (
-                f"{name}.json.gz" if label == "base" else f"{name}.{current_year}.json.gz"
-            )
-            size = _write_json_gz(
-                path, {"columns": SERIES_COLUMNS, "rows": subset.tolist()}
-            )
-            entry[label] = {"path": f"series/tiles/{path.name}", "bytes": size}
-        manifest[name] = entry
+            if len(subset):
+                split[label][name] = subset.tolist()
 
-    size = sum(part["bytes"] for entry in manifest.values() for part in entry.values())
-    log.info("  series tiles: %d tiles, %s KB", len(manifest), f"{size // 1024:,}")
+    manifest: dict[str, Any] = {}
+    for label, tiles in split.items():
+        if not tiles:
+            continue
+        name = "tiles.json.gz" if label == "base" else f"tiles.{current_year}.json.gz"
+        size = _write_json_gz(
+            out / "series" / name, {"columns": SERIES_COLUMNS, "tiles": tiles}
+        )
+        manifest[label] = {"path": f"series/{name}", "bytes": size, "tiles": len(tiles)}
+
+    log.info(
+        "  series tiles: %d tiles, %s KB across %d files",
+        len(unique),
+        f"{sum(part['bytes'] for part in manifest.values()) // 1024:,}",
+        len(manifest),
+    )
     return manifest
 
 
@@ -784,9 +793,8 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             for entry in shards.values()
         )
         shard_files = sum(len(shards) for group in (checkpoints, events) for shards in group.values())
-        tile_series = [part for entry in series["tiles"].values() for part in entry.values()]
         series_files = [series[name] for name in ("global_daily", "scope_daily", "country_daily")]
-        series_files += tile_series
+        series_files += list(series["tiles"].values())
 
         total = (
             shard_bytes

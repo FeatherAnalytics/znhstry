@@ -11,7 +11,6 @@ export interface Totals {
   legion: number;
   swarm: number;
   faceless: number;
-  held: number;
 }
 
 interface Props {
@@ -20,6 +19,8 @@ interface Props {
   previous: Totals | null;
   zoneCount: number;
   scopeLabel: string;
+  /** Zones held in the loaded tiles, or null when no per-zone data is loaded. */
+  held: number | null;
   hovered: { name: string; total: number; faction: number } | null;
 }
 
@@ -36,15 +37,27 @@ function Delta({ now, then }: { now: number; then: number | undefined }) {
   if (then === undefined || then === 0) return null;
   const change = ((now - then) / then) * 100;
   if (!isFinite(change) || Math.abs(change) < 0.05) return null;
+  // Early in the record a year-ago base of a few thousand bots against
+  // billions today yields percentages in the millions, which say nothing
+  // except "from almost nothing". Past 10x, report the multiple instead.
+  const label =
+    Math.abs(change) >= 1000
+      ? `${change > 0 ? "+" : "-"}${compact(Math.abs(now / then))}x`
+      : `${change > 0 ? "+" : ""}${change.toFixed(1)}%`;
   return (
-    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>
-      {change > 0 ? "+" : ""}
-      {change.toFixed(1)}%
-    </span>
+    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label}</span>
   );
 }
 
-export function StatsPanel({ date, totals, previous, zoneCount, scopeLabel, hovered }: Props) {
+export function StatsPanel({
+  date,
+  totals,
+  previous,
+  zoneCount,
+  scopeLabel,
+  held,
+  hovered,
+}: Props) {
   const sum = totals.legion + totals.swarm + totals.faceless || 1;
 
   return (
@@ -74,8 +87,13 @@ export function StatsPanel({ date, totals, previous, zoneCount, scopeLabel, hove
           timeZone: "UTC",
         })}
       </div>
+      {/* Counts above are the exact whole-scope figures at this date. Held is
+          only knowable for tiles that have per-zone data loaded, so it says so
+          rather than implying a global number it does not have. */}
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
-        {compact(totals.held)} of {compact(zoneCount)} zones held
+        {held !== null
+          ? `${compact(held)} zones held in view`
+          : `${compact(zoneCount)} zones · zoom in for detail`}
       </div>
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "14px 0 12px" }} />

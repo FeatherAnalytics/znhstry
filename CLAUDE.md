@@ -11,16 +11,49 @@ headings, and prose. The slug is for the repo, URL, and package only.
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
 - **Extract**: `httpx` + `polars` -> Parquet in `data/raw/`.
 - **Transform**: dbt-duckdb (not yet built).
-- **Web**: Next.js static export + deck.gl (not yet built).
-- **Deploy**: GitHub Pages at `featheranalytics.dev/znhstry`.
+- **Web**: Next.js static export + deck.gl, in `web/`.
+- **Deploy**: GitHub Pages at `featheranalytics.dev/znhstry` (not wired up yet).
 
 ## Commands
 
 ```bash
 cd pipeline
-uv run python -m znhstry all         # full extraction (idempotent, resumable)
-uv run python -m znhstry changelog   # one step: lookups|zones|changelog|baseline
+uv run python -m znhstry all                      # full extraction (idempotent, resumable)
+uv run python -m znhstry changelog                # one step: lookups|zones|changelog|baseline
+uv run python -m znhstry export --scope global    # rebuild web/public/data (~75s)
+
+cd web
+npm run dev                                       # http://localhost:3000
+npm run build                                     # static export to web/out
 ```
+
+**Known local friction:** `npm run build` fails at the very end with
+`EBUSY ... rmdir web/out` on this machine. `next build` clears `out/` before writing it,
+and `OneDrive.Sync.Service` holds that directory open even when it is empty - killing
+node does not release it and neither does `Remove-Item -Force`. Everything before that
+step succeeds (compile, type check, all four static pages, build traces), so it is not a
+code failure. Pause OneDrive sync to get a real static export locally; CI on Linux never
+hits it. `npm run dev` is unaffected and exercises the same code.
+
+## The viewer
+
+Two modes, switched at zoom 4 (`DETAIL_ZOOM` in `app/page.tsx`):
+
+- **Below it**, the map is one cell per tile drawn from `series/tiles*.json.gz`. No zone
+  positions, no checkpoints, no event shards - 9 requests, ~1.9 MB, and scrubbing is
+  instant because every frame is already in memory.
+- **At or above it**, visible tiles' checkpoints and event shards load and the map draws
+  individual zones. `zones.bin.gz` (9.87 MB) is prefetched in the background during the
+  overview so the first zoom-in does not stall on it; `zone_names.json.gz` (8.2 MB) waits
+  until there is a detail view to hover.
+
+Measured: world view 9 requests / 1.9 MB. Zoomed into the north-eastern US, 11 tiles,
+68 requests / 21.5 MB total - of which 18.1 MB is zone positions and names, and only
+1.7 MB is tiled history.
+
+The stats panel always shows exact whole-scope totals read from `scope_daily`, never a
+sum over whichever tiles happen to be loaded, so it is right during a partial load. The
+one in-view number is "zones held in view", which says so.
 
 ## Upstream API
 
@@ -146,16 +179,18 @@ viewport downloads only what it can see. Paths are `checkpoints/{year}/{x}-{y}.b
 and `events/{year}-{month}/{x}-{y}.bin.gz`; `meta.json` lists every tile with its bbox,
 so the client intersects the viewport without reimplementing the projection.
 
-127 of the 256 tiles hold any zone. The distribution is extremely skewed - North America
-(`8-5`) is 19% of zones and 27% of events - which is exactly why tiling pays: zooming
-anywhere other than there drops nearly everything.
+127 of the 256 tiles hold any zone. The distribution is extremely skewed - **central
+Europe** (`8-5`: Germany 66k, France 47k, Poland 39k) is 19% of zones and 27% of events -
+which is exactly why tiling pays: zooming anywhere other than there drops nearly
+everything. Europe outweighs the US here because the zone set follows named populated
+places, and Europe has far more of them per square kilometre.
 
 | | full history, all shards | files |
 |---|---|---|
 | untiled (before) | ~64 MB | 187 |
-| tile `8-5`, the worst case | 13.4 MB | 172 |
-| tile `4-6` (Europe) | 7.0 MB | 168 |
-| tile `12-7` | 1.0 MB | 167 |
+| `8-5` central Europe, the worst case | 13.4 MB | 172 |
+| `4-6` eastern US (86,687 of its 91,258 zones) | 7.0 MB | 168 |
+| `12-7` | 1.0 MB | 167 |
 
 Tiling costs 5.6% in total size (97.7 -> 103.1 MB): more, smaller gzip streams compress
 slightly worse. That is the trade.
@@ -168,10 +203,20 @@ slightly worse. That is the trade.
   entries, repeating the schema per shard would dwarf the manifest. It is also written
   compact rather than indented: 695 KB -> 223 KB (70 KB gzipped over the wire).
 
-### The chart reads per-tile series, not per-zone events
+### Per-tile series carry both the chart and the low-zoom map
 
-`series/tiles/{x}-{y}.json.gz` holds a sparse daily faction total per tile. The viewport
-chart sums the visible tiles - four fetches, ~80 KB each at worst.
+`series/tiles.json.gz` (1.5 MB) plus `series/tiles.{year}.json.gz` (76 KB) hold a sparse
+daily faction total for every tile, keyed by tile. Split at the current year so the
+immutable past is fetched once and only the small live file churns nightly. One combined
+file per half rather than one per tile: the client wants all 127 up front, and 127
+requests to assemble 1.5 MB is worse on every axis.
+
+They do two jobs:
+
+1. **The viewport chart** sums the visible tiles. No event shard is touched.
+2. **The map below zoom 4** draws one cell per tile straight from this, so a world view
+   needs no `zones.bin.gz`, no checkpoint and no event shard at all - 9 requests and
+   ~1.9 MB to a scrubable world map.
 
 **Do not rebuild the viewport chart by delta-walking per-zone events.** A per-zone delta
 needs every event that zone ever had. Once events are tiled, a zone whose earlier history
@@ -180,9 +225,8 @@ loaded event books its entire lifetime as one day's change. Summing pre-aggregat
 has no such state and is exact: verified against the untiled `scope_daily` series at
 max abs difference **0** across 6,059 days.
 
-Tile series split at the current year - `{x}-{y}.json.gz` for the immutable past plus
-`{x}-{y}.{year}.json.gz` for the live one - so the nightly run rewrites only the small
-current-year file.
+Only a **single selected zone** still needs a per-event delta walk, and it only ever
+reads its own tile's shards.
 
 ### Immutability and nightly updates
 

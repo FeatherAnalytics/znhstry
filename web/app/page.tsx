@@ -22,18 +22,8 @@ import { buildSeries, loadFullHistory, viewportFilter, type HistorySeries } from
 
 const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
 
-const SCOPES = {
-  "dallas-1000mi": {
-    label: "Dallas 1000mi",
-    view: { longitude: -96.8, latitude: 34.5, zoom: 4.1 },
-  },
-  global: {
-    label: "Global",
-    view: { longitude: 8, latitude: 26, zoom: 1.35 },
-  },
-} as const;
-
-type ScopeName = keyof typeof SCOPES;
+const SCOPE = "global";
+const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
 
 // Upstream lost most of 2019: 337,859 events against 627,035 in 2018 and
 // 1,438,855 in 2020. It is missing data, not a quiet year, so the scrubber
@@ -58,7 +48,6 @@ function valueAt(rows: number[][], day: number): number[] | null {
 }
 
 export default function Page() {
-  const [scope, setScope] = useState<ScopeName>("dallas-1000mi");
   const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [zones, setZones] = useState<Columns | null>(null);
@@ -70,18 +59,17 @@ export default function Page() {
   const [hovered, setHovered] = useState<{ name: string; total: number; faction: number } | null>(
     null,
   );
-  const [palette, setPalette] = useState<"canon" | "accessible">("canon");
   const [historyMode, setHistoryMode] = useState<HistoryMode>("scope");
-  const [range, setRange] = useState<RangeKey>("all");
+  const [range, setRange] = useState<RangeKey>("1y");
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
   const [history, setHistory] = useState<HistorySeries | null>(null);
   const [historyStatus, setHistoryStatus] = useState<string | null>(null);
   const [status, setStatus] = useState("Loading zones");
 
   const [viewState, setViewState] = useState<MapViewState>({
-    longitude: -96.8,
-    latitude: 34.5,
-    zoom: 4.1,
+    longitude: INITIAL_VIEW.longitude,
+    latitude: INITIAL_VIEW.latitude,
+    zoom: INITIAL_VIEW.zoom,
     pitch: 0,
     bearing: 0,
   });
@@ -102,7 +90,7 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    const base = `${DATA_ROOT}/${scope}`;
+    const base = `${DATA_ROOT}/global`;
     let cancelled = false;
 
     // Everything downstream is indexed by the scope's own zone index, so a
@@ -120,7 +108,7 @@ export default function Page() {
     setHistoryMode("scope");
     loadToken.current++;
     setStatus("Loading zones");
-    setViewState((current) => ({ ...current, ...SCOPES[scope].view }));
+    setViewState((current) => ({ ...current, ...INITIAL_VIEW }));
 
     (async () => {
       const m = await loadMeta(base);
@@ -141,7 +129,7 @@ export default function Page() {
     return () => {
       cancelled = true;
     };
-  }, [scope]);
+  }, []);
 
   const bounds = useMemo(() => {
     if (!series?.rows.length) return null;
@@ -160,7 +148,7 @@ export default function Page() {
     // this the first run after a switch pairs the new scope's shard paths with
     // the old scope's index -- writing global indices into a state array sized
     // for Dallas, where everything past its length is silently dropped.
-    if (meta.scope.name !== scope) return;
+    if (meta.scope.name !== SCOPE) return;
     const token = ++loadToken.current;
 
     (async () => {
@@ -178,7 +166,7 @@ export default function Page() {
         checkpoint = checkpointCache.current.get(checkpointYear);
         if (!checkpoint) {
           const entry = meta.checkpoints.find((c) => c.year === checkpointYear)!;
-          checkpoint = await loadShard(`${DATA_ROOT}/${scope}/checkpoints`, entry);
+          checkpoint = await loadShard(`${DATA_ROOT}/global/checkpoints`, entry);
           checkpointCache.current.set(checkpointYear, checkpoint);
         }
       }
@@ -195,7 +183,7 @@ export default function Page() {
         const key = entry.path;
         let loaded = shardCache.current.get(key);
         if (!loaded) {
-          loaded = sortByDay(await loadShard(`${DATA_ROOT}/${scope}/events`, entry));
+          loaded = sortByDay(await loadShard(`${DATA_ROOT}/global/events`, entry));
           shardCache.current.set(key, loaded);
         }
         ready.push({
@@ -227,7 +215,7 @@ export default function Page() {
       setVersion((v) => v + 1);
       setStatus("");
     })().catch((error) => setStatus(`Could not load history: ${error.message}`));
-  }, [meta, zones, day, scope]);
+  }, [meta, zones, day]);
 
 
   // Series for the panel. Scope mode reuses the precomputed sparse series, so
@@ -235,7 +223,7 @@ export default function Page() {
   // all time, which means every shard. They are cached, so the cost is paid
   // once per scope.
   useEffect(() => {
-    if (!meta || !zones || day === null || meta.scope.name !== scope) return;
+    if (!meta || !zones || day === null || meta.scope.name !== SCOPE) return;
     const token = ++historyToken.current;
     const needsFull = historyMode === "viewport" || selectedZone !== null;
 
@@ -270,7 +258,7 @@ export default function Page() {
       if (!fullShards.current) {
         setHistoryStatus("Reading full history");
         fullShards.current = await loadFullHistory(
-          `${DATA_ROOT}/${scope}`,
+          `${DATA_ROOT}/global`,
           meta,
           shardCache.current,
           (done, total) =>
@@ -288,7 +276,7 @@ export default function Page() {
       setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, day));
       setHistoryStatus(null);
     })().catch((error) => setHistoryStatus(`Could not build series: ${error.message}`));
-  }, [meta, zones, day, scope, series, historyMode, selectedZone]);
+  }, [meta, zones, day, series, historyMode, selectedZone]);
 
   const previous: Totals | null = useMemo(() => {
     if (!series || day === null) return null;
@@ -311,10 +299,6 @@ export default function Page() {
     [names],
   );
 
-  useEffect(() => {
-    document.documentElement.dataset.palette = palette;
-  }, [palette]);
-
   const ready = meta && zones && series && day !== null && bounds;
 
   return (
@@ -331,31 +315,9 @@ export default function Page() {
         <span className="display" style={{ fontSize: 16 }}>
           Zone History
         </span>
-        <nav style={{ display: "flex", gap: 2, flex: 1 }} aria-label="Scope">
-          {(Object.keys(SCOPES) as ScopeName[]).map((name) => (
-            <button
-              key={name}
-              className="eyebrow"
-              onClick={() => setScope(name)}
-              aria-current={scope === name}
-              style={{
-                padding: "3px 9px",
-                color: scope === name ? "var(--text)" : "var(--text-dim)",
-                border: `1px solid ${scope === name ? "var(--hairline-bright)" : "transparent"}`,
-              }}
-            >
-              {SCOPES[name].label}
-            </button>
-          ))}
-        </nav>
-        <button
-          className="eyebrow"
-          onClick={() => setPalette((p) => (p === "canon" ? "accessible" : "canon"))}
-          aria-pressed={palette === "accessible"}
-          title="Canon faction colours are red/green/violet, the hardest pairing to tell apart with deuteranopia."
-        >
-          {palette === "canon" ? "Colour-safe palette" : "Canon palette"}
-        </button>
+        <span className="eyebrow" style={{ flex: 1 }}>
+          {meta?.scope.label ?? " "}
+        </span>
       </header>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
@@ -376,7 +338,6 @@ export default function Page() {
             onBounds={(b) => {
               viewportBounds.current = b;
             }}
-            paletteKey={palette}
           />
         )}
         {ready && (
@@ -413,7 +374,7 @@ export default function Page() {
                 ? "Single zone"
                 : historyMode === "viewport"
                   ? "Current map bounds"
-                  : `${(meta.scope.zone_count / 1000).toFixed(0)}K zones`
+                  : `${meta.scope.zone_count >= 1e6 ? `${(meta.scope.zone_count / 1e6).toFixed(1)}M` : `${(meta.scope.zone_count / 1e3).toFixed(0)}K`} zones`
             }
             status={historyStatus}
             onClose={() => {

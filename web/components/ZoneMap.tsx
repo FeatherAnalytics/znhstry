@@ -40,7 +40,6 @@ export interface ZoneMapProps {
   onHover: (info: PickingInfo) => void;
   onClickZone: (index: number | null) => void;
   onBounds: (bounds: [number, number, number, number]) => void;
-  paletteKey: string;
 }
 
 export function ZoneMap({
@@ -53,7 +52,6 @@ export function ZoneMap({
   onHover,
   onClickZone,
   onBounds,
-  paletteKey,
 }: ZoneMapProps) {
   const count = zones.latitude.length;
 
@@ -86,20 +84,23 @@ export function ZoneMap({
     const radiusArray = radii.current;
 
     for (let i = 0; i < count; i++) {
-      const rgb = palette[state.faction[i]] ?? palette[0];
+      // An empty zone is grey whoever nominally holds it: with no bots there
+      // is nothing to own, and colouring it by faction overstates control.
+      const total = state.total[i];
+      const rgb = total > 0 ? (palette[state.faction[i]] ?? palette[0]) : palette[0];
       const o = i * 4;
       colorArray[o] = rgb[0];
       colorArray[o + 1] = rgb[1];
       colorArray[o + 2] = rgb[2];
-      // Zones holding nothing sit far back rather than vanishing, so the
-      // shape of the map stays legible in quiet years.
-      const total = state.total[i];
-      colorArray[o + 3] = total > 0 ? 205 : 34;
+      // Held zones read first, but empty ones stay clearly visible rather than
+      // dropping out -- the map should show where zones exist, not only where
+      // the fighting is.
+      colorArray[o + 3] = total > 0 ? 215 : 105;
       // Counts span six orders of magnitude, so size is logarithmic and
       // capped in pixels. Colour carries who holds a zone; size stays quiet.
       radiusArray[i] = total > 0 ? 600 + Math.log10(total + 1) * 1400 : 400;
     }
-  }, [state, count, version, paletteKey]);
+  }, [state, count, version]);
 
   const layers = [
     new LineLayer({
@@ -146,7 +147,7 @@ export function ZoneMap({
       radiusMaxPixels: 9,
       stroked: false,
       pickable: true,
-      updateTriggers: { getFillColor: [version, paletteKey], getRadius: version },
+      updateTriggers: { getFillColor: version, getRadius: version },
     }),
   ];
 

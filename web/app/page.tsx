@@ -17,6 +17,8 @@ import {
   type Meta,
 } from "@/lib/data";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
+import { HistoryPanel, type HistoryMode, type RangeKey } from "@/components/HistoryPanel";
+import { buildSeries, loadFullHistory, viewportFilter, type HistorySeries } from "@/lib/history";
 
 const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
 
@@ -69,6 +71,11 @@ export default function Page() {
     null,
   );
   const [palette, setPalette] = useState<"canon" | "accessible">("canon");
+  const [historyMode, setHistoryMode] = useState<HistoryMode>("scope");
+  const [range, setRange] = useState<RangeKey>("all");
+  const [selectedZone, setSelectedZone] = useState<number | null>(null);
+  const [history, setHistory] = useState<HistorySeries | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<string | null>(null);
   const [status, setStatus] = useState("Loading zones");
 
   const [viewState, setViewState] = useState<MapViewState>({
@@ -83,6 +90,11 @@ export default function Page() {
   const shardCache = useRef(new Map<string, { columns: Columns; days: Uint16Array }>());
   const checkpointCache = useRef(new Map<number, Columns>());
   const loadToken = useRef(0);
+  const fullShards = useRef<Columns[] | null>(null);
+  const historyToken = useRef(0);
+  // Bounds are read when a series is built rather than tracked in state, so
+  // panning does not rebuild 9.87M events on every frame.
+  const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
 
   // Boundaries are scope-independent, so they load once and survive switching.
   useEffect(() => {
@@ -102,6 +114,10 @@ export default function Page() {
     setNames([]);
     shardCache.current.clear();
     checkpointCache.current.clear();
+    fullShards.current = null;
+    setHistory(null);
+    setSelectedZone(null);
+    setHistoryMode("scope");
     loadToken.current++;
     setStatus("Loading zones");
     setViewState((current) => ({ ...current, ...SCOPES[scope].view }));
@@ -213,6 +229,67 @@ export default function Page() {
     })().catch((error) => setStatus(`Could not load history: ${error.message}`));
   }, [meta, zones, day, scope]);
 
+
+  // Series for the panel. Scope mode reuses the precomputed sparse series, so
+  // it is instant; viewport and single-zone modes need per-event deltas across
+  // all time, which means every shard. They are cached, so the cost is paid
+  // once per scope.
+  useEffect(() => {
+    if (!meta || !zones || day === null || meta.scope.name !== scope) return;
+    const token = ++historyToken.current;
+    const needsFull = historyMode === "viewport" || selectedZone !== null;
+
+    (async () => {
+      if (!needsFull) {
+        if (!series) return;
+        // Widen the sparse scope series into a dense one the chart can index.
+        const span = series.rows[series.rows.length - 1][0] + 1;
+        const out: HistorySeries = {
+          days: new Int32Array(span),
+          legion: new Float64Array(span),
+          swarm: new Float64Array(span),
+          faceless: new Float64Array(span),
+        };
+        let r = 0;
+        let l = 0, sw = 0, f = 0;
+        for (let d = 0; d < span; d++) {
+          while (r < series.rows.length && series.rows[r][0] <= d) {
+            [, l, sw, f] = series.rows[r];
+            r++;
+          }
+          out.days[d] = d;
+          out.legion[d] = l;
+          out.swarm[d] = sw;
+          out.faceless[d] = f;
+        }
+        setHistory(out);
+        setHistoryStatus(null);
+        return;
+      }
+
+      if (!fullShards.current) {
+        setHistoryStatus("Reading full history");
+        fullShards.current = await loadFullHistory(
+          `${DATA_ROOT}/${scope}`,
+          meta,
+          shardCache.current,
+          (done, total) =>
+            token === historyToken.current &&
+            setHistoryStatus(`Reading full history ${Math.round((done / total) * 100)}%`),
+        );
+      }
+      if (token !== historyToken.current) return;
+
+      const filter =
+        selectedZone !== null
+          ? (idx: number) => idx === selectedZone
+          : viewportFilter(zones, viewportBounds.current);
+
+      setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, day));
+      setHistoryStatus(null);
+    })().catch((error) => setHistoryStatus(`Could not build series: ${error.message}`));
+  }, [meta, zones, day, scope, series, historyMode, selectedZone]);
+
   const previous: Totals | null = useMemo(() => {
     if (!series || day === null) return null;
     const row = valueAt(series.rows, day - 365);
@@ -291,6 +368,14 @@ export default function Page() {
             viewState={viewState}
             onViewStateChange={setViewState}
             onHover={handleHover}
+            onClickZone={(index) => {
+              setSelectedZone(index);
+              if (index !== null) setHistoryMode("zone");
+              else setHistoryMode("scope");
+            }}
+            onBounds={(b) => {
+              viewportBounds.current = b;
+            }}
             paletteKey={palette}
           />
         )}
@@ -302,6 +387,39 @@ export default function Page() {
             zoneCount={meta.scope.zone_count}
             scopeLabel={meta.scope.label}
             hovered={hovered}
+          />
+        )}
+        {ready && (
+          <HistoryPanel
+            series={history}
+            mode={selectedZone !== null ? "zone" : historyMode}
+            onModeChange={(m) => {
+              setSelectedZone(null);
+              setHistoryMode(m);
+            }}
+            range={range}
+            onRangeChange={setRange}
+            day={day}
+            epoch={meta.day_epoch}
+            title={
+              selectedZone !== null
+                ? names[selectedZone] || `Zone ${selectedZone}`
+                : historyMode === "viewport"
+                  ? "Bots in view"
+                  : `Bots · ${meta.scope.label}`
+            }
+            subtitle={
+              selectedZone !== null
+                ? "Single zone"
+                : historyMode === "viewport"
+                  ? "Current map bounds"
+                  : `${(meta.scope.zone_count / 1000).toFixed(0)}K zones`
+            }
+            status={historyStatus}
+            onClose={() => {
+              setSelectedZone(null);
+              setHistoryMode("scope");
+            }}
           />
         )}
         {status && (

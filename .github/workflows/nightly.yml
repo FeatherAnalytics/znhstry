@@ -1,28 +1,22 @@
-name: Nightly update
+name: Nightly data update
 
-# Rebuilds from a small incremental fetch, pushes the data to object storage
-# and the site to an orphan branch.
-#
-# The orphan force-push keeps the deploy branch permanently one commit deep.
-# That mattered enormously when the payloads were in the site bundle; now that
-# they live in a bucket the branch is about a megabyte, and this is just tidy.
-#
-# The two halves can be out of step for a moment: the bucket is written first
-# and its manifest last, so a site build that lands mid-upload still reads a
-# manifest whose every shard exists.
+# Data only. The site is static and fetches its payloads from object storage at
+# runtime, so refreshing the data needs no rebuild and no deploy - see
+# deploy.yml, which runs on code changes instead.
 
 on:
   schedule:
-    # 09:17 UTC, comfortably after QONQR publishes its daily CSVs. Off the hour
-    # because everything on GitHub's cron queues up there.
+    # 09:17 UTC. Upstream publishes at 00:02, 01:03 and 12:02 UTC, so this sits
+    # comfortably after the day's first two runs. Off the hour because
+    # everything on GitHub's cron queues up there.
     - cron: "17 9 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
-# Never let two runs extract at once -- the upstream endpoint is a shared
-# research box and concurrent runs would double our request rate.
+# Never let two runs extract at once: the upstream endpoint is a shared research
+# box and concurrent runs would double our request rate against it.
 concurrency:
   group: nightly
   cancel-in-progress: false
@@ -30,7 +24,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -39,15 +33,9 @@ jobs:
         with:
           enable-cache: true
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      # Carries data/raw between runs so the nightly fetch is ~16 requests
-      # instead of 88. A miss just means a full extraction, which is correct
-      # but slower and heavier on upstream -- so the key rolls every run and
+      # Carries data/raw between runs so the nightly fetch is ~17 requests
+      # instead of 88. A miss just means a full extraction, which is correct but
+      # slower and heavier on upstream, so the key rolls every run and
       # restore-keys picks up the most recent.
       - name: Restore extracted data
         uses: actions/cache@v4
@@ -68,13 +56,14 @@ jobs:
 
       - name: Export payloads
         working-directory: pipeline
-        run: |
-          uv run python -m znhstry export --scope global
+        run: uv run python -m znhstry export
 
-      # The data goes to object storage, not into the site, because it needs
-      # response headers a static host cannot set: Content-Encoding: br, and a
-      # year-long immutable Cache-Control on shards that never change. It also
-      # keeps ~100MB of nightly-rewritten binaries out of the deploy branch.
+      # The data goes to object storage rather than into the site because it
+      # needs response headers a static host cannot set: Content-Encoding: br,
+      # and a year-long immutable Cache-Control on shards that never change.
+      #
+      # Only objects whose ETag differs are sent, so a nightly run pushes a few
+      # megabytes rather than the whole 96.
       - name: Upload data
         working-directory: pipeline
         env:
@@ -84,8 +73,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: uv run python -m znhstry upload
 
-      # A missing R2 credential would otherwise produce a site pointing at an
-      # empty bucket, which looks like a code bug rather than a config one.
       - name: Check the manifest is reachable
         env:
           DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
@@ -93,27 +80,5 @@ jobs:
           curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
             || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
 
-      - name: Build site
-        working-directory: web
-        env:
-          NEXT_PUBLIC_BASE_PATH: /znhstry
-          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
-        run: |
-          npm ci
-          npm run build
-
       - name: Report sizes
-        run: |
-          du -sh web/out
-          du -sh dist/data/global/* | sort -h
-
-      - name: Deploy
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: web/out
-          publish_branch: gh-pages
-          # The whole point: one commit, always. Without this the branch
-          # accumulates ~70MB a month of undeltable binaries.
-          force_orphan: true
-          commit_message: "data: nightly update ${{ github.run_number }}"
+        run: du -sh dist/data/global/* | sort -h

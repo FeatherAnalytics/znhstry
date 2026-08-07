@@ -1,0 +1,71 @@
+name: Deploy to GitHub Pages
+
+# The site only. It reads its payloads from object storage at runtime, so a data
+# refresh does not require a rebuild and this runs on code changes alone.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Type check
+        run: npx tsc --noEmit
+        working-directory: web
+
+      - name: Build static export
+        run: npm run build
+        working-directory: web
+        env:
+          NEXT_PUBLIC_BASE_PATH: /znhstry
+          # Where the browser fetches payloads from. Set as a repository
+          # variable, not a secret: it is a public URL the page exposes anyway.
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+
+      # A site built against an empty or missing origin looks like a code bug
+      # rather than a configuration one, so fail here instead.
+      - name: Check the data origin is reachable
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: |
+          test -n "$DATA_ORIGIN" || { echo "::error::DATA_ORIGIN variable is not set"; exit 1; }
+          curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
+            || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

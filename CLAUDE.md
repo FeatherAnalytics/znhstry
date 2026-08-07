@@ -581,20 +581,33 @@ rather than reaching across an ocean.
 ### Immutability and nightly updates
 
 `dist/` is gitignored and the nightly run uploads it. A bucket has no history, so git bloat
-is not a concern, but the two rules below are what make `Cache-Control: immutable` honest.
+is not a concern.
 
-1. **Every shard should be immutable once written.** A past year's `display/` shard, a past
-   anchor and most `zone_history/` blocks never change again.
+1. **Shard names are stable, so `Cache-Control` is what decides correctness.**
+   `immutable` is a promise that the bytes at a URL will never change, and the browser holds
+   it for the full year without asking again — a hard reload does not override it. Marking a
+   shard that churns as immutable means a returning reader keeps yesterday's map.
 
-   Two deliberate exceptions, both "state as of now": `paint/` (0.73 MB) and the current
-   year's `display/` shard. `zone_history/` blocks holding a zone that moved today are
-   rewritten too — a nightly run touches roughly the 2,000–3,100 zones with events,
-   scattered across blocks, so expect a slice of that 37.2 MB to churn. Shard by year within
-   a block if that ever matters.
+   `upload.py`'s `_cache_control` sets it per object:
 
-   Sharding `display/` by year rather than by month is a deliberate trade the other way: a
-   month grain would churn less nightly but make landing on a date cost up to twelve fetches
-   instead of one.
+   | | Cache-Control | Why |
+   |---|---|---|
+   | `tiles/`, `terrain/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels; rewritten byte-identically every run |
+   | `display/YYYY` and `anchor_YYYY` for a **past** year | immutable, 1 year | finished history |
+   | `paint/`, `display/<current year>`, `zone_history/`, `series/` | `max-age=300, must-revalidate` | rewritten nightly under the same name |
+   | `meta.json` | `max-age=60` | how a client discovers everything else |
+
+   A 304 carries no body, so the cost of revalidating is a header exchange, not a
+   re-download.
+
+   The ETag skip compares *bodies*, not headers, so changing this policy does not restamp
+   objects whose bytes are unchanged. `ZNHSTRY_UPLOAD_FORCE=1` re-sends everything; it is
+   only needed after editing `_cache_control`.
+
+   Sharding `display/` by year rather than by month is a deliberate trade: a month grain
+   would churn less nightly but make landing on a date cost up to twelve fetches instead of
+   one. A nightly run touches roughly the 2,000–3,100 zones with events, scattered across
+   `zone_history/` blocks, so expect a slice of that 37.2 MB to churn.
 
 2. **`idx` is a permanent handle, not a row number.** It is assigned once and preserved
    across runs by reading the previous `zone_ids.bin.br`, which stores `zone_id` per index

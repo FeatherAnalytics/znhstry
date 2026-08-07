@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -9,6 +10,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 DATA = ROOT / "data"
 RAW = DATA / "raw"
+
+
+def _load_root_env() -> None:
+    """Read the repo-root `.env` into the environment, without overriding it.
+
+    The same file `next.config.ts` reads, so credentials and the data origin are
+    configured in exactly one place. Parsed by hand rather than with a
+    dependency: it is a dozen `KEY=value` lines and the alternative is pulling
+    python-dotenv in for them.
+
+    Anything already set wins, so CI - which passes these as workflow secrets and
+    writes no file - is unaffected.
+    """
+    path = ROOT / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip().strip("'\"")
+        os.environ.setdefault(key, value)
+
+
+_load_root_env()
 
 API_BASE = "https://api-proxy.auckland-cer.cloud.edu.au/QONQR/"
 

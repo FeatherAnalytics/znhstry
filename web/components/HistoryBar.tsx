@@ -33,12 +33,14 @@ interface Props {
   gapYear?: number;
   playing?: boolean;
   onTogglePlay?: () => void;
+  /** Rendered inside the bottom sheet rather than as the page's own footer. */
+  compact?: boolean;
 }
 
 const CHART_HEIGHT = 104;
 const Y_GUTTER = 52;
 
-function compact(value: number): string {
+function compactNumber(value: number): string {
   const sign = value < 0 ? "-" : "";
   const v = Math.abs(value);
   if (v >= 1e9) return `${sign}${(v / 1e9).toFixed(2)}B`;
@@ -84,6 +86,7 @@ export function HistoryBar({
   gapYear,
   playing,
   onTogglePlay,
+  compact = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -164,7 +167,7 @@ export function HistoryBar({
       ctx.lineTo(plotWidth, y);
       ctx.stroke();
       ctx.fillStyle = "rgba(124,135,152,0.95)";
-      ctx.fillText(compact(v), plotWidth + 5, y);
+      ctx.fillText(compactNumber(v), plotWidth + 5, y);
     }
 
     ctx.lineJoin = "round";
@@ -329,12 +332,25 @@ export function HistoryBar({
   return (
     <section
       style={{
-        borderTop: "1px solid var(--hairline)",
-        background: "var(--ink)",
-        padding: "10px 18px 6px",
+        // Inside the sheet the surrounding panel already supplies the edge and
+        // the ground, so the chart contributes neither.
+        borderTop: compact ? "none" : "1px solid var(--hairline)",
+        background: compact ? "transparent" : "var(--ink)",
+        padding: compact ? "0 16px 8px" : "10px 18px 6px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: compact ? 10 : 14,
+          marginBottom: 6,
+          // The header reads title, figure, subtitle, controls. At 390px that
+          // is 1,000px of content, and letting it wrap turned the subtitle into
+          // seven lines. Wrapping the *row* keeps each part whole.
+          flexWrap: compact ? "wrap" : "nowrap",
+        }}
+      >
         {onTogglePlay && (
           <button
             onClick={onTogglePlay}
@@ -367,7 +383,7 @@ export function HistoryBar({
         )}
         <span className="eyebrow">{title}</span>
         <span className="display tabular" style={{ fontSize: 19, lineHeight: 1 }}>
-          {compact(total)}
+          {compactNumber(total)}
         </span>
         <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
           {subtitle}
@@ -450,7 +466,7 @@ export function HistoryBar({
                 />
                 <span style={{ color: "var(--text-dim)", flex: 1 }}>{row.label}</span>
                 <span className="tabular" style={{ fontWeight: 600 }}>
-                  {compact(row.value)}
+                  {compactNumber(row.value)}
                 </span>
               </div>
             ))}

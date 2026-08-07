@@ -10,6 +10,13 @@ interface Props {
   onUncapped: (show: boolean) => void;
   /** True while the view's zones are still being worked out. */
   pending: boolean;
+  /**
+   * Scroll the row instead of wrapping it.
+   *
+   * At 390px the full row is 1,022px wide. Wrapping would push the map off the
+   * screen; scrolling keeps every control one swipe away and the map intact.
+   */
+  scrollable?: boolean;
 }
 
 const chip = (active: boolean): React.CSSProperties => ({
@@ -28,10 +35,34 @@ const chip = (active: boolean): React.CSSProperties => ({
  * Pairing a window with a separate "show everything" toggle makes half the
  * combinations duplicates and implies the window means something it doesn't.
  */
-export function WindowPicker({ view, onView, uncapped, onUncapped, pending }: Props) {
+export function WindowPicker({
+  view,
+  onView,
+  uncapped,
+  onUncapped,
+  pending,
+  scrollable = false,
+}: Props) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <div style={{ display: "flex", gap: 2 }} role="group" aria-label="View">
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        ...(scrollable
+          ? {
+              overflowX: "auto",
+              overflowY: "hidden",
+              // The row is the full width of the header, and its own padding
+              // keeps the first and last chip clear of the screen edge.
+              padding: "0 12px",
+              scrollbarWidth: "none",
+              WebkitOverflowScrolling: "touch",
+            }
+          : null),
+      }}
+    >
+      <div style={{ display: "flex", gap: 2, flexShrink: 0 }} role="group" aria-label="View">
         {VIEWS.map((v) => (
           <button
             key={v.key}
@@ -62,7 +93,7 @@ export function WindowPicker({ view, onView, uncapped, onUncapped, pending }: Pr
         className="eyebrow"
         onClick={() => onUncapped(!uncapped)}
         aria-pressed={uncapped}
-        style={chip(uncapped)}
+        style={{ ...chip(uncapped), flexShrink: 0 }}
         title="Draw zones holding no bots, including the 1.09M never played"
       >
         Empty zones

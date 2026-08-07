@@ -47,11 +47,20 @@ interface Props {
   changeLabel: string | null;
   /** True while the exact counts for this selection are still being read. */
   pending: boolean;
+  /**
+   * Rendered inside the bottom sheet rather than floating over the map.
+   *
+   * The floating card is 268px, which is 69% of a 390px screen — it stops being
+   * an overlay and becomes the page. In the sheet it is just content: full
+   * width, no chrome of its own, and the date lives in the sheet's summary line
+   * so it is not repeated here.
+   */
+  compact?: boolean;
 }
 
 const FACTION_NAMES = ["Uncaptured", "Legion", "Swarm", "Faceless"];
 
-function compact(value: number): string {
+export function compactNumber(value: number): string {
   if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
   if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
   if (value >= 1e3) return `${(value / 1e3).toFixed(0)}K`;
@@ -87,6 +96,7 @@ export function StatsPanel({
   stateReady,
   changeLabel,
   pending,
+  compact = false,
 }: Props) {
   // Bars are shares of the movement, so a negative faction gets no bar rather
   // than a nonsensical negative width.
@@ -95,38 +105,45 @@ export function StatsPanel({
 
   return (
     <aside
-      style={{
-        position: "absolute",
-        top: 16,
-        right: 16,
-        width: 268,
-        padding: "16px 18px 18px",
-        background: "rgba(14,18,24,0.82)",
-        backdropFilter: "var(--panel-blur)",
-        WebkitBackdropFilter: "var(--panel-blur)",
-        border: "1px solid var(--hairline-bright)",
-        zIndex: 10,
-      }}
+      style={
+        compact
+          ? { padding: "0 16px 16px" }
+          : {
+              position: "absolute",
+              top: 16,
+              right: 16,
+              width: 268,
+              padding: "16px 18px 18px",
+              background: "rgba(14,18,24,0.82)",
+              backdropFilter: "var(--panel-blur)",
+              WebkitBackdropFilter: "var(--panel-blur)",
+              border: "1px solid var(--hairline-bright)",
+              zIndex: 10,
+            }
+      }
     >
       <div className="eyebrow">{scopeLabel}</div>
-      <div
-        className="display tabular"
-        style={{ fontSize: 26, lineHeight: 1.1, margin: "6px 0 2px" }}
-      >
-        {date.toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-          timeZone: "UTC",
-        })}
-      </div>
+      {/* The sheet's summary line already carries the date. */}
+      {!compact && (
+        <div
+          className="display tabular"
+          style={{ fontSize: 26, lineHeight: 1.1, margin: "6px 0 2px" }}
+        >
+          {date.toLocaleDateString("en-GB", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            timeZone: "UTC",
+          })}
+        </div>
+      )}
       {/* Zones holding bots right now, against every zone on the map -
           including the 1.09M that have never been played, which are part of
           the world and part of the denominator. */}
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
         {changeLabel ? (
           <>
-            {pending ? "Reading" : `${compact(totals.held)} zones moved`} &middot; {changeLabel}
+            {pending ? "Reading" : `${compactNumber(totals.held)} zones moved`} &middot; {changeLabel}
           </>
         ) : (
           <>
@@ -135,8 +152,8 @@ export function StatsPanel({
                 still the global figure, and pairing it with the selection's
                 zone count reads as "1.6M of 147K occupied". Show one or the
                 other, never a mismatched pair. */}
-            {stateReady && !pending ? `${compact(totals.held)} of ` : ""}
-            {compact(zoneCount)} zones
+            {stateReady && !pending ? `${compactNumber(totals.held)} of ` : ""}
+            {compactNumber(zoneCount)} zones
             {pending ? " · reading" : stateReady ? " occupied" : " · reading state"}
           </>
         )}
@@ -160,7 +177,7 @@ export function StatsPanel({
                 ) : (
                   <>
                     {changeLabel && value > 0 ? "+" : ""}
-                    {compact(value)}
+                    {compactNumber(value)}
                   </>
                 )}
               </span>
@@ -196,7 +213,7 @@ export function StatsPanel({
             )}
             <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
               {hovered.total > 0
-                ? `${FACTION_NAMES[hovered.faction]} · ${hovered.approximate ? "~" : ""}${compact(hovered.total)} bots`
+                ? `${FACTION_NAMES[hovered.faction]} · ${hovered.approximate ? "~" : ""}${compactNumber(hovered.total)} bots`
                 : hovered.everActive
                   ? "Empty · fought over before"
                   : "Never played"}
@@ -208,7 +225,9 @@ export function StatsPanel({
             </div>
           </>
         ) : (
-          <div className="eyebrow">Hover a zone</div>
+          // No hover on a touch screen, and the compact layout is where those
+          // land, so the instruction has to match the gesture that works.
+          <div className="eyebrow">{compact ? "Tap a zone" : "Hover a zone"}</div>
         )}
       </div>
     </aside>

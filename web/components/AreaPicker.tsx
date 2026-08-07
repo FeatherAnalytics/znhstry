@@ -81,7 +81,12 @@ const control: React.CSSProperties = {
   font: "inherit",
   fontSize: 12,
   padding: "5px 9px",
+  // Shrinks with the header rather than forcing the title to wrap. 190px is
+  // what it wants; on a phone it takes whatever is left after the title and
+  // the locate button.
   width: 190,
+  minWidth: 0,
+  flexShrink: 1,
 };
 
 export function AreaPicker({ lookups, geometry, version, selected, onSelect }: Props) {

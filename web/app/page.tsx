@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
-import { StatsPanel, type HoveredZone, type Totals } from "@/components/StatsPanel";
+import {
+  StatsPanel,
+  compactNumber,
+  type HoveredZone,
+  type Totals,
+} from "@/components/StatsPanel";
 import { AreaPicker, type Area } from "@/components/AreaPicker";
 import { LoadStatus } from "@/components/LoadStatus";
 import { dayToDate, zoneIdentity } from "@/lib/data";
@@ -29,6 +34,8 @@ import {
 import { zoneBlock, zoneCountsAt, zoneSeries } from "@/lib/zoneHistory";
 import { loadNames } from "@/lib/names";
 import { useZoneData } from "@/lib/useZoneData";
+import { useCompact } from "@/lib/useCompact";
+import { BottomSheet, type SheetStop } from "@/components/BottomSheet";
 import { chartSpanOf, readModeOf, windowPhrase, type ViewKey } from "@/lib/windows";
 import { WindowPicker } from "@/components/WindowPicker";
 
@@ -72,6 +79,9 @@ export default function Page() {
   // roughly 2,000-3,100 zones - and it is what the map is for.
   const [view, setView] = useState<ViewKey>("day");
   const [uncapped, setUncapped] = useState(false);
+
+  const compact = useCompact();
+  const [sheetStop, setSheetStop] = useState<SheetStop>("peek");
 
   const span = chartSpanOf(view);
   const readMode = readModeOf(view);
@@ -501,63 +511,200 @@ export default function Page() {
 
   const ready = meta && geometry && display && day !== null && dayBounds;
 
+  const locateButton = (
+    <button
+      className="eyebrow"
+      onClick={home ? clearFocus : locate}
+      disabled={geoStatus === "asking"}
+      style={{
+        border: "1px solid var(--hairline-bright)",
+        background: home ? "var(--hairline)" : "rgba(14,18,24,0.82)",
+        padding: "6px 10px",
+        color: geoStatus === "denied" ? "var(--text-dim)" : "var(--text)",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+      title={
+        geoStatus === "denied"
+          ? "Location permission was declined. Enable it in the address bar to use this."
+          : "Centre the map on you and ring 1000 miles"
+      }
+    >
+      {geoStatus === "asking"
+        ? "Locating…"
+        : geoStatus === "denied"
+          ? "Location blocked"
+          : home
+            ? "Clear location"
+            : "Near me"}
+    </button>
+  );
+
+  const areaPicker = (
+    <AreaPicker
+      lookups={lookups}
+      geometry={geometry}
+      version={data.version}
+      selected={area}
+      onSelect={gotoArea}
+    />
+  );
+
+  const statsPanel = ready ? (
+    <StatsPanel
+      date={dayToDate(meta.day_epoch, day)}
+      totals={shown.totals}
+      previous={previous}
+      zoneCount={shown.count ?? meta.scope.zone_count}
+      activeCount={meta.scope.active_count}
+      scopeLabel={focusLabel ?? meta.scope.label}
+      hovered={hovered}
+      stateReady={!shown.pending}
+      changeLabel={changing ? `Net change ${windowPhrase(span)}` : null}
+      pending={shown.pending}
+      compact={compact}
+    />
+  ) : null;
+
+  const historyBar = ready ? (
+    <HistoryBar
+      series={history}
+      mode={historyMode}
+      onModeChange={(m) => {
+        clearFocus();
+        setHistoryMode(m);
+      }}
+      span={span}
+      onSpan={changeView}
+      day={day}
+      minDay={dayBounds.min}
+      maxDay={dayBounds.max}
+      onScrub={data.setDay}
+      epoch={meta.day_epoch}
+      title={
+        selectedZone !== null
+          ? geometry.names[selectedZone] || `Zone ${selectedZone}`
+          : area
+            ? area.label
+            : home
+              ? "Bots near you"
+              : historyMode === "viewport"
+                ? "Bots in view"
+                : "Bots"
+      }
+      subtitle={
+        approximate
+          ? `${focusLabel ?? "Current map bounds"} · to the nearest degree`
+          : (focusLabel ?? `${(meta.scope.active_count / 1e6).toFixed(1)}M played zones`)
+      }
+      status={historyStatus}
+      onClearFocus={clearFocus}
+      gapYear={COLLECTION_GAP_YEAR}
+      playing={playing}
+      onTogglePlay={() => {
+        // Pressing play at the end of the record replays it rather than doing
+        // nothing, which is what a play button at the end should do.
+        if (!playing && day >= dayBounds.max) data.setDay(dayBounds.min);
+        setPlaying((p) => !p);
+      }}
+      compact={compact}
+    />
+  ) : null;
+
+  /** The line the sheet always shows, at every stop. */
+  const sheetSummary = ready ? (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+      <span className="display tabular" style={{ fontSize: 17, whiteSpace: "nowrap" }}>
+        {dayToDate(meta.day_epoch, day).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          timeZone: "UTC",
+        })}
+      </span>
+      <span
+        className="eyebrow"
+        style={{
+          color: "var(--text-dim)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {changing
+          ? `${compactNumber(shown.totals.held)} moved`
+          : `${compactNumber(shown.totals.held)} occupied`}
+        {" · "}
+        {compactNumber(
+          shown.totals.legion + shown.totals.swarm + shown.totals.faceless,
+        )}{" "}
+        bots
+      </span>
+    </div>
+  ) : null;
+
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
       <header
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 14,
-          padding: "10px 18px",
+          gap: compact ? 8 : 14,
+          padding: compact ? "8px 0 8px" : "10px 18px",
           borderBottom: "1px solid var(--hairline)",
+          flexWrap: compact ? "wrap" : "nowrap",
+          flexShrink: 0,
         }}
       >
-        <span className="display" style={{ fontSize: 16 }}>
-          Zone History
-        </span>
-        <span className="eyebrow">{meta?.scope.label ?? " "}</span>
-
-        <div style={{ flex: 1 }} />
-
-        <WindowPicker
-          view={view}
-          onView={changeView}
-          uncapped={uncapped}
-          onUncapped={setUncapped}
-          pending={changing && data.shown === null}
-        />
-
-        <AreaPicker
-          lookups={lookups}
-          geometry={geometry}
-          version={data.version}
-          selected={area}
-          onSelect={gotoArea}
-        />
-        <button
-          className="eyebrow"
-          onClick={home ? clearFocus : locate}
-          disabled={geoStatus === "asking"}
-          style={{
-            border: "1px solid var(--hairline-bright)",
-            background: home ? "var(--hairline)" : "rgba(14,18,24,0.82)",
-            padding: "6px 10px",
-            color: geoStatus === "denied" ? "var(--text-dim)" : "var(--text)",
-          }}
-          title={
-            geoStatus === "denied"
-              ? "Location permission was declined. Enable it in the address bar to use this."
-              : "Centre the map on you and ring 1000 miles"
-          }
-        >
-          {geoStatus === "asking"
-            ? "Locating…"
-            : geoStatus === "denied"
-              ? "Location blocked"
-              : home
-                ? "Clear location"
-                : "Near me"}
-        </button>
+        {compact ? (
+          <>
+            {/* Title row, then the controls get the full width to scroll in. */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                gap: 8,
+                width: "100%",
+                padding: "0 12px",
+              }}
+            >
+              <span
+                className="display"
+                style={{ fontSize: 15, whiteSpace: "nowrap", flexShrink: 0 }}
+              >
+                Zone History
+              </span>
+              <div style={{ flex: 1, minWidth: 8 }} />
+              {areaPicker}
+              {locateButton}
+            </div>
+            <WindowPicker
+              view={view}
+              onView={changeView}
+              uncapped={uncapped}
+              onUncapped={setUncapped}
+              pending={changing && data.shown === null}
+              scrollable
+            />
+          </>
+        ) : (
+          <>
+            <span className="display" style={{ fontSize: 16 }}>
+              Zone History
+            </span>
+            <span className="eyebrow">{meta?.scope.label ?? " "}</span>
+            <div style={{ flex: 1 }} />
+            <WindowPicker
+              view={view}
+              onView={changeView}
+              uncapped={uncapped}
+              onUncapped={setUncapped}
+              pending={changing && data.shown === null}
+            />
+            {areaPicker}
+            {locateButton}
+          </>
+        )}
       </header>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
@@ -574,75 +721,35 @@ export default function Page() {
             onViewStateChange={setViewState}
             onHover={handleHover}
             onClickZone={(idx) => {
+              // A touch screen has no hover, so the tap has to do both jobs:
+              // name the zone and select it. On a pointer device the readout is
+              // already showing, and setting it again costs nothing.
+              handleHover(idx);
               setSelectedZone(idx);
               setHistoryMode(idx !== null ? "zone" : area ? "area" : "scope");
+              if (compact && idx !== null) setSheetStop("half");
             }}
             onBounds={(b) => {
               viewportBounds.current = b;
             }}
           />
         )}
-        {ready && (
-          <StatsPanel
-            date={dayToDate(meta.day_epoch, day)}
-            totals={shown.totals}
-            previous={previous}
-            zoneCount={shown.count ?? meta.scope.zone_count}
-            activeCount={meta.scope.active_count}
-            scopeLabel={focusLabel ?? meta.scope.label}
-            hovered={hovered}
-            stateReady={!shown.pending}
-            changeLabel={changing ? `Net change ${windowPhrase(span)}` : null}
-            pending={shown.pending}
-          />
-        )}
+
+        {/* Wide: the panel floats over the map and the chart is the page's
+            footer. Compact: both live in a sheet the reader drags up, so the
+            map keeps the screen until they ask for numbers. */}
+        {!compact && statsPanel}
         <LoadStatus progress={progress} totalZones={meta?.scope.zone_count ?? 0} />
+
+        {compact && ready && (
+          <BottomSheet stop={sheetStop} onStop={setSheetStop} summary={sheetSummary}>
+            {statsPanel}
+            {sheetStop === "full" && historyBar}
+          </BottomSheet>
+        )}
       </div>
 
-      {ready && (
-        <HistoryBar
-          series={history}
-          mode={historyMode}
-          onModeChange={(m) => {
-            clearFocus();
-            setHistoryMode(m);
-          }}
-          span={span}
-          onSpan={changeView}
-          day={day}
-          minDay={dayBounds.min}
-          maxDay={dayBounds.max}
-          onScrub={data.setDay}
-          epoch={meta.day_epoch}
-          title={
-            selectedZone !== null
-              ? geometry.names[selectedZone] || `Zone ${selectedZone}`
-              : area
-                ? area.label
-                : home
-                  ? "Bots near you"
-                  : historyMode === "viewport"
-                    ? "Bots in view"
-                    : "Bots"
-          }
-          subtitle={
-            approximate
-              ? `${focusLabel ?? "Current map bounds"} · to the nearest degree`
-              : (focusLabel ??
-                `${(meta.scope.active_count / 1e6).toFixed(1)}M played zones`)
-          }
-          status={historyStatus}
-          onClearFocus={clearFocus}
-          gapYear={COLLECTION_GAP_YEAR}
-          playing={playing}
-          onTogglePlay={() => {
-            // Pressing play at the end of the record replays it rather than
-            // doing nothing, which is what a play button at the end should do.
-            if (!playing && day >= dayBounds.max) data.setDay(dayBounds.min);
-            setPlaying((p) => !p);
-          }}
-        />
-      )}
+      {!compact && historyBar}
     </main>
   );
 }

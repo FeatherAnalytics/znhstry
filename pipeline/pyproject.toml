@@ -9,6 +9,8 @@ dependencies = [
     "duckdb>=1.1",
     "numpy>=2.1",
     "brotli>=1.2.0",
+    # R2 is S3-compatible; `znhstry upload` talks to it through boto3.
+    "boto3>=1.35",
 ]
 
 [build-system]

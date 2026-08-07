@@ -550,6 +550,13 @@ export default function Page() {
     />
   );
 
+  const togglePlay = () => {
+    // Pressing play at the end of the record replays it rather than doing
+    // nothing, which is what a play button at the end should do.
+    if (!playing && day !== null && dayBounds && day >= dayBounds.max) data.setDay(dayBounds.min);
+    setPlaying((p) => !p);
+  };
+
   const statsPanel = ready ? (
     <StatsPanel
       date={dayToDate(meta.day_epoch, day)}
@@ -601,19 +608,34 @@ export default function Page() {
       onClearFocus={clearFocus}
       gapYear={COLLECTION_GAP_YEAR}
       playing={playing}
-      onTogglePlay={() => {
-        // Pressing play at the end of the record replays it rather than doing
-        // nothing, which is what a play button at the end should do.
-        if (!playing && day >= dayBounds.max) data.setDay(dayBounds.min);
-        setPlaying((p) => !p);
-      }}
+      onTogglePlay={togglePlay}
       compact={compact}
     />
   ) : null;
 
   /** The line the sheet always shows, at every stop. */
   const sheetSummary = ready ? (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+      {/* Playback lives here, not only in the chart. The chart is inside the
+          sheet and only rendered at its tallest stop, which buried the one
+          control worth having over a full-screen map two drags deep. */}
+      <button
+        onClick={togglePlay}
+        aria-label={playing ? "Pause playback" : "Play the history forward"}
+        aria-pressed={playing}
+        style={{
+          width: 30,
+          height: 30,
+          flexShrink: 0,
+          border: "1px solid var(--hairline-bright)",
+          background: playing ? "var(--hairline)" : "transparent",
+          color: "var(--text)",
+          fontSize: 12,
+          lineHeight: 1,
+        }}
+      >
+        {playing ? "❙❙" : "▶"}
+      </button>
       <span className="display tabular" style={{ fontSize: 17, whiteSpace: "nowrap" }}>
         {dayToDate(meta.day_epoch, day).toLocaleDateString("en-GB", {
           day: "2-digit",

@@ -6,10 +6,19 @@ name: Nightly data update
 
 on:
   schedule:
-    # 09:17 UTC. Upstream publishes at 00:02, 01:03 and 12:02 UTC, so this sits
-    # comfortably after the day's first two runs. Off the hour because
-    # everything on GitHub's cron queues up there.
-    - cron: "17 9 * * *"
+    # 02:15 UTC, which is as early as this can usefully run.
+    #
+    # QONQR publishes a day's batch just after midnight on the *following* day,
+    # not during the day itself: checked at 23:23 UTC, the newest upstream event
+    # was 00:01:21 that same morning and nothing had been added since, even
+    # though upstream's 12:02 run had been and gone. So day D is complete
+    # upstream by the 01:03 UTC run on D+1, and everything after that adds
+    # nothing until the next midnight.
+    #
+    # Off the hour because everything on GitHub's cron queues up there, and a
+    # late start only helps. Any row that does arrive late is picked up anyway:
+    # `extract_update` refetches the whole current month every run.
+    - cron: "15 2 * * *"
   workflow_dispatch:
 
 permissions:

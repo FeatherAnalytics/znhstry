@@ -44,30 +44,25 @@ ZONE_ID_HEADROOM = 200_000
 # --- Export ---------------------------------------------------------------
 
 DUCKDB_PATH = DATA / "znhstry.duckdb"
-WEB_DATA = ROOT / "web" / "public" / "data"
+
+# The export is served from object storage, not from the site bundle, because
+# it needs response headers the site's host cannot set: `Content-Encoding: br`
+# (18% smaller than gzip, and the browser decompresses it, so the client needs
+# no decoding code at all) and a year-long immutable `Cache-Control` on the
+# shards that never change. It also keeps 105 MB of nightly-rewritten binaries
+# out of the site build entirely.
+WEB_DATA = ROOT / "dist" / "data"
 
 EARTH_RADIUS_KM = 6371.0088
-
-# Checkpoints, events and chart series shard by web-mercator tile so a viewport
-# fetches only what it can see. Zoom 4 measured best: 128 of the 256 tiles hold
-# any zone at all, and the heaviest (North America, x=8 y=5) is 19% of zones and
-# 27% of events -- a real cut without splitting into thousands of tiny files.
-#
-# Tile assignment derives from latitude and longitude, which never change, so a
-# zone's tile is stable forever. That is what lets the shards stay immutable.
-TILE_ZOOM = 4
-# Web mercator is undefined at the poles; this is where the projection is
-# conventionally truncated to make the world square.
-MERCATOR_LAT_LIMIT = 85.05112878
 
 
 @dataclass(frozen=True)
 class Scope:
     """A geographic slice to export.
 
-    `global` is the destination; the Dallas radius is a smaller fixture to
-    develop the viewer against. Both go through the same code path so nothing
-    has to be rewritten to scale up.
+    The radius fields are kept because `_create_scope` still implements the
+    haversine filter, but nothing sets them: the site is global and a partial
+    export was only ever a way to iterate faster before the format was settled.
     """
 
     name: str
@@ -76,24 +71,16 @@ class Scope:
     lon: float | None = None
     radius_km: float | None = None
     # 1,087,353 zones have never recorded a single bot in fourteen years. They
-    # cannot render and cannot be queried usefully, so they are excluded by
-    # default -- a 40% cut to the two largest global payloads.
-    active_only: bool = True
+    # carry no history, but they are real places on the map and the viewer draws
+    # them as faint grey dots so the world is whole rather than only showing
+    # where the fighting was. They ride in the lowest-priority geometry tiles
+    # and never appear in the display stream.
+    active_only: bool = False
 
 
-SCOPES = {
-    # Dallas, TX is ZoneId 1529645, the largest zone in Texas by an order of magnitude.
-    "dallas-1000mi": Scope(
-        name="dallas-1000mi",
-        label="Dallas, TX - 1000 miles",
-        lat=32.7831,
-        lon=-96.8067,
-        radius_km=1609.344,  # 1000 statute miles
-    ),
-    "global": Scope(name="global", label="Global"),
-}
+SCOPES = {"global": Scope(name="global", label="Global")}
 
-DEFAULT_SCOPE = "dallas-1000mi"
+DEFAULT_SCOPE = "global"
 
 # Day numbers in the packed event stream count from here, so they fit a uint16
 # (max 65,535 days ~ 179 years of headroom).

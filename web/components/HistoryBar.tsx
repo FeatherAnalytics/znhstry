@@ -1,26 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { dayToDate } from "@/lib/data";
-import type { HistorySeries } from "@/lib/history";
+import type { HistorySeries } from "@/lib/series";
+import { windowDays, windowPhrase, type WindowKey } from "@/lib/windows";
 
-export type HistoryMode = "scope" | "viewport" | "zone";
+/**
+ * What the chart is counting.
+ *
+ * `scope` and `viewport` are chosen from the toggle. `zone` and `area` are
+ * entered by clicking a dot or picking a country, and are left by clearing
+ * them, so they are not offered as buttons.
+ */
+export type HistoryMode = "scope" | "viewport" | "zone" | "area";
 
-export const RANGES = [
-  { key: "all", label: "All", days: Infinity },
-  { key: "5y", label: "5Y", days: 1826 },
-  { key: "1y", label: "1Y", days: 365 },
-  { key: "90d", label: "90D", days: 90 },
-] as const;
-
-export type RangeKey = (typeof RANGES)[number]["key"];
 
 interface Props {
   series: HistorySeries | null;
   mode: HistoryMode;
   onModeChange: (mode: HistoryMode) => void;
-  range: RangeKey;
-  onRangeChange: (range: RangeKey) => void;
+  span: WindowKey;
+  onSpan: (span: WindowKey) => void;
   day: number;
   minDay: number;
   maxDay: number;
@@ -29,8 +29,10 @@ interface Props {
   title: string;
   subtitle: string;
   status: string | null;
-  onClearZone?: () => void;
+  onClearFocus?: () => void;
   gapYear?: number;
+  playing?: boolean;
+  onTogglePlay?: () => void;
 }
 
 const CHART_HEIGHT = 104;
@@ -68,8 +70,8 @@ export function HistoryBar({
   series,
   mode,
   onModeChange,
-  range,
-  onRangeChange,
+  span,
+  onSpan,
   day,
   minDay,
   maxDay,
@@ -78,19 +80,25 @@ export function HistoryBar({
   title,
   subtitle,
   status,
-  onClearZone,
+  onClearFocus,
   gapYear,
+  playing,
+  onTogglePlay,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
+  // Hovering reads a date; clicking commits it. There is no drag: the old
+  // pointer-drag scrub needed an ew-resize cursor, which made a chart look
+  // like a scrollbar.
+  const [hoverDay, setHoverDay] = useState<number | null>(null);
 
-  const windowDays = RANGES.find((r) => r.key === range)!.days;
+  const visibleDays = windowDays(span);
   // The visible window ends at the playhead, so scrubbing back walks the
   // window with it. Selecting All restores whole-record navigation.
   const viewEnd = day;
-  const viewStart = Math.max(minDay, windowDays === Infinity ? minDay : day - windowDays);
-  const span = Math.max(1, viewEnd - viewStart);
+  const viewStart = Math.max(minDay, visibleDays === Infinity ? minDay : day - visibleDays);
+  // Days actually on the plot, which is the window clipped to the record.
+  const plotDays = Math.max(1, viewEnd - viewStart);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -107,7 +115,7 @@ export function HistoryBar({
 
     const plotWidth = Math.max(10, width - Y_GUTTER);
     const plotHeight = height;
-    const x = (d: number) => ((d - viewStart) / span) * plotWidth;
+    const x = (d: number) => ((d - viewStart) / plotDays) * plotWidth;
 
     const styles = getComputedStyle(document.documentElement);
     const colors = ["--legion", "--swarm", "--faceless"].map((v) =>
@@ -191,6 +199,27 @@ export function HistoryBar({
       ctx.setLineDash([]);
     }
 
+    // Hover line, under the playhead so the committed date still reads first.
+    if (hoverDay !== null && hoverDay !== day) {
+      ctx.strokeStyle = "rgba(230,234,242,0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x(hoverDay)) + 0.5, 0);
+      ctx.lineTo(Math.round(x(hoverDay)) + 0.5, plotHeight);
+      ctx.stroke();
+
+      // A dot per faction where the hover crosses its line, so the tooltip
+      // numbers are anchored to something on the plot.
+      bands.forEach((band, i) => {
+        const value = band[hoverDay];
+        if (!(value > 0)) return;
+        ctx.fillStyle = colors[i];
+        ctx.beginPath();
+        ctx.arc(x(hoverDay), yOf(value), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
     // Playhead.
     ctx.strokeStyle = "var(--text)";
     ctx.lineWidth = 1;
@@ -198,7 +227,7 @@ export function HistoryBar({
     ctx.moveTo(Math.round(x(day)) + 0.5, 0);
     ctx.lineTo(Math.round(x(day)) + 0.5, plotHeight);
     ctx.stroke();
-  }, [series, viewStart, viewEnd, span, day, epoch, gapYear]);
+  }, [series, viewStart, viewEnd, plotDays, day, epoch, gapYear, hoverDay]);
 
   useEffect(() => {
     draw();
@@ -207,28 +236,17 @@ export function HistoryBar({
     return () => observer.disconnect();
   }, [draw]);
 
-  const scrubFrom = useCallback(
-    (clientX: number) => {
+  const dayFromClientX = useCallback(
+    (clientX: number): number | null => {
       const track = trackRef.current;
-      if (!track) return;
+      if (!track) return null;
       const rect = track.getBoundingClientRect();
       const plotWidth = Math.max(10, rect.width - Y_GUTTER);
       const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / plotWidth));
-      onScrub(Math.round(viewStart + ratio * span));
+      return Math.round(viewStart + ratio * plotDays);
     },
-    [viewStart, span, onScrub],
+    [viewStart, plotDays],
   );
-
-  useEffect(() => {
-    const move = (e: PointerEvent) => dragging.current && scrubFrom(e.clientX);
-    const up = () => (dragging.current = false);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-  }, [scrubFrom]);
 
   const total =
     series && day < series.days.length
@@ -238,7 +256,13 @@ export function HistoryBar({
     series && viewStart < series.days.length
       ? series.legion[viewStart] + series.swarm[viewStart] + series.faceless[viewStart]
       : 0;
-  const change = before > 0 ? ((total - before) / before) * 100 : null;
+  // A percentage against the start of the record is meaningless: the game
+  // began at nearly zero bots, so "All" produced +93,956,831.6%. Past a tenfold
+  // change the honest reading is a multiple, and past a hundredfold neither
+  // number tells you anything the chart does not.
+  const growth = before > 0 ? total / before : null;
+  const change = growth !== null && growth < 10 ? (growth - 1) * 100 : null;
+  const multiple = growth !== null && growth >= 10 && growth < 100 ? growth : null;
 
   // Year, quarter or month labels depending on how much time is on screen.
   const ticks: { day: number; label: string }[] = [];
@@ -248,13 +272,13 @@ export function HistoryBar({
     const end = dayToDate(epoch, viewEnd);
     const dayOf = (d: Date) => Math.floor((d.getTime() - epochMs) / 86_400_000);
 
-    if (span > 1500) {
-      const stride = span > 4000 ? 2 : 1;
+    if (plotDays > 1500) {
+      const stride = plotDays > 4000 ? 2 : 1;
       for (let y = start.getUTCFullYear() + 1; y <= end.getUTCFullYear(); y += stride) {
         ticks.push({ day: dayOf(new Date(Date.UTC(y, 0, 1))), label: String(y) });
       }
     } else {
-      const stepMonths = span > 400 ? 3 : span > 120 ? 1 : 1;
+      const stepMonths = plotDays > 400 ? 3 : 1;
       const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
       while (cursor <= end) {
         ticks.push({
@@ -268,6 +292,33 @@ export function HistoryBar({
       }
     }
   }
+
+  /**
+   * The hover tooltip's contents and where to put it.
+   *
+   * Only factions actually holding bots on that date appear - listing a flat
+   * zero for a faction that had not launched yet reads as data rather than as
+   * absence. Alphabetical, matching the stats panel, so the order never
+   * implies a ranking.
+   */
+  const hoverReadout = (() => {
+    if (hoverDay === null || !series || hoverDay >= series.days.length || hoverDay < 0) return null;
+    const rows = (
+      [
+        ["Faceless", series.faceless[hoverDay], "var(--faceless)"],
+        ["Legion", series.legion[hoverDay], "var(--legion)"],
+        ["Swarm", series.swarm[hoverDay], "var(--swarm)"],
+      ] as const
+    )
+      .filter(([, value]) => value > 0)
+      .map(([label, value, color]) => ({ label, value, color }));
+    if (!rows.length) return null;
+
+    const ratio = (hoverDay - viewStart) / plotDays;
+    const width = trackRef.current?.clientWidth ?? 0;
+    const x = ratio * Math.max(10, width - Y_GUTTER);
+    return { rows, x, flip: ratio > 0.72 };
+  })();
 
   const button = (active: boolean) => ({
     padding: "2px 7px",
@@ -283,19 +334,50 @@ export function HistoryBar({
         padding: "10px 18px 6px",
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 6 }}>
+        {onTogglePlay && (
+          <button
+            onClick={onTogglePlay}
+            aria-label={playing ? "Pause playback" : "Play the history forward"}
+            aria-pressed={playing}
+            title={playing ? "Pause" : "Play the history forward"}
+            style={{
+              width: 26,
+              height: 26,
+              border: "1px solid var(--hairline-bright)",
+              background: playing ? "var(--hairline)" : "transparent",
+              display: "grid",
+              placeItems: "center",
+              flexShrink: 0,
+            }}
+          >
+            {/* Drawn rather than typed: the unicode glyphs render at wildly
+                different weights across platforms next to a mono face. */}
+            <svg width="9" height="10" viewBox="0 0 9 10" aria-hidden fill="currentColor">
+              {playing ? (
+                <>
+                  <rect x="0" y="0" width="3" height="10" />
+                  <rect x="6" y="0" width="3" height="10" />
+                </>
+              ) : (
+                <polygon points="0,0 9,5 0,10" />
+              )}
+            </svg>
+          </button>
+        )}
         <span className="eyebrow">{title}</span>
         <span className="display tabular" style={{ fontSize: 19, lineHeight: 1 }}>
           {compact(total)}
         </span>
         <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
           {subtitle}
-          {change !== null && (
+          {(change !== null || multiple !== null) && (
             <>
               {" · "}
-              {change > 0 ? "+" : ""}
-              {change.toFixed(1)}% over{" "}
-              {RANGES.find((r) => r.key === range)!.label.toLowerCase()}
+              {change !== null
+                ? `${change > 0 ? "+" : ""}${change.toFixed(1)}%`
+                : `${multiple!.toFixed(0)}x`}{" "}
+              {windowPhrase(span)}
             </>
           )}
         </span>
@@ -312,47 +394,68 @@ export function HistoryBar({
               {m === "scope" ? "All zones" : "Viewport"}
             </button>
           ))}
-          {mode === "zone" && onClearZone && (
-            <button className="eyebrow" onClick={onClearZone} style={button(true)}>
-              Clear zone
+          {(mode === "zone" || mode === "area") && onClearFocus && (
+            <button className="eyebrow" onClick={onClearFocus} style={button(true)}>
+              Clear {mode === "zone" ? "zone" : "area"}
             </button>
           )}
-        </div>
-        <div style={{ display: "flex", gap: 2 }} role="group" aria-label="Range">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              className="eyebrow"
-              onClick={() => onRangeChange(r.key)}
-              aria-pressed={range === r.key}
-              style={button(range === r.key)}
-            >
-              {r.label}
-            </button>
-          ))}
         </div>
       </div>
 
       <div
         ref={trackRef}
-        role="slider"
         tabIndex={0}
-        aria-label="Date"
-        aria-valuemin={minDay}
-        aria-valuemax={maxDay}
-        aria-valuenow={day}
-        onPointerDown={(e) => {
-          dragging.current = true;
-          scrubFrom(e.clientX);
+        aria-label={`History chart. Showing ${title}. Click to set the date, or use the arrow keys.`}
+        onPointerMove={(e) => setHoverDay(dayFromClientX(e.clientX))}
+        onPointerLeave={() => setHoverDay(null)}
+        onClick={(e) => {
+          const picked = dayFromClientX(e.clientX);
+          if (picked !== null) onScrub(Math.min(maxDay, Math.max(minDay, picked)));
         }}
         onKeyDown={(e) => {
           const step = e.shiftKey ? 30 : 1;
           if (e.key === "ArrowLeft") onScrub(Math.max(minDay, day - step));
           if (e.key === "ArrowRight") onScrub(Math.min(maxDay, day + step));
         }}
-        style={{ position: "relative", height: CHART_HEIGHT, cursor: "ew-resize", touchAction: "none" }}
+        style={{ position: "relative", height: CHART_HEIGHT, cursor: "crosshair" }}
       >
         <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+        {hoverReadout && (
+          <div
+            style={{
+              position: "absolute",
+              top: 4,
+              // Flip to the other side of the cursor near the right edge so the
+              // tooltip never runs off the plot.
+              left: hoverReadout.flip ? undefined : hoverReadout.x + 10,
+              right: hoverReadout.flip ? `calc(100% - ${hoverReadout.x - 10}px)` : undefined,
+              padding: "5px 8px",
+              background: "rgba(14,18,24,0.92)",
+              backdropFilter: "var(--panel-blur)",
+              WebkitBackdropFilter: "var(--panel-blur)",
+              border: "1px solid var(--hairline-bright)",
+              pointerEvents: "none",
+              whiteSpace: "nowrap",
+              zIndex: 5,
+            }}
+          >
+            {hoverReadout.rows.map((row) => (
+              <div
+                key={row.label}
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}
+              >
+                <span
+                  aria-hidden
+                  style={{ width: 6, height: 6, background: row.color, flexShrink: 0 }}
+                />
+                <span style={{ color: "var(--text-dim)", flex: 1 }}>{row.label}</span>
+                <span className="tabular" style={{ fontWeight: 600 }}>
+                  {compact(row.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="eyebrow tabular" style={{ position: "relative", height: 16, marginTop: 2 }}>
@@ -361,13 +464,36 @@ export function HistoryBar({
             key={`${tick.day}-${tick.label}`}
             style={{
               position: "absolute",
-              left: `calc(${((tick.day - viewStart) / span) * 100}% - ${Y_GUTTER * ((tick.day - viewStart) / span)}px)`,
+              left: `calc(${((tick.day - viewStart) / plotDays) * 100}% - ${Y_GUTTER * ((tick.day - viewStart) / plotDays)}px)`,
               transform: "translateX(-50%)",
+              // Dimmed under the hover date so the two never fight to be read.
+              opacity: hoverDay === null ? 1 : 0.25,
             }}
           >
             {tick.label}
           </span>
         ))}
+        {/* The hovered date, pinned to the axis at the cursor. */}
+        {hoverDay !== null && (
+          <span
+            style={{
+              position: "absolute",
+              left: `calc(${((hoverDay - viewStart) / plotDays) * 100}% - ${Y_GUTTER * ((hoverDay - viewStart) / plotDays)}px)`,
+              transform: "translateX(-50%)",
+              color: "var(--text)",
+              background: "var(--ink)",
+              padding: "0 4px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {dayToDate(epoch, hoverDay).toLocaleDateString("en-GB", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              timeZone: "UTC",
+            })}
+          </span>
+        )}
         {status && <span style={{ position: "absolute", right: 0 }}>{status}</span>}
       </div>
     </section>

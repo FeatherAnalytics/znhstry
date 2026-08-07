@@ -30,3 +30,6 @@ web/node_modules/
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Export payloads (~100MB, rebuildable, uploaded to object storage not git)
+dist/

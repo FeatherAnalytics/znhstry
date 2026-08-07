@@ -134,13 +134,27 @@ def changelog_windows(today: date | None = None) -> list[tuple[str, date, date]]
 
 
 def extract_changelog() -> None:
+    """Pull every changelog window that is not already on disk.
+
+    The window covering today is the exception, and it is always refetched.
+    A window is only immutable once it has *ended*, and the extractor's rule is
+    otherwise "skip what is on disk". A run part-way through a month therefore
+    writes a shard holding that month up to that instant, and without this every
+    later run skips it as present - leaving a silently truncated tail that looks
+    exactly like a quiet day upstream. Verify the tail against the API after any
+    extraction; never assume a thin final day is real.
+    """
+    current = _current_window_label()
     jobs = []
     for label, start, end in changelog_windows():
+        path = config.RAW / "changelog" / f"changelog_{label}.parquet"
+        if label == current and path.exists():
+            path.unlink()
         sql = (
             f"SELECT {', '.join(CHANGELOG_COLUMNS)} FROM changelog "
             f"WHERE LastUpdateDateUtc >= '{start}' AND LastUpdateDateUtc < '{end}'"
         )
-        jobs.append((config.RAW / "changelog" / f"changelog_{label}.parquet", sql, CHANGELOG_COLUMNS))
+        jobs.append((path, sql, CHANGELOG_COLUMNS))
     _run_chunks(jobs, "changelog")
 
 
@@ -222,18 +236,15 @@ def extract_update() -> None:
 
     `zones` is overwritten in place upstream, so its shards are always stale.
     `changelog` is append-only, so only the window covering today can have
-    grown -- everything older is immutable and skipped by the idempotent
-    check. That is roughly 16 requests a night against a shared research box,
-    rather than the 88 a full extraction costs.
+    grown -- everything older has ended and is skipped by the idempotent check.
+    That is roughly 16 requests a night against a shared research box, rather
+    than the 88 a full extraction costs.
 
-    Deleting before re-running rather than adding a force flag keeps one code
-    path: the extractor's only rule is still "fetch what is not on disk".
+    Clearing the current changelog window now lives in `extract_changelog`,
+    because a partial window must never be trusted whichever entry point wrote
+    it. This step only has to deal with `zones`.
     """
-    label = _current_window_label()
-    current = config.RAW / "changelog" / f"changelog_{label}.parquet"
-    if current.exists():
-        current.unlink()
-        log.info("update: refetching changelog window %s", label)
+    log.info("update: refetching changelog window %s", _current_window_label())
 
     stale = list((config.RAW / "zones").glob("*.parquet"))
     for shard in stale:

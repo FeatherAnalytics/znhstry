@@ -11,17 +11,42 @@ export interface Totals {
   legion: number;
   swarm: number;
   faceless: number;
+  held: number;
+}
+
+export interface HoveredZone {
+  name: string;
+  total: number;
+  faction: number;
+  /**
+   * True while the count is read off the map's own log bucket rather than the
+   * record. The zone's exact history is a ~150 KB block away and lands within
+   * a hover, so this is what the first frame of a readout says rather than a
+   * confident number it has not checked.
+   */
+  approximate: boolean;
+  /** False for a zone that has never held a bot in fourteen years. */
+  everActive: boolean;
+  zoneId?: number;
+  region?: string | null;
+  country?: string | null;
 }
 
 interface Props {
   date: Date;
   totals: Totals;
   previous: Totals | null;
+  /** Zones in the current filter, or the whole scope when there is none. */
   zoneCount: number;
+  /** Zones anywhere that have ever held a bot. */
+  activeCount: number;
   scopeLabel: string;
-  /** Zones held in the loaded tiles, or null when no per-zone data is loaded. */
-  held: number | null;
-  hovered: { name: string; total: number; faction: number } | null;
+  hovered: HoveredZone | null;
+  stateReady: boolean;
+  /** Set when the panel is reporting movement across a window, not levels. */
+  changeLabel: string | null;
+  /** True while the exact counts for this selection are still being read. */
+  pending: boolean;
 }
 
 const FACTION_NAMES = ["Uncaptured", "Legion", "Swarm", "Faceless"];
@@ -35,15 +60,17 @@ function compact(value: number): string {
 
 function Delta({ now, then }: { now: number; then: number | undefined }) {
   if (then === undefined || then === 0) return null;
-  const change = ((now - then) / then) * 100;
-  if (!isFinite(change) || Math.abs(change) < 0.05) return null;
-  // Early in the record a year-ago base of a few thousand bots against
-  // billions today yields percentages in the millions, which say nothing
-  // except "from almost nothing". Past 10x, report the multiple instead.
+  const growth = now / then;
+  if (!isFinite(growth)) return null;
+  // In the early years a faction could multiply many times over in a year, and
+  // "+41,000%" is noise. Past tenfold it reads as a multiple instead.
   const label =
-    Math.abs(change) >= 1000
-      ? `${change > 0 ? "+" : "-"}${compact(Math.abs(now / then))}x`
-      : `${change > 0 ? "+" : ""}${change.toFixed(1)}%`;
+    growth >= 10
+      ? `${growth.toFixed(0)}x`
+      : Math.abs((growth - 1) * 100) < 0.05
+        ? null
+        : `${growth > 1 ? "+" : ""}${((growth - 1) * 100).toFixed(1)}%`;
+  if (!label) return null;
   return (
     <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label}</span>
   );
@@ -54,11 +81,17 @@ export function StatsPanel({
   totals,
   previous,
   zoneCount,
+  activeCount,
   scopeLabel,
-  held,
   hovered,
+  stateReady,
+  changeLabel,
+  pending,
 }: Props) {
-  const sum = totals.legion + totals.swarm + totals.faceless || 1;
+  // Bars are shares of the movement, so a negative faction gets no bar rather
+  // than a nonsensical negative width.
+  const sum =
+    Math.abs(totals.legion) + Math.abs(totals.swarm) + Math.abs(totals.faceless) || 1;
 
   return (
     <aside
@@ -87,13 +120,26 @@ export function StatsPanel({
           timeZone: "UTC",
         })}
       </div>
-      {/* Counts above are the exact whole-scope figures at this date. Held is
-          only knowable for tiles that have per-zone data loaded, so it says so
-          rather than implying a global number it does not have. */}
+      {/* Zones holding bots right now, against every zone on the map -
+          including the 1.09M that have never been played, which are part of
+          the world and part of the denominator. */}
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
-        {held !== null
-          ? `${compact(held)} zones held in view`
-          : `${compact(zoneCount)} zones · zoom in for detail`}
+        {changeLabel ? (
+          <>
+            {pending ? "Reading" : `${compact(totals.held)} zones moved`} &middot; {changeLabel}
+          </>
+        ) : (
+          <>
+            {/* `held` belongs to whatever `totals` describes. While a
+                selection's exact counts are still being read, `totals` is
+                still the global figure, and pairing it with the selection's
+                zone count reads as "1.6M of 147K occupied". Show one or the
+                other, never a mismatched pair. */}
+            {stateReady && !pending ? `${compact(totals.held)} of ` : ""}
+            {compact(zoneCount)} zones
+            {pending ? " · reading" : stateReady ? " occupied" : " · reading state"}
+          </>
+        )}
       </div>
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "14px 0 12px" }} />
@@ -109,16 +155,26 @@ export function StatsPanel({
               />
               <span style={{ flex: 1, color: "var(--text-dim)" }}>{faction.label}</span>
               <span className="tabular" style={{ fontWeight: 600 }}>
-                {compact(value)}
+                {pending ? (
+                  <span style={{ color: "var(--text-dim)" }}>&mdash;</span>
+                ) : (
+                  <>
+                    {changeLabel && value > 0 ? "+" : ""}
+                    {compact(value)}
+                  </>
+                )}
               </span>
-              <Delta now={value} then={previous?.[faction.key]} />
+              {!changeLabel && <Delta now={value} then={previous?.[faction.key]} />}
             </div>
             <div style={{ height: 3, background: "var(--hairline)", marginTop: 5 }}>
               <div
                 style={{
                   height: "100%",
-                  width: `${(value / sum) * 100}%`,
-                  background: faction.color,
+                  width: `${(Math.abs(value) / sum) * 100}%`,
+                  // A faction that shed bots over the window still gets a bar,
+                  // drawn hollow, so a loss is visible rather than absent.
+                  background: value < 0 ? "transparent" : faction.color,
+                  border: value < 0 ? `1px solid ${faction.color}` : undefined,
                 }}
               />
             </div>
@@ -127,12 +183,28 @@ export function StatsPanel({
       })}
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "12px 0 10px" }} />
-      <div style={{ minHeight: 32 }}>
+      <div style={{ minHeight: 46 }}>
         {hovered ? (
           <>
             <div style={{ fontWeight: 600 }}>{hovered.name || "Unnamed zone"}</div>
+            {/* Region is omitted, not blanked, when the upstream region_id
+                contradicts the zone's own country. */}
+            {(hovered.region || hovered.country) && (
+              <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                {[hovered.region, hovered.country].filter(Boolean).join(" · ")}
+              </div>
+            )}
             <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
-              {FACTION_NAMES[hovered.faction]} &middot; {compact(hovered.total)} bots
+              {hovered.total > 0
+                ? `${FACTION_NAMES[hovered.faction]} · ${hovered.approximate ? "~" : ""}${compact(hovered.total)} bots`
+                : hovered.everActive
+                  ? "Empty · fought over before"
+                  : "Never played"}
+              {hovered.zoneId !== undefined && (
+                <span className="tabular" style={{ marginLeft: 6, opacity: 0.75 }}>
+                  #{hovered.zoneId}
+                </span>
+              )}
             </div>
           </>
         ) : (

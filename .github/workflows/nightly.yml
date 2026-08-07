@@ -1,10 +1,15 @@
 name: Nightly update
 
-# Rebuilds the site from a small incremental fetch and force-pushes it to an
-# orphan branch. Force-pushing an orphan discards the previous commit instead
-# of stacking on it, so the deploy branch stays permanently one commit deep --
-# which matters because gzip output cannot be delta-compressed, and a growing
-# branch would cost the full size of every rewritten file every night.
+# Rebuilds from a small incremental fetch, pushes the data to object storage
+# and the site to an orphan branch.
+#
+# The orphan force-push keeps the deploy branch permanently one commit deep.
+# That mattered enormously when the payloads were in the site bundle; now that
+# they live in a bucket the branch is about a megabyte, and this is just tidy.
+#
+# The two halves can be out of step for a moment: the bucket is written first
+# and its manifest last, so a site build that lands mid-upload still reads a
+# manifest whose every shard exists.
 
 on:
   schedule:
@@ -66,16 +71,41 @@ jobs:
         run: |
           uv run python -m znhstry export --scope global
 
+      # The data goes to object storage, not into the site, because it needs
+      # response headers a static host cannot set: Content-Encoding: br, and a
+      # year-long immutable Cache-Control on shards that never change. It also
+      # keeps ~100MB of nightly-rewritten binaries out of the deploy branch.
+      - name: Upload data
+        working-directory: pipeline
+        env:
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: uv run python -m znhstry upload
+
+      # A missing R2 credential would otherwise produce a site pointing at an
+      # empty bucket, which looks like a code bug rather than a config one.
+      - name: Check the manifest is reachable
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: |
+          curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
+            || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
+
       - name: Build site
         working-directory: web
         env:
           NEXT_PUBLIC_BASE_PATH: /znhstry
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
         run: |
           npm ci
           npm run build
 
-      - name: Report payload size
-        run: du -sh web/out web/out/data/* | sort -h
+      - name: Report sizes
+        run: |
+          du -sh web/out
+          du -sh dist/data/global/* | sort -h
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4

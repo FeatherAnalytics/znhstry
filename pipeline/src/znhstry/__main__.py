@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import config, export, extract
+from . import boundaries, config, export, extract, upload
 
 STEPS = {
     "all": extract.extract_all,
@@ -16,6 +16,9 @@ STEPS = {
     "baseline": extract.extract_baseline,
     "update": extract.extract_update,
     "export": export.export_all,
+    "upload": upload.upload_all,
+    # Scope-independent and rarely rerun.
+    "boundaries": boundaries.export_boundaries,
 }
 
 

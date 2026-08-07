@@ -64,11 +64,17 @@ jobs:
       #
       # Only objects whose ETag differs are sent, so a nightly run pushes a few
       # megabytes rather than the whole 96.
+      # R2_ACCOUNT_ID is a secret rather than a variable, and the endpoint is
+      # derived from it. Variable values are printed verbatim into run logs, and
+      # this repo is public, so anything passed as `vars.` is effectively
+      # published. The account id is an identifier rather than a credential and
+      # Cloudflare treats it as non-secret, but keeping it out of the logs costs
+      # nothing - secrets are masked as ***.
       - name: Upload data
         working-directory: pipeline
         env:
           R2_BUCKET: ${{ vars.R2_BUCKET }}
-          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: uv run python -m znhstry upload

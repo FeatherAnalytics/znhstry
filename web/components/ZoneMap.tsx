@@ -123,12 +123,15 @@ export function ZoneMap({
       const magnitude = pk & 63;
       const o = slot * 4;
 
-      // Two reasons a zone is not drawn at all: a change window hid everything
-      // that did not move, or it holds no bots and the reader has not asked for
-      // empty zones. Zero alpha and zero radius rather than a separate layer -
-      // the slot buffers are already uploaded and deck.gl draws nothing for
-      // either.
-      if (display.visible[idx] === 0 || (magnitude === 0 && !uncapped)) {
+      // Empty zones answer to the toggle alone, never to the window. "This zone
+      // holds nothing" is a fact about now, not about the span, so hiding an
+      // empty zone because it did not happen to move this week would be
+      // answering a question nobody asked. Zones that do hold something answer
+      // to the window.
+      //
+      // Zero alpha and zero radius rather than a separate layer: the slot
+      // buffers are already uploaded and deck.gl draws nothing for either.
+      if (magnitude === 0 ? !uncapped : display.visible[idx] === 0) {
         colorArray[o + 3] = 0;
         radiusArray[slot] = 0;
         continue;
@@ -295,9 +298,10 @@ export function ZoneMap({
   const picked = (info: PickingInfo): number | null => {
     if (info.layer?.id !== "zones" || info.index < 0) return null;
     const idx = geometry.slotToIdx[info.index];
-    if (display.visible[idx] === 0) return null;
-    if ((display.pk[idx] & 63) === 0 && !uncapped) return null;
-    return idx;
+    // Must mirror the draw test above exactly, or the panel describes a zone
+    // that is not on screen.
+    const empty = (display.pk[idx] & 63) === 0;
+    return (empty ? !uncapped : display.visible[idx] === 0) ? null : idx;
   };
 
   return (

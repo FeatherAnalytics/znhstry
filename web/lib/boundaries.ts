@@ -5,6 +5,8 @@
  * (uint32), with the point count in the manifest so the split is unambiguous.
  */
 
+import { fetchBytes } from "./data";
+
 export interface BoundaryLayer {
   id: string;
   positions: Float32Array;
@@ -22,10 +24,9 @@ export async function loadBoundaries(base: string): Promise<BoundaryLayer[]> {
 
   return Promise.all(
     Object.entries(manifest.layers).map(async ([id, entry]) => {
-      const response = await fetch(`${base}/${entry.path}`);
-      const buffer = await new Response(
-        response.body!.pipeThrough(new DecompressionStream("gzip")),
-      ).arrayBuffer();
+      // Brotli, unwrapped by the browser from Content-Encoding, like every
+      // other payload - so this is a plain fetch with no decoding step.
+      const buffer = await fetchBytes(`${base}/${entry.path}`);
 
       const positionBytes = entry.points * 2 * 4;
       return {

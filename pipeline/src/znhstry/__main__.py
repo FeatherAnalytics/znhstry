@@ -6,7 +6,7 @@ import argparse
 import logging
 import sys
 
-from . import boundaries, config, export, extract
+from . import boundaries, config, export, extract, upload
 
 STEPS = {
     "all": extract.extract_all,
@@ -16,8 +16,8 @@ STEPS = {
     "baseline": extract.extract_baseline,
     "update": extract.extract_update,
     "export": export.export_all,
-    # Scope-independent and rarely rerun, but it was previously reachable only
-    # by importing the module by hand, which meant nobody could rebuild it.
+    "upload": upload.upload_all,
+    # Scope-independent and rarely rerun.
     "boundaries": boundaries.export_boundaries,
 }
 

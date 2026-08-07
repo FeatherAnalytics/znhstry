@@ -25,7 +25,7 @@ fetched at runtime.
 
 from __future__ import annotations
 
-import gzip
+import brotli
 import json
 import logging
 from pathlib import Path
@@ -159,8 +159,10 @@ def export_boundaries(out: Path | None = None) -> None:
     for key, source in LAYERS.items():
         positions, starts, dropped = _flatten(_fetch(source), SIMPLIFY_TOLERANCE)
         payload = positions.tobytes() + starts.tobytes()
-        path = out / f"boundaries_{key}.bin.gz"
-        path.write_bytes(gzip.compress(payload, 6))
+        path = out / f"boundaries_{key}.bin.br"
+        # Brotli, like everything else in the export: served with
+        # Content-Encoding: br so the browser unpacks it for us.
+        path.write_bytes(brotli.compress(payload, quality=11))
 
         manifest["layers"][key] = {
             "path": path.name,

@@ -1,354 +1,581 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MapViewState, PickingInfo } from "@deck.gl/core";
+import type { MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import { StatsPanel, type HoveredZone, type Totals } from "@/components/StatsPanel";
-import {
-  dayToDate,
-  loadJsonGz,
-  loadMeta,
-  loadShard,
-  zoneIdentity,
-  ZoneState,
-  type Columns,
-  type Lookups,
-  type Meta,
-} from "@/lib/data";
+import { AreaPicker, type Area } from "@/components/AreaPicker";
+import { LoadStatus } from "@/components/LoadStatus";
+import { dayToDate, zoneIdentity } from "@/lib/data";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
-import { HistoryBar, type HistoryMode, type RangeKey } from "@/components/HistoryBar";
+import { HistoryBar, type HistoryMode } from "@/components/HistoryBar";
 import {
-  buildSeries,
-  loadFullHistory,
+  areaFilter,
+  radiusFilter,
   singleZoneFilter,
   viewportFilter,
+  type ZoneFilter,
+} from "@/lib/filters";
+import {
+  cellsInBounds,
+  cellsInCircle,
+  densifyScope,
+  haversineKm,
+  loadAreaSeries,
+  seriesForArea,
+  seriesForCells,
   type HistorySeries,
-} from "@/lib/history";
+} from "@/lib/series";
+import { zoneBlock, zoneCountsAt, zoneSeries } from "@/lib/zoneHistory";
+import { loadNames } from "@/lib/names";
+import { useZoneData } from "@/lib/useZoneData";
+import { chartSpanOf, readModeOf, windowPhrase, type ViewKey } from "@/lib/windows";
+import { WindowPicker } from "@/components/WindowPicker";
 
-const DATA_ROOT = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/data`;
+// The payloads live in object storage, not in the site bundle, because they
+// need response headers a static host cannot set: Content-Encoding: br, and a
+// year-long immutable Cache-Control on shards that never change. Locally,
+// `node tools/serve-data.mjs` stands in for the bucket on port 3002.
+const DATA_ROOT = process.env.NEXT_PUBLIC_DATA_ORIGIN ?? "http://localhost:3002";
+const BASE = `${DATA_ROOT}/${process.env.NEXT_PUBLIC_DATA_SCOPE ?? "global"}`;
 
-const SCOPE = "global";
 const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
+
+// 1000 statute miles, the radius the game itself talks in.
+const NEAR_ME_KM = 1609.344;
+
+// Playback pacing. Fourteen years is about 5,300 days, so 260 days a second
+// walks the whole record in roughly twenty seconds - long enough to watch a
+// front move across a continent, short enough to sit through twice.
+const PLAY_DAYS_PER_SECOND = 260;
+const PLAY_HZ = 8;
 
 // Upstream lost most of 2019: 337,859 events against 627,035 in 2018 and
 // 1,438,855 in 2020. It is missing data, not a quiet year, so the scrubber
 // marks it rather than letting the dip read as history.
 const COLLECTION_GAP_YEAR = 2019;
 
-interface SparseSeries {
-  columns: string[];
-  rows: number[][];
+/** Zoom that fits a span of degrees into the viewport, roughly. */
+function zoomFor(spanLon: number, spanLat: number): number {
+  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const height = typeof window === "undefined" ? 720 : window.innerHeight;
+  const zoomLon = Math.log2((width / 512) * (360 / Math.max(spanLon, 0.05)));
+  const zoomLat = Math.log2((height / 512) * (180 / Math.max(spanLat, 0.05)));
+  return Math.max(1, Math.min(11, Math.min(zoomLon, zoomLat) - 0.3));
 }
 
-/** Step lookup over a sparse series: carry the last known value forward. */
-function valueAt(rows: number[][], day: number): number[] | null {
-  let low = 0;
-  let high = rows.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (rows[mid][0] <= day) low = mid + 1;
-    else high = mid;
-  }
-  return low === 0 ? null : rows[low - 1];
-}
+type GeoStatus = "idle" | "asking" | "denied" | "unavailable";
 
 export default function Page() {
+  // One control. `current` is "where things stand"; a window is "what moved".
+  // Day, because the most recent finished day is the liveliest honest view -
+  // roughly 2,000-3,100 zones - and it is what the map is for.
+  const [view, setView] = useState<ViewKey>("day");
+  const [uncapped, setUncapped] = useState(false);
+
+  const span = chartSpanOf(view);
+  const readMode = readModeOf(view);
+
   const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
-  const [meta, setMeta] = useState<Meta | null>(null);
-  const [zones, setZones] = useState<Columns | null>(null);
-  const [names, setNames] = useState<string[]>([]);
-  const [lookups, setLookups] = useState<Lookups | null>(null);
-  const [series, setSeries] = useState<SparseSeries | null>(null);
-  const [day, setDay] = useState<number | null>(null);
-  const [version, setVersion] = useState(0);
-  const [totals, setTotals] = useState<Totals>({ legion: 0, swarm: 0, faceless: 0, held: 0 });
   const [hovered, setHovered] = useState<HoveredZone | null>(null);
   const [historyMode, setHistoryMode] = useState<HistoryMode>("scope");
-  const [range, setRange] = useState<RangeKey>("1y");
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
+  const [area, setArea] = useState<Area | null>(null);
+  const [home, setHome] = useState<{ lat: number; lon: number } | null>(null);
+  const [geoStatus, setGeoStatus] = useState<GeoStatus>("idle");
   const [history, setHistory] = useState<HistorySeries | null>(null);
   const [historyStatus, setHistoryStatus] = useState<string | null>(null);
-  const [status, setStatus] = useState("Loading zones");
+  const [approximate, setApproximate] = useState(false);
+  const [playing, setPlaying] = useState(false);
 
   const [viewState, setViewState] = useState<MapViewState>({
-    longitude: INITIAL_VIEW.longitude,
-    latitude: INITIAL_VIEW.latitude,
-    zoom: INITIAL_VIEW.zoom,
+    ...INITIAL_VIEW,
     pitch: 0,
     bearing: 0,
   });
 
-  const stateRef = useRef<ZoneState | null>(null);
-  const shardCache = useRef(new Map<string, Columns>());
-  const checkpointCache = useRef(new Map<number, Columns>());
-  const loadToken = useRef(0);
-  const fullShards = useRef<Columns[] | null>(null);
-  const historyToken = useRef(0);
-  const maxDayRef = useRef(0);
   // Bounds are read when a series is built rather than tracked in state, so
-  // panning does not rebuild 9.87M events on every frame.
+  // panning does not rebuild a series on every frame.
   const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
+  const historyToken = useRef(0);
 
-  // Boundaries are scope-independent, so they load once and survive switching.
+  const data = useZoneData(BASE, span, readMode);
+  const { meta, geometry, display, lookups, zoneIds, series, day, dayBounds, changeStart, progress } =
+    data;
+
+  // Boundaries are independent of everything else, so they load on their own.
   useEffect(() => {
     loadBoundaries(DATA_ROOT).then(setBoundaries).catch(() => setBoundaries([]));
   }, []);
 
-  useEffect(() => {
-    const base = `${DATA_ROOT}/global`;
-    let cancelled = false;
+  // --- where the reader is ------------------------------------------------
 
-    // Everything downstream is indexed by the scope's own zone index, so a
-    // switch has to drop all of it rather than reuse a single cached shard.
-    setMeta(null);
-    setZones(null);
-    setSeries(null);
-    setDay(null);
-    setNames([]);
-    shardCache.current.clear();
-    checkpointCache.current.clear();
-    fullShards.current = null;
-    setHistory(null);
-    setSelectedZone(null);
-    setHistoryMode("scope");
-    loadToken.current++;
-    setStatus("Loading zones");
-    setViewState((current) => ({ ...current, ...INITIAL_VIEW }));
+  /**
+   * Geolocation is asked for on a click, never on load.
+   *
+   * A permission prompt that appears before the reader has seen the page is
+   * the kind of thing browsers now penalise and readers reflexively deny, and
+   * a denial is sticky. Behind a button the ask has a reason attached.
+   */
+  const locate = useCallback(() => {
+    if (!navigator.geolocation) return setGeoStatus("unavailable");
+    setGeoStatus("asking");
 
-    (async () => {
-      const m = await loadMeta(base);
-      if (cancelled) return;
-      const z = await loadShard(base, m.zones);
-      if (cancelled) return;
-      stateRef.current = new ZoneState(m.zones.rows);
-      setMeta(m);
-      setZones(z);
-      setStatus("Loading history");
-      // 38 KB of region and country names, keyed by the ids in zones.bin.gz.
-      loadJsonGz<Lookups>(base, m.lookups.path)
-        .then((l) => !cancelled && setLookups(l))
-        .catch(() => undefined);
-      const s = await loadJsonGz<SparseSeries>(base, m.series.scope_daily.path);
-      if (cancelled) return;
-      setSeries(s);
-      maxDayRef.current = s.rows[s.rows.length - 1][0];
-      setDay(maxDayRef.current);
-      loadJsonGz<string[]>(base, m.zones.names.path).then((n) => !cancelled && setNames(n));
-    })().catch((error) => !cancelled && setStatus(`Could not load data: ${error.message}`));
+    // The `timeout` option below does not cover the permission prompt: the
+    // spec starts its clock only once permission is granted, so a reader who
+    // ignores the dialog leaves the button saying "Locating..." forever. This
+    // one covers the whole interaction.
+    let settled = false;
+    const giveUp = setTimeout(() => {
+      if (!settled) setGeoStatus("idle");
+    }, 20_000);
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        settled = true;
+        clearTimeout(giveUp);
+        const here = { lat: coords.latitude, lon: coords.longitude };
+        setGeoStatus("idle");
+        setHome(here);
+        setArea(null);
+        setSelectedZone(null);
+        setHistoryMode("viewport");
+        // Tell the tile queue to come home first; whatever has not arrived yet
+        // now arrives nearest-first around the reader.
+        data.setFocus(here.lat, here.lon);
+        const spanLat = (NEAR_ME_KM / 111.32) * 2;
+        setViewState((v) => ({
+          ...v,
+          latitude: here.lat,
+          longitude: here.lon,
+          zoom: zoomFor(spanLat / Math.max(0.2, Math.cos((here.lat * Math.PI) / 180)), spanLat),
+        }));
+      },
+      () => setGeoStatus("denied"),
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 600_000 },
+    );
+  }, [data]);
 
-  const bounds = useMemo(() => {
-    if (!series?.rows.length) return null;
-    return { min: series.rows[0][0], max: series.rows[series.rows.length - 1][0] };
-  }, [series]);
+  /** Fly to a picked area and pull its tiles forward in the queue. */
+  const gotoArea = useCallback(
+    (next: Area | null) => {
+      setArea(next);
+      setSelectedZone(null);
+      setHistoryMode(next ? "area" : "scope");
+      if (!next || !geometry) return;
+      setHome(null);
 
-  /** Rebuild zone state at `day` from the nearest checkpoint plus that year's events. */
-  useEffect(() => {
-    if (!meta || !zones || day === null || !stateRef.current) return;
-    // `scope` updates a render before the matching meta/zones do, so without
-    // this the first run after a switch pairs the new scope's shard paths with
-    // the old scope's index -- writing global indices into a state array sized
-    // for Dallas, where everything past its length is silently dropped.
-    if (meta.scope.name !== SCOPE) return;
-    const token = ++loadToken.current;
-
-    (async () => {
-      const target = dayToDate(meta.day_epoch, day);
-      const year = target.getUTCFullYear();
-      const month = target.getUTCMonth() + 1;
-
-      const checkpointYear = meta.checkpoints
-        .map((c) => c.year!)
-        .filter((y) => y <= year)
-        .pop();
-
-      let checkpoint: Columns | undefined;
-      if (checkpointYear !== undefined) {
-        checkpoint = checkpointCache.current.get(checkpointYear);
-        if (!checkpoint) {
-          const entry = meta.checkpoints.find((c) => c.year === checkpointYear)!;
-          checkpoint = await loadShard(`${DATA_ROOT}/global/checkpoints`, entry);
-          checkpointCache.current.set(checkpointYear, checkpoint);
-        }
+      let west = 180;
+      let east = -180;
+      let south = 90;
+      let north = -90;
+      for (let slot = 0; slot < geometry.count; slot++) {
+        const idx = geometry.slotToIdx[slot];
+        if (geometry.country[idx] !== next.countryId) continue;
+        if (next.regionId !== null && geometry.region[idx] !== next.regionId) continue;
+        const lat = geometry.latitude[idx];
+        const lon = geometry.longitude[idx];
+        if (lon < west) west = lon;
+        if (lon > east) east = lon;
+        if (lat < south) south = lat;
+        if (lat > north) north = lat;
       }
+      if (west > east) return;
 
-      // Replay every shard between the checkpoint and the target date. Months
-      // are already in order, so applying them in sequence is chronological.
-      const from = checkpointYear ?? 0;
-      const shards = meta.events.filter(
-        (e) => e.year! >= from && (e.year! < year || (e.year === year && e.month! <= month)),
-      );
-
-      const ready: Columns[] = [];
-      for (const entry of shards) {
-        const key = entry.path;
-        let loaded = shardCache.current.get(key);
-        if (!loaded) {
-          loaded = await loadShard(`${DATA_ROOT}/global/events`, entry);
-          shardCache.current.set(key, loaded);
-        }
-        ready.push(loaded);
-      }
-
-      // Every await is done. Only now touch the shared ZoneState, and do it
-      // synchronously: this effect re-runs as meta, zones and day arrive
-      // separately, and an aborted run that had already zeroed the state would
-      // otherwise wipe a completed one. Fast scopes hid this; global did not.
-      if (token !== loadToken.current) return;
-
-      const state = stateRef.current!;
-      state.faction.fill(0);
-      state.legion.fill(0);
-      state.swarm.fill(0);
-      state.faceless.fill(0);
-      state.total.fill(0);
-
-      if (checkpoint) state.applyRange(checkpoint, 0, checkpoint.idx.length);
-      for (const columns of ready) state.applyUpToDay(columns, day);
-
-      setTotals(state.totals());
-      setVersion((v) => v + 1);
-      setStatus("");
-    })().catch((error) => setStatus(`Could not load history: ${error.message}`));
-  }, [meta, zones, day]);
-
-
-  // Series for the panel. Scope mode reuses the precomputed sparse series, so
-  // it is instant; viewport and single-zone modes need per-event deltas across
-  // all time, which means every shard. They are cached, so the cost is paid
-  // once per scope.
-  useEffect(() => {
-    if (!meta || !zones || day === null || meta.scope.name !== SCOPE) return;
-    const token = ++historyToken.current;
-    const needsFull = historyMode === "viewport" || selectedZone !== null;
-
-    (async () => {
-      if (!needsFull) {
-        if (!series) return;
-        // Widen the sparse scope series into a dense one the chart can index.
-        const span = series.rows[series.rows.length - 1][0] + 1;
-        const out: HistorySeries = {
-          days: new Int32Array(span),
-          legion: new Float64Array(span),
-          swarm: new Float64Array(span),
-          faceless: new Float64Array(span),
-        };
-        let r = 0;
-        let l = 0, sw = 0, f = 0;
-        for (let d = 0; d < span; d++) {
-          while (r < series.rows.length && series.rows[r][0] <= d) {
-            [, l, sw, f] = series.rows[r];
-            r++;
-          }
-          out.days[d] = d;
-          out.legion[d] = l;
-          out.swarm[d] = sw;
-          out.faceless[d] = f;
-        }
-        setHistory(out);
-        setHistoryStatus(null);
-        return;
-      }
-
-      if (!fullShards.current) {
-        setHistoryStatus("Reading full history");
-        fullShards.current = await loadFullHistory(
-          `${DATA_ROOT}/global`,
-          meta,
-          shardCache.current,
-          (done, total) =>
-            token === historyToken.current &&
-            setHistoryStatus(`Reading full history ${Math.round((done / total) * 100)}%`),
-        );
-      }
-      if (token !== historyToken.current) return;
-
-      const filter =
-        selectedZone !== null
-          ? singleZoneFilter(meta.zones.rows, selectedZone)
-          : viewportFilter(zones, viewportBounds.current);
-
-      // Built to the end of the record, not to the scrub position: the
-      // cumulative series is the same regardless of where the playhead sits,
-      // and the chart already clips to its own window. Rebuilding per scrub
-      // walked all 9.87M events on every drag frame.
-      setHistory(buildSeries(fullShards.current, meta.zones.rows, filter, maxDayRef.current));
-      setHistoryStatus(null);
-    })().catch((error) => setHistoryStatus(`Could not build series: ${error.message}`));
-  }, [meta, zones, series, historyMode, selectedZone]);
-
-  const previous: Totals | null = useMemo(() => {
-    if (!series || day === null) return null;
-    const row = valueAt(series.rows, day - 365);
-    if (!row) return null;
-    return { legion: row[1], swarm: row[2], faceless: row[3], held: 0 };
-  }, [series, day]);
-
-  const handleHover = useCallback(
-    (info: PickingInfo) => {
-      const index = info.index;
-      const state = stateRef.current;
-      if (index === undefined || index < 0 || !state) return setHovered(null);
-      const identity = zones && lookups ? zoneIdentity(zones, lookups, index) : null;
-      setHovered({
-        name: names[index] ?? "",
-        total: state.total[index],
-        faction: state.faction[index],
-        zoneId: identity?.zoneId,
-        region: identity?.region,
-        country: identity?.country,
-      });
+      const centerLat = (south + north) / 2;
+      const centerLon = (west + east) / 2;
+      data.setFocus(centerLat, centerLon);
+      setViewState((v) => ({
+        ...v,
+        latitude: centerLat,
+        longitude: centerLon,
+        zoom: zoomFor(east - west, north - south),
+      }));
     },
-    [names, zones, lookups],
+    [geometry, data],
   );
 
-  // "Texas · United States · #1529645" for the selected zone, dropping any
-  // part that is unavailable or that the country-wins rule rejected.
-  const zoneSubtitle = useMemo(() => {
-    if (selectedZone === null || !zones || !lookups) return "Single zone";
-    const { region, country, zoneId } = zoneIdentity(zones, lookups, selectedZone);
-    return [region, country, `#${zoneId}`].filter(Boolean).join(" · ");
-  }, [selectedZone, zones, lookups]);
+  // --- which zones the readouts are about ---------------------------------
 
-  const ready = meta && zones && series && day !== null && bounds;
+  /**
+   * One filter drives the map dimming and every zone count, so they can never
+   * disagree about what is on screen. Most specific wins.
+   */
+  /**
+   * What the *map* dims by: a picked area, or near-me. Never a clicked zone.
+   *
+   * Clicking a dot is a request to read about it, not to empty the map. Folding
+   * the selection in here dimmed all 2.68M other zones to alpha 26, which at
+   * world zoom is indistinguishable from them disappearing - you lost the whole
+   * picture to look at one point of it.
+   */
+  const mapFilter: ZoneFilter = useMemo(() => {
+    if (!geometry || !meta) return null;
+    if (area) return areaFilter(geometry, area.countryId, area.regionId);
+    if (home) return radiusFilter(geometry, home.lat, home.lon, NEAR_ME_KM);
+    return null;
+    // progress.zones so the mask grows as tiles land rather than freezing at
+    // whatever had loaded when the area was picked.
+  }, [geometry, meta, area, home, progress.zones]);
+
+  /**
+   * What the readouts count. The same mask, plus the clicked zone when there is
+   * one - most specific wins: zone > area > near-me.
+   */
+  const filter: ZoneFilter = useMemo(() => {
+    if (!geometry || selectedZone === null) return mapFilter;
+    return singleZoneFilter(geometry.size, selectedZone);
+  }, [geometry, selectedZone, mapFilter]);
+
+  // --- the chart, which is also where every bot count comes from -----------
+
+  /**
+   * Build the series for whatever is selected.
+   *
+   * The panel reads its figures off this same series rather than summing the
+   * map, which is what makes the two agree by construction. Three precomputed
+   * grains answer it; the only approximate one is a circle or a viewport, which
+   * no export can name in advance. Computing a chart over an arbitrary subset
+   * on the client instead is what would require all 9.88M events in memory.
+   */
+  useEffect(() => {
+    if (!meta || !geometry || !series || !dayBounds) return;
+    const token = ++historyToken.current;
+    const maxDay = dayBounds.max;
+    const settle = (built: HistorySeries, isApproximate: boolean) => {
+      if (token !== historyToken.current) return;
+      setHistory(built);
+      setApproximate(isApproximate);
+      setHistoryStatus(null);
+    };
+
+    (async () => {
+      if (selectedZone !== null) {
+        const block = zoneBlock(BASE, meta.zone_history, selectedZone);
+        if (!block) return settle(densifyScope([], maxDay), false);
+        setHistoryStatus("Reading zone history");
+        return settle(zoneSeries(await block, selectedZone, maxDay), false);
+      }
+
+      if (area) {
+        const entry = area.regionId !== null ? meta.area_series.region : meta.area_series.country;
+        const id = area.regionId ?? area.countryId;
+        setHistoryStatus("Reading area history");
+        return settle(seriesForArea(await loadAreaSeries(BASE, entry), id, maxDay), false);
+      }
+
+      const cells = meta.area_series.cells;
+      if (home) {
+        setHistoryStatus("Reading nearby history");
+        const selection = cellsInCircle(cells, home.lat, home.lon, NEAR_ME_KM);
+        return settle(await seriesForCells(BASE, cells, selection, maxDay), true);
+      }
+
+      if (historyMode === "viewport") {
+        setHistoryStatus("Reading history in view");
+        const selection = cellsInBounds(cells, viewportBounds.current);
+        return settle(await seriesForCells(BASE, cells, selection, maxDay), true);
+      }
+
+      settle(densifyScope(series.rows, maxDay), false);
+    })().catch((error) => {
+      if (token === historyToken.current) {
+        setHistoryStatus(`Could not build series: ${error.message ?? error}`);
+      }
+    });
+  }, [meta, geometry, series, dayBounds, selectedZone, area, home, historyMode]);
+
+  /**
+   * The figures in the panel.
+   *
+   * Bots come from the series - exact for the scope, a country, a region or a
+   * single zone, cell-aggregated for a circle or a viewport. Zone counts come
+   * from the map's own bytes, so they are exact for every selection. Nothing
+   * here sums per-zone counts; the client holds none.
+   */
+  const changing = readMode === "change" && changeStart !== null;
+
+  const shown = useMemo(() => {
+    if (!display || day === null) {
+      return { totals: { legion: 0, swarm: 0, faceless: 0, held: 0 }, count: null, pending: true };
+    }
+
+    // Three different counts, and mixing them up is how the panel starts lying.
+    //   count  zones in the selection - the denominator. Deliberately *not*
+    //          "zones drawn": with empty zones toggled off that would make the
+    //          panel read "1.6M of 1.6M occupied", a number that never moves.
+    //   held   zones with bots on the ground. Not the control flag, which keeps
+    //          naming a faction long after its last bot has gone.
+    //   drawn  zones the window is showing, which is what "moved" means.
+    let held = 0;
+    let drawn = 0;
+    let count = 0;
+    for (let i = 0; i < display.size; i++) {
+      if (filter && !filter[i]) continue;
+      count++;
+      if (display.pk[i] !== 0) held++;
+      if (display.visible[i] !== 0) drawn++;
+    }
+
+    const at = (d: number) =>
+      history && d >= 0 && d < history.legion.length
+        ? { legion: history.legion[d], swarm: history.swarm[d], faceless: history.faceless[d] }
+        : null;
+
+    const now = at(day);
+    if (!now) {
+      return { totals: { legion: 0, swarm: 0, faceless: 0, held }, count: filter ? count : null, pending: true };
+    }
+
+    if (changing) {
+      const before = at(changeStart!) ?? { legion: 0, swarm: 0, faceless: 0 };
+      return {
+        totals: {
+          legion: now.legion - before.legion,
+          swarm: now.swarm - before.swarm,
+          faceless: now.faceless - before.faceless,
+          // The panel labels this "zones moved", so it is every zone the window
+          // is drawing, whether or not it still holds anything. A zone fought
+          // down to nothing moved as much as one that was taken.
+          held: drawn,
+        } as Totals,
+        count: filter ? count : null,
+        pending: false,
+      };
+    }
+
+    return {
+      totals: { ...now, held } as Totals,
+      count: filter ? count : null,
+      pending: false,
+    };
+    // data.version so the counts follow the map as tiles land and dates change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, display, history, day, changing, changeStart, data.version]);
+
+  /** A year earlier on the same series, for the growth figure. */
+  const previous: Totals | null = useMemo(() => {
+    if (!history || day === null || changing) return null;
+    const then = day - 365;
+    if (then < 0) return null;
+    return {
+      legion: history.legion[then],
+      swarm: history.swarm[then],
+      faceless: history.faceless[then],
+      held: 0,
+    };
+  }, [history, day, changing]);
+
+  // --- hover: the map's bucket now, the record a moment later ---------------
+
+  const hoveredIdx = useRef<number | null>(null);
+
+  /**
+   * Hover: render from what is in hand, then sharpen.
+   *
+   * Neither the zone's name nor its exact counts are on the load path any more
+   * — they are two ~15-50 KB blocks fetched the moment the pointer settles. So
+   * the readout paints immediately from the map's own byte, with the count
+   * marked approximate and the name possibly missing, and fills in when the
+   * blocks land. A tooltip that waits on a fetch reads as broken; one that
+   * sharpens does not.
+   */
+  const handleHover = useCallback(
+    (idx: number | null) => {
+      hoveredIdx.current = idx;
+      if (idx === null || !display || !geometry || !meta || day === null) return setHovered(null);
+
+      const pk = display.pk[idx];
+      const describe = (over: Partial<HoveredZone> = {}): HoveredZone => {
+        const identity = zoneIdentity(geometry, lookups, zoneIds, idx);
+        return {
+          name: identity.name ?? "",
+          faction: pk >> 6,
+          total: display.approximateTotal(pk & 63),
+          approximate: true,
+          everActive: geometry.everActive[idx] === 1,
+          zoneId: identity.zoneId ?? undefined,
+          region: identity.region,
+          country: identity.country,
+          ...over,
+        };
+      };
+
+      setHovered(describe());
+
+      const fresh = () => hoveredIdx.current === idx;
+
+      // Re-describe rather than patching the name in: `describe` re-reads the
+      // identity, which now has one. Only the counts are carried over, because
+      // the history block may already have sharpened them.
+      loadNames(BASE, meta.names, idx, geometry.names)
+        ?.then(
+          () =>
+            fresh() &&
+            setHovered((h) =>
+              h
+                ? describe({ faction: h.faction, total: h.total, approximate: h.approximate })
+                : h,
+            ),
+        )
+        .catch(() => undefined);
+
+      zoneBlock(BASE, meta.zone_history, idx)
+        ?.then((columns) => {
+          const counts = zoneCountsAt(columns, idx, day);
+          if (!fresh() || !counts) return;
+          setHovered(
+            describe({ faction: counts.faction, total: counts.total, approximate: false }),
+          );
+        })
+        .catch(() => undefined);
+    },
+    [display, geometry, lookups, zoneIds, meta, day],
+  );
+
+  const focusLabel = useMemo(() => {
+    if (selectedZone !== null && geometry) {
+      const { region, country, zoneId } = zoneIdentity(geometry, lookups, zoneIds, selectedZone);
+      return [region, country, zoneId !== null ? `#${zoneId}` : null].filter(Boolean).join(" · ");
+    }
+    if (area) return `${area.label} · ${area.detail}`;
+    if (home) return "Within 1000 miles of you";
+    return null;
+  }, [selectedZone, area, home, geometry, lookups, zoneIds]);
+
+  /**
+   * Playback, paced by the clock rather than by frames.
+   *
+   * How long a step takes depends on the machine and on 2.7M dots being
+   * re-coloured, so a fixed days-per-tick would make the whole run last
+   * anywhere from twenty seconds to a minute. Reading the real elapsed time
+   * keeps the run the same length everywhere.
+   *
+   * Every step is a full rebuild in the worker now, which is what makes this
+   * simple: there is no forward-only fast path to fall off, and scrubbing
+   * backwards costs exactly what scrubbing forwards costs.
+   */
+  useEffect(() => {
+    if (!playing || !dayBounds) return;
+    let last = performance.now();
+    const id = setInterval(() => {
+      const now = performance.now();
+      const advance = Math.max(1, Math.round(((now - last) / 1000) * PLAY_DAYS_PER_SECOND));
+      last = now;
+      data.setDay((current) => {
+        if (current === null) return current;
+        if (current + advance >= dayBounds.max) {
+          setPlaying(false);
+          return dayBounds.max;
+        }
+        return current + advance;
+      });
+    }, 1000 / PLAY_HZ);
+    return () => clearInterval(id);
+  }, [playing, dayBounds, data]);
+
+  const clearFocus = useCallback(() => {
+    setSelectedZone(null);
+    setArea(null);
+    setHome(null);
+    setHistoryMode("scope");
+  }, []);
+
+  /**
+   * Switch view, and move the playhead if the new view wants a different date.
+   *
+   * `Current` means now, so it goes to the newest date even when that day is
+   * still running - a level is correct at any moment, it is only a *window*
+   * ending mid-day that undercounts. Every window therefore does the reverse
+   * and pulls back off the partial day if that is where the playhead was left.
+   */
+  const changeView = useCallback(
+    (next: ViewKey) => {
+      setView(next);
+      if (!dayBounds) return;
+      if (next === "current") data.setDay(dayBounds.max);
+      else data.setDay((d) => (d === null || d > dayBounds.lastComplete ? dayBounds.lastComplete : d));
+    },
+    [dayBounds, data],
+  );
+
+  const ready = meta && geometry && display && day !== null && dayBounds;
 
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
       <header
         style={{
           display: "flex",
-          alignItems: "baseline",
-          gap: 16,
-          padding: "12px 18px",
+          alignItems: "center",
+          gap: 14,
+          padding: "10px 18px",
           borderBottom: "1px solid var(--hairline)",
         }}
       >
         <span className="display" style={{ fontSize: 16 }}>
           Zone History
         </span>
-        <span className="eyebrow" style={{ flex: 1 }}>
-          {meta?.scope.label ?? " "}
-        </span>
+        <span className="eyebrow">{meta?.scope.label ?? " "}</span>
+
+        <div style={{ flex: 1 }} />
+
+        <WindowPicker
+          view={view}
+          onView={changeView}
+          uncapped={uncapped}
+          onUncapped={setUncapped}
+          pending={changing && data.shown === null}
+        />
+
+        <AreaPicker
+          lookups={lookups}
+          geometry={geometry}
+          version={data.version}
+          selected={area}
+          onSelect={gotoArea}
+        />
+        <button
+          className="eyebrow"
+          onClick={home ? clearFocus : locate}
+          disabled={geoStatus === "asking"}
+          style={{
+            border: "1px solid var(--hairline-bright)",
+            background: home ? "var(--hairline)" : "rgba(14,18,24,0.82)",
+            padding: "6px 10px",
+            color: geoStatus === "denied" ? "var(--text-dim)" : "var(--text)",
+          }}
+          title={
+            geoStatus === "denied"
+              ? "Location permission was declined. Enable it in the address bar to use this."
+              : "Centre the map on you and ring 1000 miles"
+          }
+        >
+          {geoStatus === "asking"
+            ? "Locating…"
+            : geoStatus === "denied"
+              ? "Location blocked"
+              : home
+                ? "Clear location"
+                : "Near me"}
+        </button>
       </header>
 
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        {ready && (
+        {geometry && display && (
           <ZoneMap
-            zones={zones}
-            state={stateRef.current!}
-            version={version}
+            geometry={geometry}
+            display={display}
+            version={data.version}
             boundaries={boundaries}
             viewState={viewState}
+            filter={mapFilter}
+            uncapped={uncapped}
+            ring={home ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM } : null}
             onViewStateChange={setViewState}
             onHover={handleHover}
-            onClickZone={(index) => {
-              setSelectedZone(index);
-              if (index !== null) setHistoryMode("zone");
-              else setHistoryMode("scope");
+            onClickZone={(idx) => {
+              setSelectedZone(idx);
+              setHistoryMode(idx !== null ? "zone" : area ? "area" : "scope");
             }}
             onBounds={(b) => {
               viewportBounds.current = b;
@@ -358,59 +585,62 @@ export default function Page() {
         {ready && (
           <StatsPanel
             date={dayToDate(meta.day_epoch, day)}
-            totals={totals}
+            totals={shown.totals}
             previous={previous}
-            zoneCount={meta.scope.zone_count}
-            scopeLabel={meta.scope.label}
+            zoneCount={shown.count ?? meta.scope.zone_count}
+            activeCount={meta.scope.active_count}
+            scopeLabel={focusLabel ?? meta.scope.label}
             hovered={hovered}
+            stateReady={!shown.pending}
+            changeLabel={changing ? `Net change ${windowPhrase(span)}` : null}
+            pending={shown.pending}
           />
         )}
-        {status && (
-          <div
-            className="eyebrow"
-            style={{ position: "absolute", left: 18, top: 16, zIndex: 10 }}
-            role="status"
-          >
-            {status}
-          </div>
-        )}
+        <LoadStatus progress={progress} totalZones={meta?.scope.zone_count ?? 0} />
       </div>
 
       {ready && (
         <HistoryBar
           series={history}
-          mode={selectedZone !== null ? "zone" : historyMode}
+          mode={historyMode}
           onModeChange={(m) => {
-            setSelectedZone(null);
+            clearFocus();
             setHistoryMode(m);
           }}
-          range={range}
-          onRangeChange={setRange}
+          span={span}
+          onSpan={changeView}
           day={day}
-          minDay={bounds.min}
-          maxDay={bounds.max}
-          onScrub={setDay}
+          minDay={dayBounds.min}
+          maxDay={dayBounds.max}
+          onScrub={data.setDay}
           epoch={meta.day_epoch}
           title={
             selectedZone !== null
-              ? names[selectedZone] || `Zone ${selectedZone}`
-              : historyMode === "viewport"
-                ? "Bots in view"
-                : "Bots"
+              ? geometry.names[selectedZone] || `Zone ${selectedZone}`
+              : area
+                ? area.label
+                : home
+                  ? "Bots near you"
+                  : historyMode === "viewport"
+                    ? "Bots in view"
+                    : "Bots"
           }
           subtitle={
-            selectedZone !== null
-              ? zoneSubtitle
-              : historyMode === "viewport"
-                ? "Current map bounds"
-                : `${meta.scope.zone_count >= 1e6 ? `${(meta.scope.zone_count / 1e6).toFixed(1)}M` : `${(meta.scope.zone_count / 1e3).toFixed(0)}K`} zones`
+            approximate
+              ? `${focusLabel ?? "Current map bounds"} · to the nearest degree`
+              : (focusLabel ??
+                `${(meta.scope.active_count / 1e6).toFixed(1)}M played zones`)
           }
           status={historyStatus}
-          onClearZone={() => {
-            setSelectedZone(null);
-            setHistoryMode("scope");
-          }}
+          onClearFocus={clearFocus}
           gapYear={COLLECTION_GAP_YEAR}
+          playing={playing}
+          onTogglePlay={() => {
+            // Pressing play at the end of the record replays it rather than
+            // doing nothing, which is what a play button at the end should do.
+            if (!playing && day >= dayBounds.max) data.setDay(dayBounds.min);
+            setPlaying((p) => !p);
+          }}
         />
       )}
     </main>

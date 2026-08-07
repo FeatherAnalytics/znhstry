@@ -6,10 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "data": "node ../tools/serve-data.mjs 3002 ../dist/data"
   },
   "dependencies": {
     "@deck.gl/core": "^9.1.0",
+    "@deck.gl/geo-layers": "^9.3.8",
     "@deck.gl/layers": "^9.1.0",
     "@deck.gl/react": "^9.1.0",
     "next": "^15.1.0",

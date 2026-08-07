@@ -1,23 +1,28 @@
 /**
- * Loader for the packed export.
+ * The manifest, and what a zone is in words.
  *
- * Every .gz is a gzip stream over a columnar dump: each column is a contiguous
- * run of one fixed-width dtype, concatenated in manifest order. We decompress
- * with the browser's own DecompressionStream and take typed-array views at
- * running offsets, so there is no decoding library and no per-row parsing.
+ * Decoding lives in `format.ts`, which the display worker shares. This file is
+ * the shape of `meta.json` plus the one piece of domain logic that does not
+ * belong to either: resolving a zone's administrative labels.
  */
 
-export type Dtype = "uint8" | "uint16" | "uint32" | "int32" | "float32";
-export type ColumnSpec = [name: string, dtype: Dtype, encoding: "delta" | null];
+import type { GeometryMeta, ZoneGeometry } from "./geometry";
+import type { DisplayMeta } from "./displayProtocol";
+import type { AreaSeriesMeta } from "./series";
+import type { ZoneHistoryMeta } from "./zoneHistory";
+import type { NamesMeta } from "./names";
+import type { ShardEntry } from "./format";
 
-export interface ShardEntry {
-  path: string;
-  rows: number;
-  columns: ColumnSpec[];
-  bytes: number;
-  year?: number;
-  month?: number;
-}
+export type { ColumnSpec, Columns, Dtype, ShardEntry } from "./format";
+export {
+  dateToDay,
+  dayToDate,
+  factionOf,
+  fetchBytes,
+  loadShard,
+  magnitudeOf,
+  yearOfDay,
+} from "./format";
 
 /** id -> [iso_code, name] and id -> [name, country_id]. */
 export interface Lookups {
@@ -25,22 +30,48 @@ export interface Lookups {
   regions: Record<string, [string, number]>;
 }
 
+export interface SparseSeries {
+  columns: string[];
+  rows: number[][];
+}
+
 export interface Meta {
-  scope: { name: string; label: string; zone_count: number; radius_km: number | null };
+  scope: {
+    name: string;
+    label: string;
+    zone_count: number;
+    /** Zones that have ever held a bot; the rest are real but never played. */
+    active_count: number;
+    radius_km: number | null;
+  };
   day_epoch: string;
   date_range: [string, string];
   factions: Record<string, string>;
-  zones: ShardEntry & { names: { path: string } };
+  /**
+   * Headline figures for the state the paint bundle draws, so the panel is
+   * right on the first frame rather than showing zeroes until anything else
+   * lands.
+   */
+  current: { date: string; legion: number; swarm: number; faceless: number; held: number };
+  geometry: GeometryMeta;
+  /** Zone names by block of index, fetched on hover. Never on the load path. */
+  names: NamesMeta;
+  zone_ids: ShardEntry;
   lookups: { path: string; bytes: number };
-  checkpoints: ShardEntry[];
-  events: ShardEntry[];
+  /** One byte per zone-day: the whole history of what the map draws. */
+  display: DisplayMeta;
+  /** Exact per-faction counts, sharded by block of zone index. */
+  zone_history: ZoneHistoryMeta;
   series: Record<string, { path: string }>;
+  /** Precomputed daily totals per country, region, and one-degree cell. */
+  area_series: AreaSeriesMeta;
   notes: string[];
 }
 
 /** What a zone is, in words: its id and where it is. */
 export interface ZoneIdentity {
-  zoneId: number;
+  zoneId: number | null;
+  name: string | null;
   region: string | null;
   country: string | null;
   countryCode: string | null;
@@ -54,179 +85,57 @@ export interface ZoneIdentity {
  * settles it every time - zones the data files under a Polish voivodeship sit
  * at 161E in the Solomon Islands. So the region is shown only when its own
  * country agrees with the zone's, and dropped rather than printed as nonsense.
+ *
+ * The upstream data is the source of truth here, weird geography included.
+ * This suppresses a label it can prove is contradictory; it does not correct
+ * anything.
+ *
+ * `zoneIds` and the name may still be in flight - both load behind the map -
+ * so either can come back null and the caller shows what it has.
  */
-export function zoneIdentity(zones: Columns, lookups: Lookups, index: number): ZoneIdentity {
-  const zoneId = (zones.zone_id as Int32Array)[index];
-  const countryId = (zones.country_id as Uint16Array)[index];
-  const regionId = (zones.region_id as Uint16Array)[index];
+export function zoneIdentity(
+  geometry: ZoneGeometry,
+  lookups: Lookups | null,
+  zoneIds: Int32Array | null,
+  idx: number,
+): ZoneIdentity {
+  const countryId = geometry.country[idx];
+  const regionId = geometry.region[idx];
 
-  const country = lookups.countries[String(countryId)] ?? null;
-  const region = lookups.regions[String(regionId)] ?? null;
+  const country = lookups?.countries[String(countryId)] ?? null;
+  const region = lookups?.regions[String(regionId)] ?? null;
   const regionAgrees = region !== null && region[1] === countryId;
 
   return {
-    zoneId,
+    zoneId: zoneIds ? zoneIds[idx] : null,
+    name: geometry.names[idx] ?? null,
     region: regionAgrees ? region[0] : null,
     country: country ? country[1] : null,
     countryCode: country ? country[0] : null,
   };
 }
 
-const ARRAY_OF: Record<Dtype, new (b: ArrayBuffer, o: number, n: number) => ArrayBufferView> = {
-  uint8: Uint8Array,
-  uint16: Uint16Array,
-  uint32: Uint32Array,
-  int32: Int32Array,
-  float32: Float32Array,
-};
-
-const BYTES_OF: Record<Dtype, number> = {
-  uint8: 1,
-  uint16: 2,
-  uint32: 4,
-  int32: 4,
-  float32: 4,
-};
-
-export type Columns = Record<string, ArrayBufferView & { [i: number]: number; length: number }>;
-
-async function gunzip(response: Response): Promise<ArrayBuffer> {
-  const stream = response.body!.pipeThrough(new DecompressionStream("gzip"));
-  return new Response(stream).arrayBuffer();
-}
-
-/** Decompress a shard and return its columns as typed-array views. */
-export async function loadShard(base: string, entry: ShardEntry): Promise<Columns> {
-  const buffer = await gunzip(await fetch(`${base}/${entry.path}`));
-  const columns: Columns = {};
-  let offset = 0;
-
-  for (const [name, dtype, encoding] of entry.columns) {
-    const width = BYTES_OF[dtype];
-    // A typed-array view needs its byte offset aligned to the element width,
-    // and the single-byte faction column leaves everything after it odd. Copy
-    // just those columns into an aligned buffer; the rest stay zero-copy views.
-    const aligned =
-      offset % width === 0
-        ? buffer
-        : buffer.slice(offset, offset + entry.rows * width);
-    const view = new ARRAY_OF[dtype](
-      aligned,
-      aligned === buffer ? offset : 0,
-      entry.rows,
-    ) as never;
-    offset += entry.rows * width;
-
-    if (encoding === "delta") {
-      // Stored as successive differences so gzip sees runs of small numbers.
-      // Prefix-sum into a fresh array; the view is over the shared buffer.
-      const restored = new Uint32Array(entry.rows);
-      let running = 0;
-      for (let i = 0; i < entry.rows; i++) restored[i] = running += (view as Uint32Array)[i];
-      columns[name] = restored as never;
-    } else {
-      columns[name] = view;
-    }
-  }
-  return columns;
-}
-
 export async function loadMeta(base: string): Promise<Meta> {
-  return (await fetch(`${base}/meta.json`)).json();
-}
-
-export async function loadJsonGz<T>(base: string, path: string): Promise<T> {
-  const buffer = await gunzip(await fetch(`${base}/${path}`));
-  return JSON.parse(new TextDecoder().decode(buffer));
-}
-
-export function dayToDate(epoch: string, day: number): Date {
-  const start = new Date(`${epoch}T00:00:00Z`);
-  return new Date(start.getTime() + day * 86_400_000);
-}
-
-export function dateToDay(epoch: string, date: Date): number {
-  const start = new Date(`${epoch}T00:00:00Z`);
-  return Math.floor((date.getTime() - start.getTime()) / 86_400_000);
+  const response = await fetch(`${base}/meta.json`);
+  if (!response.ok) throw new Error(`${response.status} for meta.json`);
+  return response.json();
 }
 
 /**
- * Mutable zone state, indexed by the export's stable zone index.
+ * Upstream ZoneIds, in index order.
  *
- * Reconstructing a date means starting from the nearest year checkpoint and
- * replaying that year's events up to the target day. The checkpoint is what
- * makes dormant zones appear at all: a third of them have not changed since
- * 2019, so replaying only recent events would render them as empty.
+ * 141 KB, because index order is zone_id order and the differences are 1s and
+ * 2s. Flat it would be 4.2 MB, which is why it is its own file rather than a
+ * column in the geometry, where it would delay every dot on the map for the
+ * sake of a hover readout.
  */
-export class ZoneState {
-  readonly faction: Uint8Array;
-  readonly legion: Int32Array;
-  readonly swarm: Int32Array;
-  readonly faceless: Int32Array;
-  readonly total: Int32Array;
-
-  constructor(readonly size: number) {
-    this.faction = new Uint8Array(size);
-    this.legion = new Int32Array(size);
-    this.swarm = new Int32Array(size);
-    this.faceless = new Int32Array(size);
-    this.total = new Int32Array(size);
-  }
-
-  reset(checkpoint: Columns): void {
-    this.faction.fill(0);
-    this.legion.fill(0);
-    this.swarm.fill(0);
-    this.faceless.fill(0);
-    this.total.fill(0);
-    this.applyRange(checkpoint, 0, checkpoint.idx.length);
-  }
-
-  /** Apply every event on or before `maxDay`.
-   *
-   * Rows are in file order, (zone, day), so a zone's own events are still
-   * chronological and skipping later ones is safe. This replaces a global
-   * day-sort that cost O(n log n) per shard to serve a cutoff needed by only
-   * the one partial month.
-   */
-  applyUpToDay(columns: Columns, maxDay: number): void {
-    const { idx, day, control_state, legion_count, swarm_count, faceless_count } = columns;
-    const n = idx.length;
-    for (let i = 0; i < n; i++) {
-      if (day[i] > maxDay) continue;
-      const z = idx[i];
-      this.faction[z] = control_state[i];
-      this.legion[z] = legion_count[i];
-      this.swarm[z] = swarm_count[i];
-      this.faceless[z] = faceless_count[i];
-      this.total[z] = legion_count[i] + swarm_count[i] + faceless_count[i];
-    }
-  }
-
-  applyRange(columns: Columns, from: number, to: number): void {
-    const { idx, control_state, legion_count, swarm_count, faceless_count } = columns;
-    for (let i = from; i < to; i++) {
-      const z = idx[i];
-      this.faction[z] = control_state[i];
-      this.legion[z] = legion_count[i];
-      this.swarm[z] = swarm_count[i];
-      this.faceless[z] = faceless_count[i];
-      this.total[z] = legion_count[i] + swarm_count[i] + faceless_count[i];
-    }
-  }
-
-  totals(): { legion: number; swarm: number; faceless: number; held: number } {
-    let legion = 0;
-    let swarm = 0;
-    let faceless = 0;
-    let held = 0;
-    for (let i = 0; i < this.size; i++) {
-      legion += this.legion[i];
-      swarm += this.swarm[i];
-      faceless += this.faceless[i];
-      if (this.faction[i] > 0) held++;
-    }
-    return { legion, swarm, faceless, held };
-  }
+export async function loadZoneIds(base: string, entry: ShardEntry): Promise<Int32Array> {
+  const { loadShard } = await import("./format");
+  return (await loadShard(base, entry)).zone_id as Int32Array;
 }
 
+export async function loadJson<T>(base: string, path: string): Promise<T> {
+  const response = await fetch(`${base}/${path}`);
+  if (!response.ok) throw new Error(`${response.status} for ${path}`);
+  return response.json();
+}

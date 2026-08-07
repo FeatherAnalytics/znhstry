@@ -194,9 +194,13 @@ A zone holding no bots is drawn only when "Empty zones" is on. Off by default: t
 never played plus everything fought down to nothing is most of the map, and two million
 grey dots drown the ones being fought over.
 
-The toggle means "include zones with no bots" in every view, so in a window it adds only
-the zones that moved *and* ended empty — a small set, and a real event. It is a
-render-time test in `ZoneMap`, not a data one; nothing refetches.
+**Empty zones answer to the toggle alone, never to the window.** "This zone holds
+nothing" is a fact about now, not about the span, so hiding an empty zone because it did
+not happen to move this week answers a question nobody asked. Zones that *do* hold
+something answer to the window. So a Day window with the toggle on is the day's fighting
+in colour over the whole world in grey, which is what makes it readable.
+
+It is a render-time test in `ZoneMap`, not a data one; nothing refetches.
 
 **Picking must apply the same tests as drawing.** deck.gl picks by geometry, and a zone
 hidden by a window or by this toggle is still there — drawn at zero alpha and zero radius,
@@ -348,8 +352,15 @@ MySQL `changelog`. Every date in the record is whole except the one still happen
 
 ## Data facts (measured, not guessed)
 
+- **The record starts at release, 2012-07-30.** `config.RECORD_START`. Everything before
+  it is pre-release testing — 11 scattered events from 2012-05-19 to 07-29, plus the 29
+  backfill sentinel rows dated 2010-01-01 — so "All time" means the life of the game
+  rather than the life of the table. The cut is one `zone_events` view that every export
+  query reads instead of `fct_zone_events`; there are 12 such queries and filtering each
+  would drift. The warehouse keeps the full record, so this is reversible.
+  Cost: 40 events across 40 zones, 7 of which stop counting as ever-played.
 - **`changelog` is a sparse event stream.** A row exists only when a zone's counts or
-  control state changed. 9.88M real events across 2012-05-19 to present, ~2,000–3,100 a day.
+  control state changed. 9.88M real events, ~2,000–3,100 a day.
 - **Carry-forward is the core modelling problem.** 504,410 zones (32% of those ever active)
   last changed in 2019 or earlier. Any time-window slice that ignores older events loses
   their state entirely.

@@ -1,0 +1,61 @@
+name: CI
+
+# Runs on pull requests so branch protection has something to require. The
+# deploy workflow builds the same way on main; this catches it before merge.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Type check
+        run: npx tsc --noEmit
+        working-directory: web
+
+      # No reachability check here, unlike deploy.yml: a pull request should not
+      # fail because an external bucket is having a moment.
+      - name: Build static export
+        run: npm run build
+        working-directory: web
+        env:
+          NEXT_PUBLIC_BASE_PATH: /znhstry
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Imports every module, so a syntax error or a bad import fails here
+      # rather than at 09:17 UTC in the nightly.
+      - name: Import check
+        working-directory: pipeline
+        run: uv run python -c "from znhstry import api, boundaries, config, export, extract, upload"
+
+      - name: dbt parse
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt parse

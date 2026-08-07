@@ -117,3 +117,12 @@ DEFAULT_SCOPE = "global"
 # and any epoch after them makes their day offset negative. Under a uint16 that
 # underflows into a plausible-looking future date instead of failing.
 DAY_EPOCH = date(2010, 1, 1)
+
+# QONQR released on 2012-07-30. Everything before it is pre-release testing: 11
+# scattered events between 2012-05-19 and 2012-07-29, plus the 29 backfill
+# sentinel rows dated 2010-01-01. The export drops all of it, so "All time"
+# means the life of the game rather than the life of the table.
+#
+# Cheap to do: 40 events across 40 zones, only 7 of which have no later event
+# and therefore stop counting as ever-played.
+RECORD_START = date(2012, 7, 30)

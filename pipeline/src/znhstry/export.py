@@ -128,7 +128,7 @@ def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path
         """)
 
     if scope.active_only:
-        filters.append("zone_id in (select zone_id from fct_zone_events)")
+        filters.append("zone_id in (select zone_id from zone_events)")
 
     con.execute(f"""
         create or replace temp view scope_members as
@@ -497,7 +497,7 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
                    arg_max(legion_count, observed_at)   as legion,
                    arg_max(swarm_count, observed_at)    as swarm,
                    arg_max(faceless_count, observed_at) as faceless
-            from fct_zone_events group by zone_id
+            from zone_events group by zone_id
         ) e on e.zone_id = s.zone_id
         order by s.idx
     """).fetchnumpy()
@@ -708,7 +708,7 @@ def _prepare_display(con: duckdb.DuckDBPyConnection) -> None:
                    arg_max(e.legion_count, e.observed_at)    as legion,
                    arg_max(e.swarm_count, e.observed_at)     as swarm,
                    arg_max(e.faceless_count, e.observed_at)  as faceless
-            from fct_zone_events e
+            from zone_events e
             join scope s on s.zone_id = e.zone_id
             group by 1, 2
         )
@@ -846,7 +846,7 @@ def _export_zone_history(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str,
     blocks = con.execute(f"""
         select cast(idx / {_HISTORY_BLOCK} as integer) as block, count(*) as events
         from (
-            select s.idx from fct_zone_events e join scope s on s.zone_id = e.zone_id
+            select s.idx from zone_events e join scope s on s.zone_id = e.zone_id
         ) group by 1 order by 1
     """).fetchall()
 
@@ -859,7 +859,7 @@ def _export_zone_history(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str,
                    cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)
                        as day,
                    e.control_state, e.legion_count, e.swarm_count, e.faceless_count
-            from fct_zone_events e
+            from zone_events e
             join scope s on s.zone_id = e.zone_id
             where s.idx >= {block * _HISTORY_BLOCK}
               and s.idx <  {(block + 1) * _HISTORY_BLOCK}
@@ -931,7 +931,7 @@ def _export_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
                    sum(e.legion_delta)   as legion_delta,
                    sum(e.swarm_delta)    as swarm_delta,
                    sum(e.faceless_delta) as faceless_delta
-            from fct_zone_events e join scope s on s.zone_id = e.zone_id
+            from zone_events e join scope s on s.zone_id = e.zone_id
             group by 1
         ),
         cumulative as (
@@ -1008,7 +1008,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         select e.country_id as area_id, {day} as day,
                sum(e.legion_delta) as legion, sum(e.swarm_delta) as swarm,
                sum(e.faceless_delta) as faceless
-        from fct_zone_events e join scope s on s.zone_id = e.zone_id
+        from zone_events e join scope s on s.zone_id = e.zone_id
         where e.country_id is not null
         group by 1, 2 {moved}
         order by 1, 2
@@ -1029,7 +1029,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         select e.region_id as area_id, {day} as day,
                sum(e.legion_delta) as legion, sum(e.swarm_delta) as swarm,
                sum(e.faceless_delta) as faceless
-        from fct_zone_events e
+        from zone_events e
         join scope s on s.zone_id = e.zone_id
         join stg_regions r on r.region_id = e.region_id and r.country_id = e.country_id
         group by 1, 2 {moved}
@@ -1055,7 +1055,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         select c.trow, c.tcol, c.cell, {day} as day,
                sum(e.legion_delta) as legion, sum(e.swarm_delta) as swarm,
                sum(e.faceless_delta) as faceless
-        from fct_zone_events e
+        from zone_events e
         join scope s on s.zone_id = e.zone_id
         join cell_member c on c.zone_id = e.zone_id
         group by 1, 2, 3, 4 {moved}
@@ -1114,12 +1114,23 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
 
     con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
     try:
+        # Everything downstream reads `zone_events`, never `fct_zone_events`
+        # directly, so the release-date cut is applied in exactly one place and
+        # cannot drift between the display stream, the per-zone history and the
+        # aggregate series. The warehouse keeps the full record; this is the
+        # export deciding what the game's history is.
+        con.execute(f"""
+            create or replace temp view zone_events as
+            select * from fct_zone_events
+            where activity_date >= date '{config.RECORD_START}'
+        """)
+
         zone_count = _create_scope(con, scope, out)
         log.info("scope %s: %s zones", scope.name, f"{zone_count:,}")
 
         active_count = con.execute(
             "select count(*) from scope s "
-            "where s.zone_id in (select zone_id from fct_zone_events)"
+            "where s.zone_id in (select zone_id from zone_events)"
         ).fetchone()[0]
 
         _clear_shards(out)
@@ -1133,7 +1144,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         area_series = _export_area_series(con, out)
 
         span = con.execute(
-            "select min(activity_date), max(activity_date) from fct_zone_events e "
+            "select min(activity_date), max(activity_date) from zone_events e "
             "join scope s on s.zone_id = e.zone_id"
         ).fetchone()
 
@@ -1146,7 +1157,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
                        arg_max(e.legion_count, e.observed_at)   as legion,
                        arg_max(e.swarm_count, e.observed_at)    as swarm,
                        arg_max(e.faceless_count, e.observed_at) as faceless
-                from fct_zone_events e
+                from zone_events e
                 join scope s on s.zone_id = e.zone_id
                 group by e.zone_id
             )

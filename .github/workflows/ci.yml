@@ -52,7 +52,7 @@ jobs:
       # rather than at 02:30 UTC in the nightly.
       - name: Import check
         working-directory: pipeline
-        run: uv run python -c "from znhstry import api, boundaries, config, export, extract, ingest, schema, upload"
+        run: uv run python -c "from znhstry import boundaries, config, export, ingest, schema, upload"
 
       - name: Lint
         working-directory: pipeline

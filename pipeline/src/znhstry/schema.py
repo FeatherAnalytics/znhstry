@@ -1,13 +1,11 @@
 """The dtype contract for everything written under `data/raw`.
 
-Two paths write the same Parquet: `ingest.py` from QONQR's published CSVs, which is
-the live one, and `extract.py` from the SQL mirror, which is kept only to verify the
-first. DuckDB reads a partition set through a single glob, so a column that differs in
+DuckDB reads a year-partitioned set through a single glob, so a column that differs in
 width or signedness between two files does not merely look inconsistent - it makes the
-source unreadable. Neither module declares its own types; both conform to this.
+source unreadable. Nothing declares its own types; every writer conforms to this, which
+is also what lets a partition written years apart from its neighbour still read.
 
-The widths are the ones the original extraction settled on and the warehouse has been
-built against, so they are load-bearing rather than arbitrary:
+The widths are load-bearing rather than arbitrary, and the warehouse is built on them:
 
 - `ZoneId` is Int32 because the maximum is ~2.8M and a zone id is never negative, but
   Int32 leaves room for the ones that appear above the previous maximum over time.

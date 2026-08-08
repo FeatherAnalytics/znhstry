@@ -374,25 +374,6 @@ def ingest_lookups() -> None:
         log.info("lookups: %s - %s rows", name, f"{df.height:,}")
 
 
-def consolidate_zones() -> None:
-    """One-time migration from the API-era 200k-id chunks to a single file."""
-    directory = config.RAW / "zones"
-    legacy = sorted(directory.glob("zones_[0-9]*.parquet"))
-    if not legacy:
-        log.info("consolidate: nothing to migrate")
-        return
-
-    df = conform(pl.read_parquet([str(p) for p in legacy]), ZONE_DTYPES).sort("ZoneId")
-    path = zones_path()
-    tmp = path.with_name(path.name + ".tmp")
-    df.write_parquet(tmp, compression="zstd")
-    tmp.replace(path)
-    log.info("consolidate: %s zones from %d chunks", f"{df.height:,}", len(legacy))
-
-    for p in legacy:
-        p.unlink()
-
-
 def ingest_daily(slots: Iterable[int] | None = None, today: date | None = None) -> dict[int, int]:
     """The nightly step: work out which slots are needed, read them, fold them in.
 
@@ -463,46 +444,3 @@ def seed_battlestats(csv_path: Path) -> int:
         df["Date"].max(),
     )
     return df.height
-
-
-def migrate() -> None:
-    """One-time move off the API-era file layouts. A no-op once it has run."""
-    repartition()
-    consolidate_zones()
-
-
-def repartition() -> None:
-    """One-time migration off the API-era shard layout. A no-op once it has run."""
-    root = config.RAW / "changelog"
-    legacy = sorted(root.glob("changelog_*.parquet"))
-    if not legacy:
-        log.info("repartition: nothing to migrate")
-        return
-
-    lf = pl.scan_parquet([str(p) for p in legacy])
-    total = lf.select(pl.len()).collect().item()
-    years = (
-        lf.select(pl.col("LastUpdateDateUtc").dt.year().unique().alias("y"))
-        .collect()
-        .to_series()
-        .sort()
-        .to_list()
-    )
-    log.info(
-        "repartition: %s rows across %d years, from %d files", f"{total:,}", len(years), len(legacy)
-    )
-
-    written = 0
-    for year in years:
-        df = lf.filter(pl.col("LastUpdateDateUtc").dt.year() == year).collect()
-        _write_partition(conform(df, CHANGELOG_DTYPES), int(year))
-        written += df.height
-        log.info("  year=%s: %s rows", year, f"{df.height:,}")
-
-    # Refuse to delete the old layout unless every row is accounted for in the new one.
-    if written != total:
-        raise RuntimeError(f"wrote {written:,} of {total:,} rows; leaving the old shards in place")
-
-    for path in legacy:
-        path.unlink()
-    log.info("repartition: %d legacy shards removed", len(legacy))

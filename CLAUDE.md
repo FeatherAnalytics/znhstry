@@ -282,12 +282,11 @@ Cranston and Narragansett Bay.
 
 Tiles are third-party requests, roughly a dozen per view, cached by the browser normally.
 
-### Do not reintroduce a zoom-based LOD
+### No zoom-based LOD
 
-Below zoom 4 the map once drew one aggregated cell per web-mercator tile instead of
-individual zones. It was rejected, and the reason is not performance — **the point of this
-map is the millions of dots tracing the world**. A 16x16 grid of coloured blocks is cheaper
-and says less.
+The map never aggregates zones into cells at low zoom, and the reason is not performance —
+**the point of this map is the millions of dots tracing the world**. A 16x16 grid of
+coloured blocks is cheaper and says less.
 
 Spatial **sharding** is a different thing and is what the viewer does: every zone is in
 exactly one tile, every tile is eventually fetched, nothing is ever aggregated. The grid
@@ -368,20 +367,10 @@ known header rather than trusting the status. There is no `Last-Modified` on the
 and no year in the filename, so "has today landed" costs a full fetch and parse — which is
 why the nightly runs once on a timer instead of polling.
 
-### The SQL mirror, and why it is gone
-
-`neon-ninja/QONQR_zonedata` runs `update.sh` on a cron, loading these same CSVs into an
-append-only MySQL `changelog` exposed at `api-proxy.auckland-cer.cloud.edu.au`. Everything
-here was originally read through it.
-
-It was only ever an accumulation of the files above, verified before the cutover: over a
-full ring, 83,870 events on both sides, no row present in one and absent from the other,
-and no differing value on control state or any count. So reading it added a dependency
-without adding data.
-
-Do not reintroduce it, and note that their git history is not a fallback either — they
-force-push, so a shallow clone cannot even pull. `extract.py` and `api.py` remain only as
-a verification oracle and are on no scheduled path.
+**Do not add a third-party mirror.** `neon-ninja/QONQR_zonedata` loads these same CSVs
+into a MySQL `changelog` behind a public SQL API, and reading it adds a dependency without
+adding data — it is an accumulation of the files above and nothing more. Their git history
+is not a fallback either: they force-push, so a shallow clone cannot pull.
 
 ## Data facts (measured, not guessed)
 
@@ -451,21 +440,20 @@ exactly, with no remainder:
 0.004% of bots is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
-### Bugs worth not reintroducing
+### Invariants — each one has a failure mode that is silent
 
 - **Never mistake a day's first sliver for the whole day.** A slot spans midnight, so
   having events *dated* day D usually means slot D-1 was read and D is a fragment. Deciding
   completeness by comparing dates skips D forever. `plan_slots` requires events strictly
-  after D, and `tests/test_ingest.py` pins it. This is the same class of bug that used to
-  freeze an unfinished extraction window: never assume a thin final day is real.
+  after D, and `tests/test_ingest.py` pins it. Never assume a thin final day is real.
 - **`fct_zone_checkpoints` must compare timestamps, not dates.** Casting to date drops every
   boundary an event lands on — the preceding event fails `next > B` and the event itself
-  fails `B > observed`, so no row matches. This silently lost 19,062 checkpoints.
+  fails `B > observed`, so no row matches, and 19,062 checkpoints vanish.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
-- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones came
-  out labelled "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both, so
-  a contradicted region is null rather than wrong, and
-  `tests/assert_region_label_agrees_with_country.sql` fails if it returns.
+- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones read
+  "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both keys, so a
+  contradicted region is null rather than wrong, and
+  `tests/assert_region_label_agrees_with_country.sql` fails if one appears.
 - **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
   discovers them because they arrive in the daily CSVs like any other change.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
@@ -507,9 +495,9 @@ Stored is not what anyone fetches. Four trees are lazy and together they are 81 
 | `series/cells/` | 5.9 MB | the tiles a circle or viewport covers |
 
 `export_all` clears every shard tree before writing, so a layout change cannot leave orphans
-behind. This is not hypothetical: switching layouts once left 187 orphaned directories and
-~12,000 stale files still being served. `upload.py` deletes bucket keys the manifest no
-longer names, for the same reason.
+behind — otherwise a changed layout strands hundreds of directories and thousands of stale
+files that are still served. `upload.py` deletes bucket keys the manifest does not name, for
+the same reason, except under `raw/` — see "The raw layer".
 
 Every `.br` is a brotli stream over a columnar dump: each column is a contiguous run of one
 fixed-width dtype, concatenated in the order `meta.json` lists it. Served with

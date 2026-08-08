@@ -993,7 +993,10 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     that went quiet in 2019 costs nothing until the reader asks for it.
     """
     day = f"cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)"
-    moved = "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 " "or sum(e.faceless_delta) != 0"
+    moved = (
+        "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 "
+        "or sum(e.faceless_delta) != 0"
+    )
     columns = {
         "area_id": "uint16",
         "day": DAY,

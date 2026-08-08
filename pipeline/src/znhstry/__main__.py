@@ -7,10 +7,9 @@ import logging
 import os
 import sys
 
-from . import boundaries, config, export, extract, ingest, upload
+from . import boundaries, config, export, ingest, upload
 
 STEPS = {
-    # The live path: QONQR's published Dropbox drop.
     "ingest": ingest.ingest_daily,
     "export": export.export_all,
     "upload": upload.upload_all,
@@ -18,24 +17,14 @@ STEPS = {
     # the 31-slot ring cannot seed a history it does not hold.
     "archive": upload.archive_raw,
     "restore": upload.restore_raw,
-    # One-time move off the API-era file layouts.
-    "migrate": ingest.migrate,
     # Scope-independent and rarely rerun.
     "boundaries": boundaries.export_boundaries,
-    # The SQL mirror. Not on any scheduled path -- kept to verify the ingest above
-    # against the source it replaced, and to seed history the 31-slot ring cannot reach.
-    "all": extract.extract_all,
-    "lookups": extract.extract_lookups,
-    "zones": extract.extract_zones,
-    "changelog": extract.extract_changelog,
-    "baseline": extract.extract_baseline,
-    "update": extract.extract_update,
 }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="znhstry", description="Extract QONQR data to Parquet.")
-    parser.add_argument("step", choices=sorted(STEPS), nargs="?", default="all")
+    parser = argparse.ArgumentParser(prog="znhstry", description="Zone History pipeline.")
+    parser.add_argument("step", choices=sorted(STEPS), nargs="?", default="ingest")
     parser.add_argument(
         "--scope",
         choices=sorted(config.SCOPES),
@@ -59,6 +48,7 @@ def main() -> int:
     )
     # httpx logs every request at INFO, which drowns out progress.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
     if args.step == "export":
         export.export_all(args.scope)
     elif args.step == "ingest":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from . import boundaries, config, export, extract, ingest, upload
@@ -62,10 +63,23 @@ def main() -> int:
         export.export_all(args.scope)
     elif args.step == "ingest":
         slots = [int(s) for s in args.slots.split(",")] if args.slots else None
-        ingest.ingest_daily(slots)
+        added = ingest.ingest_daily(slots)
+        # A night with nothing new should not spend 26 minutes rebuilding an identical
+        # export. The count goes out as a step output so the workflow can stop here.
+        _emit(events=sum(added.values()))
     else:
         STEPS[args.step]()
     return 0
+
+
+def _emit(**values: object) -> None:
+    """Write `key=value` lines to $GITHUB_OUTPUT when running under Actions."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            handle.write(f"{key}={value}\n")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,41 @@
+version: 2
+
+exposures:
+  - name: zone_history_map
+    label: Zone History
+    type: application
+    maturity: high
+    url: https://www.featheranalytics.dev/znhstry/
+    description: >
+      The site itself. Not a BI tool reading the warehouse live -- `znhstry export`
+      slices these marts into static binaries under `dist/data/global/`, uploads them
+      to R2, and the browser reads those. So the dependency is real but it is a build
+      step, and breaking one of these models breaks the map at the next nightly rather
+      than immediately.
+
+      This exists so `dbt ls --select +exposure:zone_history_map` answers "what does
+      the site actually depend on", which is otherwise buried in the SQL strings inside
+      export.py.
+    owner:
+      name: Feather Analytics
+    depends_on:
+      - ref('dim_zone')
+      - ref('fct_zone_events')
+      - ref('fct_zone_checkpoints')
+      - ref('fct_global_daily')
+      - ref('fct_country_daily')
+      - ref('stg_regions')
+      - ref('stg_countries')
+
+  - name: battle_history
+    label: Zone History — battle reports
+    type: application
+    maturity: low
+    url: https://www.featheranalytics.dev/znhstry/
+    description: >
+      Not wired into the viewer yet. Declared at low maturity so the lineage is honest
+      about what exists: the mart is built and tested, and nothing reads it.
+    owner:
+      name: Feather Analytics
+    depends_on:
+      - ref('fct_zone_battles')

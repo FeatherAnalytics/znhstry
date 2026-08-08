@@ -49,13 +49,32 @@ jobs:
           enable-cache: true
 
       # Imports every module, so a syntax error or a bad import fails here
-      # rather than at 09:17 UTC in the nightly.
+      # rather than at 02:30 UTC in the nightly.
       - name: Import check
         working-directory: pipeline
-        run: uv run python -c "from znhstry import api, boundaries, config, export, extract, upload"
+        run: uv run python -c "from znhstry import api, boundaries, config, export, extract, ingest, schema, upload"
+
+      - name: Lint
+        working-directory: pipeline
+        run: uvx ruff check src/znhstry
+
+      # Covers the parts with a right answer that does not need the network or the
+      # 290 MB raw layer: the ring arithmetic, and the dtype contract the two write
+      # paths share. Both have been wrong before in ways nothing else would catch.
+      - name: Unit tests
+        working-directory: pipeline
+        run: uv run python -m pytest -q
 
       - name: dbt parse
         working-directory: transform
         env:
           DBT_PROFILES_DIR: .
         run: uv run dbt parse
+
+      # Runs the models against a tiny fixture warehouse, so the SQL is checked for
+      # more than parseability without shipping the real data to CI.
+      - name: dbt unit tests
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt test --select "test_type:unit"

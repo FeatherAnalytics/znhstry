@@ -20,6 +20,15 @@ sources:
           artifact of the layout, and `observed_at` is the real thing to filter on.
         meta:
           external_location: "read_parquet('../data/raw/changelog/**/*.parquet', hive_partitioning = true)"
+        # Freshness is measured against the newest event, which is the only honest
+        # clock here -- file mtimes tell you when the ingest ran, not whether it
+        # found anything. The ring is the reason error_after is not generous: past
+        # 31 days the slots holding the gap have been overwritten and the data is
+        # unrecoverable, so a week is the point at which someone must look.
+        loaded_at_field: '"LastUpdateDateUtc"'
+        freshness:
+          warn_after: {count: 2, period: day}
+          error_after: {count: 7, period: day}
       - name: zones
         description: >
           Current state and geography for every zone. One row per zone, upserted from

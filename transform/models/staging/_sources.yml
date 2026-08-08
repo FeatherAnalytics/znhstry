@@ -21,15 +21,22 @@ sources:
         meta:
           external_location: "read_parquet('../data/raw/changelog/**/*.parquet', hive_partitioning = true)"
       - name: zones
-        description: Current state and geography for every zone. One row per zone.
+        description: >
+          Current state and geography for every zone. One row per zone, upserted from
+          the same daily CSVs the changelog comes from -- a daily file carries a
+          complete zones row for every zone it mentions. The newest observation wins,
+          decided by `LastUpdateDateUtc`, so re-reading an old slot cannot roll a zone
+          backwards.
         meta:
           external_location: "read_parquet('../data/raw/zones/*.parquet')"
       - name: countries
+        description: Straight from `Countries.csv` in the drop; already the right shape.
         meta:
           external_location: "read_parquet('../data/raw/lookups/countries.parquet')"
       - name: regions
+        description: >
+          Straight from `Regions.csv`. `regionid` is not authoritative where it
+          contradicts a zone's own `CountryId` -- see `dim_zone` for the country-wins
+          rule and why it exists.
         meta:
           external_location: "read_parquet('../data/raw/lookups/regions.parquet')"
-      - name: factions
-        meta:
-          external_location: "read_parquet('../data/raw/lookups/factions.parquet')"

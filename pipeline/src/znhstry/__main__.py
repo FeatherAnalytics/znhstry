@@ -13,8 +13,8 @@ STEPS = {
     "ingest": ingest.ingest_daily,
     "export": export.export_all,
     "upload": upload.upload_all,
-    # One-time migration off the API-era shard layout.
-    "repartition": ingest.repartition,
+    # One-time move off the API-era file layouts.
+    "migrate": ingest.migrate,
     # Scope-independent and rarely rerun.
     "boundaries": boundaries.export_boundaries,
     # The SQL mirror. Not on any scheduled path -- kept to verify the ingest above

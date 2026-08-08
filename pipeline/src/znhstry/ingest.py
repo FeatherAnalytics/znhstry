@@ -40,7 +40,7 @@ import httpx
 import polars as pl
 
 from . import config
-from .schema import CHANGELOG_DTYPES, EVENT_KEY, conform
+from .schema import CHANGELOG_DTYPES, EVENT_KEY, ZONE_DTYPES, conform
 
 log = logging.getLogger(__name__)
 
@@ -266,6 +266,133 @@ def merge(events: pl.DataFrame) -> dict[int, int]:
     return added
 
 
+# --- zones and lookups ----------------------------------------------------
+#
+# The same daily CSV that carries the day's events also carries a complete `zones` row
+# for every zone it mentions - name, position, country, region, current counts. So the
+# current-state table is maintained by upsert from the file already in hand, and the
+# 16-request nightly re-pull of all 2.68M zones goes away with it.
+#
+# One file, not the old 200k-id chunks. That chunking sized SQL queries, and an upsert
+# touching ~3,000 scattered zones rewrote every chunk anyway.
+
+ZONES_PATH_NAME = "zones.parquet"
+
+
+def zones_path() -> Path:
+    return config.RAW / "zones" / ZONES_PATH_NAME
+
+
+def read_zone_state(paths: Iterable[Path]) -> pl.DataFrame:
+    """Parse daily CSVs into the zones contract.
+
+    `TotalCount` is recomputed rather than read: upstream stores it, but a stored total
+    that disagrees with its three parts is a lie the map would draw.
+    """
+    frames = [pl.read_csv(p, infer_schema_length=None) for p in paths]
+    if not frames:
+        return pl.DataFrame(schema=ZONE_DTYPES)
+
+    df = pl.concat(frames, how="vertical_relaxed").with_columns(
+        [
+            pl.col(c)
+            .cast(pl.String)
+            .str.slice(0, _TIMESTAMP_WIDTH)
+            .str.to_datetime(_TIMESTAMP_FORMAT, strict=False)
+            for c in ("LastUpdateDateUtc", "DateCapturedUtc")
+        ]
+    )
+    df = df.with_columns(
+        (
+            pl.col("LegionCount").cast(pl.Int64)
+            + pl.col("SwarmCount").cast(pl.Int64)
+            + pl.col("FacelessCount").cast(pl.Int64)
+        ).alias("TotalCount")
+    )
+    return conform(df, ZONE_DTYPES)
+
+
+def merge_zones(incoming: pl.DataFrame) -> tuple[int, int]:
+    """Upsert current state by zone. Returns (total zones, zones changed).
+
+    The newest observation wins, decided by `LastUpdateDateUtc` rather than by which
+    file was read last. Reading an old slot by hand must never roll a zone backwards,
+    and nulls sort first so a never-touched row cannot displace a real one.
+    """
+    if incoming.is_empty():
+        return 0, 0
+
+    path = zones_path()
+    before = 0
+    if path.exists():
+        existing = pl.read_parquet(path)
+        before = existing.height
+        incoming = pl.concat([existing, incoming], how="vertical")
+
+    merged = (
+        incoming.sort("ZoneId", "LastUpdateDateUtc", nulls_last=False)
+        .unique(subset=["ZoneId"], keep="last", maintain_order=True)
+        .sort("ZoneId")
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    merged.write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+
+    new_zones = merged.height - before
+    log.info("zones: %s rows (+%s new)", f"{merged.height:,}", f"{new_zones:,}")
+    return merged.height, new_zones
+
+
+def ingest_lookups() -> None:
+    """Countries and Regions, straight from the drop.
+
+    Both CSVs already carry exactly the column names the warehouse reads
+    (`countryid,Code,Description` and `countryid,regionid,description`), so there is
+    nothing to rename - only a cast, so the ids do not drift between runs.
+    """
+    paths = {p.name: p for p in fetch(["Countries.csv", "Regions.csv"])}
+    for name, source, dtypes in (
+        (
+            "countries",
+            "Countries.csv",
+            {"countryid": pl.Int64, "Code": pl.String, "Description": pl.String},
+        ),
+        (
+            "regions",
+            "Regions.csv",
+            {"countryid": pl.Int64, "regionid": pl.Int64, "description": pl.String},
+        ),
+    ):
+        df = conform(pl.read_csv(paths[source], infer_schema_length=None), dtypes)
+        out = config.RAW / "lookups" / f"{name}.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(out.name + ".tmp")
+        df.write_parquet(tmp, compression="zstd")
+        tmp.replace(out)
+        log.info("lookups: %s - %s rows", name, f"{df.height:,}")
+
+
+def consolidate_zones() -> None:
+    """One-time migration from the API-era 200k-id chunks to a single file."""
+    directory = config.RAW / "zones"
+    legacy = sorted(directory.glob("zones_[0-9]*.parquet"))
+    if not legacy:
+        log.info("consolidate: nothing to migrate")
+        return
+
+    df = conform(pl.read_parquet([str(p) for p in legacy]), ZONE_DTYPES).sort("ZoneId")
+    path = zones_path()
+    tmp = path.with_name(path.name + ".tmp")
+    df.write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+    log.info("consolidate: %s zones from %d chunks", f"{df.height:,}", len(legacy))
+
+    for p in legacy:
+        p.unlink()
+
+
 def ingest_daily(slots: Iterable[int] | None = None, today: date | None = None) -> dict[int, int]:
     """The nightly step: work out which slots are needed, read them, fold them in.
 
@@ -279,9 +406,24 @@ def ingest_daily(slots: Iterable[int] | None = None, today: date | None = None) 
         log.info("nothing to ingest")
         return {}
 
-    events = read_daily(fetch([slot_name(s) for s in chosen]))
+    paths = fetch([slot_name(s) for s in chosen])
+
+    events = read_daily(paths)
     log.info("read %s events from %d slot(s)", f"{events.height:,}", len(chosen))
-    return merge(events)
+    added = merge(events)
+
+    # Same files, read a second way. The event stream is the record; `zones` is the
+    # current-state view the geometry and labels come from, and both are in the CSV.
+    merge_zones(read_zone_state(paths))
+    ingest_lookups()
+
+    return added
+
+
+def migrate() -> None:
+    """One-time move off the API-era file layouts. A no-op once it has run."""
+    repartition()
+    consolidate_zones()
 
 
 def repartition() -> None:

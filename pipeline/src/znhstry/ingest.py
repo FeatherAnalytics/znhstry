@@ -1,0 +1,212 @@
+"""Read QONQR's published Dropbox drop into `data/raw`.
+
+This is the live ingest path. It replaces querying the SQL mirror, which was only ever
+reading an accumulation of these same files - verified over a full ring: 83,870 events
+either side, no row present in one and absent from the other, no differing value.
+
+## The ring
+
+`dailyzoneupdates-NN.csv` is a 31-slot ring where `NN` is the day of the month and
+QONQR overwrites the slot in place. Nothing in the filename says which month, so a
+stale slot is indistinguishable from a fresh one until it is parsed - slot 03 holding
+July while slot 01 holds August is the normal resting state for the first days of a
+month, not a fault.
+
+Two consequences shape everything here:
+
+- **The dates inside the file are the only truth.** There is no Last-Modified header on
+  a Dropbox download, and the filename carries no year. Every freshness decision reads
+  the parsed timestamps.
+- **A gap wider than the ring is permanent.** Slot NN is gone the moment QONQR writes
+  next month's day NN over it. `plan_slots` refuses to run rather than write a hole.
+
+## What a slot contains
+
+The dump is generated shortly after midnight UTC, so slot `NN` holds the events of day
+`NN` plus the first seconds of day `NN+1`. Days therefore overlap by a sliver between
+consecutive slots, which is why the merge is keyed rather than appended: re-reading a
+slot already on disk is a no-op, and that is what makes a retried run free.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
+from pathlib import Path
+
+import httpx
+import polars as pl
+
+from . import config
+from .schema import CHANGELOG_DTYPES, EVENT_KEY, conform
+
+log = logging.getLogger(__name__)
+
+DAILY_STEM = "dailyzoneupdates"
+
+# QONQR writes the CSV with 7 fractional-second digits. The mirror stores whole seconds
+# and the warehouse is built on those, so the fraction is truncated rather than rounded
+# - truncation is what the upstream importer does, and matching it exactly is what makes
+# the two sources reconcile row for row.
+_TIMESTAMP_WIDTH = 19
+_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class RingGapError(RuntimeError):
+    """The missing window is wider than the ring, so the data is unrecoverable."""
+
+
+def links() -> dict[str, str]:
+    """Filename -> URL, from the vendored link list."""
+    out: dict[str, str] = {}
+    for line in config.DROPBOX_LINKS.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        out[line.rsplit("/", 1)[-1]] = line
+    return out
+
+
+def slot_name(slot: int) -> str:
+    return f"{DAILY_STEM}-{slot:02d}.csv"
+
+
+def _download(client: httpx.Client, url: str, dest: Path) -> int:
+    """Fetch one file, writing through a temporary so a failure leaves no partial."""
+    joiner = "&" if "?" in url else "?"
+    response = client.get(f"{url}{joiner}{config.DROPBOX_DOWNLOAD_PARAM}")
+    response.raise_for_status()
+    body = response.content
+
+    # Dropbox answers 200 with a web page when it decides the caller is a browser, so a
+    # status check alone would happily write HTML into a .csv and fail much later.
+    if not body.startswith(b"ZoneId,") and not body.startswith(b"countryid,"):
+        head = body[:80].decode("utf-8", "replace")
+        raise RuntimeError(f"{dest.name}: expected CSV, got {head!r}")
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(body)
+    tmp.replace(dest)
+    return len(body)
+
+
+def fetch(names: Iterable[str], dest_dir: Path | None = None) -> list[Path]:
+    """Download the named files into the landing directory.
+
+    A name absent from the link list is fatal. Dropbox has no listing API here, so the
+    keys are pinned by hand - if QONQR re-shares the folder every key changes at once,
+    and continuing past that would quietly ingest nothing at all.
+    """
+    dest_dir = dest_dir or config.LANDING
+    available = links()
+    names = list(names)
+
+    unknown = [n for n in names if n not in available]
+    if unknown:
+        raise RuntimeError(
+            f"no link for {unknown}. If the shared folder was re-shared, every key in "
+            f"{config.DROPBOX_LINKS.name} needs refreshing."
+        )
+
+    paths: list[Path] = []
+    with httpx.Client(
+        timeout=config.DROPBOX_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": config.USER_AGENT},
+    ) as client:
+
+        def one(name: str) -> tuple[Path, int]:
+            path = dest_dir / name
+            return path, _download(client, available[name], path)
+
+        with ThreadPoolExecutor(max_workers=config.DROPBOX_WORKERS) as pool:
+            for path, size in pool.map(one, names):
+                log.info("fetched %s (%s KB)", path.name, f"{size // 1024:,}")
+                paths.append(path)
+
+    return paths
+
+
+def read_daily(paths: Iterable[Path]) -> pl.DataFrame:
+    """Parse daily CSVs into the changelog contract.
+
+    Rows with no `LastUpdateDateUtc` are zones that have never been touched. They carry
+    no event and the upstream importer drops them too.
+    """
+    frames = [pl.read_csv(p, infer_schema_length=None) for p in paths]
+    if not frames:
+        return pl.DataFrame(schema=CHANGELOG_DTYPES)
+
+    df = pl.concat(frames, how="vertical_relaxed").filter(pl.col("LastUpdateDateUtc").is_not_null())
+    df = df.with_columns(
+        [
+            pl.col(c)
+            .cast(pl.String)
+            .str.slice(0, _TIMESTAMP_WIDTH)
+            .str.to_datetime(_TIMESTAMP_FORMAT, strict=False)
+            for c in ("LastUpdateDateUtc", "DateCapturedUtc")
+        ]
+    )
+    return conform(df, CHANGELOG_DTYPES).unique(subset=EVENT_KEY, keep="last")
+
+
+def history_max(source: Path | None = None) -> date | None:
+    """The newest event date already on disk, or None if there is no history yet."""
+    source = source or config.RAW / "changelog"
+    parts = sorted(source.rglob("*.parquet"))
+    if not parts:
+        return None
+    newest = (
+        pl.scan_parquet([str(p) for p in parts])
+        .select(pl.col("LastUpdateDateUtc").max())
+        .collect()
+        .item()
+    )
+    return None if newest is None else newest.date()
+
+
+def plan_slots(today: date | None = None, source: Path | None = None) -> list[int]:
+    """Which ring slots this run needs, derived from the history rather than the date.
+
+    Normally one: the day that closed at midnight. A run that was skipped or failed
+    widens the window on its own, so a missed night heals on the next run without
+    anybody re-running it with arguments.
+
+    The ring is the limit. Past `RING_SLOTS` days the oldest missing slot has already
+    been overwritten with a newer month, and fetching it would append the wrong month's
+    events while reporting success - so this raises instead.
+    """
+    today = today or date.today()
+    # The dump for day D lands just after D ends, so D itself is never complete yet.
+    newest_complete = today - timedelta(days=1)
+
+    have = history_max(source)
+    if have is None:
+        raise RingGapError(
+            "no history on disk. The ring only reaches back 31 days, so a first run "
+            "must be seeded from an archive - see `znhstry restore`."
+        )
+
+    # Day D is fully read only once events *after* it are on disk. Because a slot spans
+    # midnight, reading slot D leaves the first seconds of D+1 behind as proof; a max of
+    # D alone means slot D-1 was the last one read and D is still a sliver. Comparing
+    # dates the obvious way would mistake that sliver for a finished day - the same
+    # "thin final day" that has bitten this pipeline before.
+    if have > newest_complete:
+        log.info("history reaches %s; %s is fully read", have, newest_complete)
+        return []
+
+    days = [have + timedelta(days=n) for n in range((newest_complete - have).days + 1)]
+    if len(days) > config.RING_SLOTS:
+        raise RingGapError(
+            f"history ends {have} and {newest_complete} just closed: {len(days)} days "
+            f"to read, but the ring only holds {config.RING_SLOTS}. The oldest of those "
+            "slots has been overwritten with a newer month and is not recoverable from "
+            "Dropbox. Restore from the archive instead of running this."
+        )
+
+    log.info("history reaches %s, reading %d slot(s) up to %s", have, len(days), newest_complete)
+    return [d.day for d in days]

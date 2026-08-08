@@ -38,6 +38,31 @@ def _load_root_env() -> None:
 
 _load_root_env()
 
+# --- Ingest: QONQR's published Dropbox drop -------------------------------
+#
+# The live source. QONQR writes 31 rotating daily CSVs plus two lookups to a public
+# shared folder; this is the same drop the SQL mirror is itself built from, so reading
+# it directly costs nobody anything and depends on nobody's server staying up.
+
+LANDING = DATA / "landing"
+
+DROPBOX_LINKS = Path(__file__).with_name("dropbox_links.txt")
+
+# Dropbox serves an HTML interstitial to anything it does not recognise as a downloader
+# and there is no Last-Modified on the response, so `?dl=1` is how a file is asked for
+# rather than a page about a file. Freshness therefore comes from the dates inside the
+# CSV, never from a header.
+DROPBOX_DOWNLOAD_PARAM = "dl=1"
+
+# QONQR's Dropbox, not a research box: these can be friendlier than the API limits.
+# Still modest - a nightly asks for three files.
+DROPBOX_WORKERS = 4
+DROPBOX_TIMEOUT = 120.0
+
+# Slot NN of dailyzoneupdates-NN.csv is the day of the month, overwritten in place.
+# The ring is the hard limit on how long a gap can be before it is unrecoverable.
+RING_SLOTS = 31
+
 API_BASE = "https://api-proxy.auckland-cer.cloud.edu.au/QONQR/"
 
 # The endpoint is a shared research box at the University of Auckland

@@ -82,9 +82,14 @@ def _download(client: httpx.Client, url: str, dest: Path) -> int:
 
     # Dropbox answers 200 with a web page when it decides the caller is a browser, so a
     # status check alone would happily write HTML into a .csv and fail much later.
-    if not body.startswith(b"ZoneId,") and not body.startswith(b"countryid,"):
-        head = body[:80].decode("utf-8", "replace")
-        raise RuntimeError(f"{dest.name}: expected CSV, got {head!r}")
+    #
+    # The test is "is this a web page", not "is this a schema I recognise". Listing known
+    # headers here would mean every new file in the drop is rejected until someone adds
+    # its header - and some of them carry a UTF-8 BOM, so the first byte is not even the
+    # first character.
+    head = body.lstrip(b"\xef\xbb\xbf").lstrip()[:64].decode("utf-8", "replace")
+    if head.lower().startswith(("<!doctype", "<html", "<?xml")):
+        raise RuntimeError(f"{dest.name}: got a web page, not a file - {head!r}")
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")

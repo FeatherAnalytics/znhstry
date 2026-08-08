@@ -423,13 +423,26 @@ numbers it does not already have. A normal run costs one index page and stops.
   recent observations, which may be years. We recompute deltas from `changelog`.
   `TotalDelta` is also absolute (churn), never negative. Not extracted.
 - **`Description` is not unique** — many zones share a name. `ZoneId` is the only key.
-- **`zones.CountryId` is authoritative; `RegionId` is not.** For 447 zones the region's own
-  `countryid` contradicts the zone's `CountryId`, and coordinates settle it every time in
-  the country's favour: 155 zones filed under West Pomeranian Voivodeship (Poland) sit at
-  161°E, -10° in the Solomon Islands; 135 filed under Northwest Territories (Canada) are at
-  27°E, -10° in the DRC; likewise Tonga↔Azerbaijan (87) and East Timor↔Ukraine (68). The
-  data dictionary documents both join paths as equivalent. They are not. Trust `CountryId`,
-  and drop the region label when it disagrees rather than printing a contradiction.
+- **`zones.CountryId` is authoritative; `zones.RegionId` is the corrupt field.** For 447
+  zones the region they point at belongs to a different country, and coordinates back the
+  country every time: 155 zones pointing at West Pomeranian Voivodeship (Poland) sit at
+  162°E, -10° in the Solomon Islands; 135 pointing at Northwest Territories (Canada) are in
+  the DRC; likewise Tonga↔Azerbaijan (87) and East Timor↔Ukraine (68).
+
+  **The `regions` table is not at fault** — it is correct, and identical in `Regions.csv`
+  and the SQL mirror (3,799 rows, same values). The proof is Kingston, Norfolk Island
+  (zone 27425): region 3869 is `Islands` under Norfolk Island and is right there in the
+  table, but the zone points at 3868, `Islands` under South Georgia. The game renders
+  "Islands" regardless, so the two share a name and the error is invisible in-game.
+
+  Only that one zone is recoverable by matching the region name under the correct country.
+  The other 446 point at a region whose name exists nowhere under their country — the
+  Solomon Islands zones point at 2452 when that country's regions are 2746–2753, so it is
+  wholesale wrong rather than off by one. Not worth a repair rule that fires once.
+
+  The data dictionary documents both join paths as equivalent. They are not. Trust
+  `CountryId`, and drop the region label when it disagrees rather than printing a
+  contradiction.
 - **`battlestats` column names contain spaces** and need backticks.
   `Country = 'Atlantis'` marks **tournament** zones — see below. Not test data.
 - **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed

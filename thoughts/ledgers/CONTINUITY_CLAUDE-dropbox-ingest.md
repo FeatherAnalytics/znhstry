@@ -74,12 +74,17 @@ Zone History updates itself from QONQR's own Dropbox CSVs and nothing else. Done
   - [x] Phase 2: Year partitions, keyed merge, dbt source on `hive_partitioning`
   - [x] Phase 3: zones + lookups from the daily CSVs; factions as a dbt seed
   - [x] Phase 4: battlestats seeded from the community scrape, staged, and modelled
-- Now: [→] Phase 5: R2 `raw/` archive + restore command
-- Remaining:
-  - [ ] Phase 6: Rewrite `nightly.yml` (one slot + manual override); delete
-        `archive-raw-data.yml`
-  - [ ] Phase 7: dbt source freshness; tests on the ingest contract
-  - [ ] Phase 8: Reconcile full rebuild against the API oracle; rewrite CLAUDE.md
+  - [x] Phase 5: R2 `raw/` archive + restore, round trip verified byte-for-byte
+  - [x] Phase 6: `nightly.yml` rewritten; `archive-raw-data.yml` deleted
+  - [x] Phase 7: freshness, exposures, unit test, region fix, 10 Python tests
+  - [x] Phase 8: reconciled against the mirror, every year exact; CLAUDE.md rewritten
+- Now: [→] Phase 9: verify the export, then delete everything in MIGRATION-INDEX.md
+
+## Reconciliation result (the last thing the mirror was used for)
+
+Per-year counts match exactly for 2012-2026. 2010 differs by design: 29 rows kept of
+1,449,170, the rest being all-zero backfill sentinels, and the total diff is exactly
+1,449,141. Nothing else to check — the history on disk is the history upstream has.
 
 ## Open Questions
 

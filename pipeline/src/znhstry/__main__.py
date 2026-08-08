@@ -7,10 +7,13 @@ import logging
 import os
 import sys
 
-from . import boundaries, config, export, ingest, upload
+from . import boundaries, config, export, ingest, portal, upload
 
 STEPS = {
     "ingest": ingest.ingest_daily,
+    # Battle reports come from the game's live portal, not the Dropbox drop, so they are
+    # their own step: the map must not fail to publish because a web page was slow.
+    "battlestats": portal.scrape_battlestats,
     "export": export.export_all,
     "upload": upload.upload_all,
     # The raw layer's durable copy. `restore` is the first step on a fresh clone:
@@ -57,6 +60,8 @@ def main() -> int:
         # A night with nothing new should not spend 26 minutes rebuilding an identical
         # export. The count goes out as a step output so the workflow can stop here.
         _emit(events=sum(added.values()))
+    elif args.step == "battlestats":
+        _emit(reports=portal.scrape_battlestats())
     else:
         STEPS[args.step]()
     return 0

@@ -63,6 +63,19 @@ DROPBOX_TIMEOUT = 120.0
 # The ring is the hard limit on how long a gap can be before it is unrecoverable.
 RING_SLOTS = 31
 
+# --- Battle reports: QONQR's live portal -----------------------------------
+#
+# This is the game's own web server rendering one HTML page per report, not a bulk
+# endpoint, and reading it is tolerated rather than invited. A normal day is ten pages.
+# Do not add concurrency and do not lower the interval.
+
+PORTAL_TIMEOUT = 60.0
+PORTAL_MIN_INTERVAL = 2.0
+
+# Ceiling on a catch-up, so an outage resumes over several runs instead of becoming a
+# crawl of thousands of pages in one. Four days' worth.
+PORTAL_MAX_PER_RUN = 40
+
 # Identify ourselves. QONQR's Dropbox is public, but a request with a name on it
 # is the least we can do for someone publishing data for free.
 USER_AGENT = "znhstry/0.1 (personal analytics project; github.com/mrbri/znhstry)"

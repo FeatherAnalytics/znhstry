@@ -11,6 +11,8 @@ dependencies = [
     "brotli>=1.2.0",
     # R2 is S3-compatible; `znhstry upload` talks to it through boto3.
     "boto3>=1.35",
+    "beautifulsoup4>=4.15.0",
+    "lxml>=6.1.1",
 ]
 
 [dependency-groups]

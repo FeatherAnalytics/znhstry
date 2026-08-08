@@ -1,9 +1,9 @@
 """Ring arithmetic and the dtype contract.
 
-Deliberately the only Python tests here. The pipeline's real correctness checks live
-in dbt, against real data, because that is where the interesting failures are. These
-two things are the exception: both decide what gets written before dbt ever sees it,
-neither is observable in a mart once it has gone wrong, and both have been wrong.
+The pipeline's correctness checks mostly live in dbt, against real data, because that is
+where the interesting failures are. These two are the exception: both decide what gets
+written before dbt ever sees it, and neither is observable in a mart once it has gone
+wrong - a skipped day and a silently widened column both look like ordinary data.
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ def _history(tmp_path, newest: str):
     part.mkdir(parents=True)
     pl.DataFrame(
         {"ZoneId": [1], "LastUpdateDateUtc": [newest]},
-    ).with_columns(
-        pl.col("LastUpdateDateUtc").str.to_datetime("%Y-%m-%d %H:%M:%S")
-    ).write_parquet(part / "events.parquet")
+    ).with_columns(pl.col("LastUpdateDateUtc").str.to_datetime("%Y-%m-%d %H:%M:%S")).write_parquet(
+        part / "events.parquet"
+    )
     return tmp_path
 
 
@@ -100,8 +100,10 @@ def test_conform_casts_to_the_contract():
             "Extra": ["ignored"],
         },
         schema_overrides={"ZoneId": pl.Int64, "ZoneControlState": pl.Int64},
-    ).with_columns(pl.col("LastUpdateDateUtc").cast(pl.Datetime("us")),
-                   pl.col("DateCapturedUtc").cast(pl.Datetime("us")))
+    ).with_columns(
+        pl.col("LastUpdateDateUtc").cast(pl.Datetime("us")),
+        pl.col("DateCapturedUtc").cast(pl.Datetime("us")),
+    )
 
     out = conform(df, CHANGELOG_DTYPES)
 

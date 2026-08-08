@@ -80,10 +80,14 @@ rebuild a record that starts in 2012.
 QONQR publishes its own zone data to a public Dropbox folder: 31 rotating daily CSVs plus
 country and region lookups. That is the only live source this project reads.
 
-Battle report history came from the community scrape at
+Battle reports come from the game's own portal, ten a day, indexed by its Most Active
+Zones page. The scraper runs serially with a delay between requests and asks only for
+report numbers it does not already have, so an ordinary day costs one index page.
+
+The 61,517 rows of history behind that came from the community scrape at
 [neon-ninja/QONQR_zonedata](https://github.com/neon-ninja/QONQR_zonedata), copied once.
-Report numbers are sparse across their range, so collecting those 61,517 rows directly
-would have meant roughly 130,000 requests to the game's own server.
+Report numbers are sparse across their range, so collecting them directly would have
+meant roughly 130,000 requests to a server that did not need them.
 
 ## Licence
 

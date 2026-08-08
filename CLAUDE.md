@@ -28,7 +28,8 @@ The refresh chain is four steps and they are not optional — exporting without 
 the warehouse ships whatever the marts last held:
 
 ```bash
-cd pipeline  && uv run python -m znhstry ingest    # read the day's slot from Dropbox
+cd pipeline  && uv run python -m znhstry ingest      # read the day's slot from Dropbox
+cd pipeline  && uv run python -m znhstry battlestats # scrape any new battle reports
 cd transform && uv run dbt build                   # rebuild the marts (~25 s)
 cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~26 min)
 cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
@@ -344,7 +345,7 @@ Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
 |---|---|---|
 | `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
-| `portal.qonqr.com` | battle reports, one HTML page per report | not yet collected by us |
+| `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
 filename says which month, so a stale slot is indistinguishable from a fresh one until it
@@ -371,6 +372,27 @@ why the nightly runs once on a timer instead of polling.
 into a MySQL `changelog` behind a public SQL API, and reading it adds a dependency without
 adding data — it is an accumulation of the files above and nothing more. Their git history
 is not a fallback either: they force-push, so a shallow clone cannot pull.
+
+### Battle reports are scraped, and the limits are not tuning knobs
+
+`portal.qonqr.com` is the game's own live web server rendering one page per report, not a
+bulk endpoint. Collecting from it is tolerated rather than invited, so `portal.py` fetches
+**serially**, waits `PORTAL_MIN_INTERVAL` between requests, and only asks for report
+numbers it does not already have. A normal run costs one index page and stops.
+
+- **`PORTAL_MAX_PER_RUN` caps a catch-up** so an outage resumes over several runs instead
+  of crawling thousands of pages at once. Do not raise it to "just get caught up".
+- **Most Active Zones only names today's ten.** Reports from a missed day appear on no
+  index anywhere, so the span between what we hold and what is listed is walked by number.
+- **A report number with no report is normal.** ~61k real reports span a range of ~131k
+  numbers, so misses are counted and stepped over, never raised.
+- **`Date` on a report page is US month-first** — `8/7/2026` is 7 August. Parsed with an
+  explicit format, because for any day under 13 the wrong reading is also a valid date and
+  the error would be silent and up to eleven months wrong.
+- **Numbers use a plain space for thousands** (`1 666`).
+- The parser builds column names from the page's own stat labels and each cell's CSS
+  class, which is what makes new rows land in the seeded history's exact 77 columns.
+  `pipeline/tests/test_portal.py` pins that contract against a real saved page.
 
 ## Data facts (measured, not guessed)
 

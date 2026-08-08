@@ -45,10 +45,11 @@ sources:
           and spaces exactly as scraped.
 
           Not in the Dropbox drop. QONQR publishes these as HTML at
-          `portal.qonqr.com/Home/BattleStatistics/<BRN>`, and the history here was
-          seeded once from the long-running community scrape rather than re-fetched -
-          the BRN range is sparse, so reproducing ~61k rows would have meant ~130k
-          requests to the game's own server. Collection from here on is ours.
+          `portal.qonqr.com/Home/BattleStatistics/<BRN>`, indexed by the Most Active
+          Zones page. History was seeded once from the long-running community scrape
+          rather than re-fetched - the BRN range is sparse, so reproducing ~61k rows
+          would have meant ~130k requests to the game's own server. `znhstry
+          battlestats` collects forward from there, ten pages on a normal day.
         meta:
           external_location: "read_parquet('../data/raw/battlestats/battlestats.parquet')"
       - name: countries

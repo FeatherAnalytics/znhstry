@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QONQR Web Portal</title>
+    <meta name="description" content="QONQR is the geosocial game of world domination.">
+    <meta name="author" content="Qonqr LLC.">
+
+    <link rel="icon" type="image/png" href="http://qonqr.com/favicon.ico">
+    <link rel="apple-touch-icon" sizes="57x57" href="http://qonqr.com/Images/favicon.ico/apple-icon-57x57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="http://qonqr.com/Images/favicon.ico/apple-icon-60x60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="http://qonqr.com/Images/favicon.ico/apple-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="http://qonqr.com/Images/favicon.ico/apple-icon-76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="http://qonqr.com/Images/favicon.ico/apple-icon-114x114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="http://qonqr.com/Images/favicon.ico/apple-icon-120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="http://qonqr.com/Images/favicon.ico/apple-icon-144x144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="http://qonqr.com/Images/favicon.ico/apple-icon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="http://qonqr.com/Images/favicon.ico/apple-icon-180x180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="http://qonqr.com/Images/favicon.ico/android-icon-192x192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="http://qonqr.com/Images/favicon.ico/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="http://qonqr.com/Images/favicon.ico/favicon-96x96.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="http://qonqr.com/Images/favicon.ico/favicon-16x16.png">
+    <meta name="msapplication-TileColor" content="#ffffff">
+    <meta name="msapplication-TileImage" content="http://qonqr.com/Images/favicon.ico/ms-icon-144x144.png">
+    <meta name="theme-color" content="#000000">
+
+    <!-- Facebook Meta Tags -->
+    <meta property="fb:app_id" content="1479959368895825" />
+    <meta property="og:title" content="Most Active Zones - 8/7/2026 12:00:00 AM" />
+    <meta property="og:type" content="qonqr_portal:Battle" />
+    <meta property="og:site_name" content="QONQR Web Portal" />
+    <meta property="og:url" content="https://portal.qonqr.com/Home/MostActiveZones" />
+    <meta property="og:description" content="The World. In Play." />
+    <meta property="og:image" content="https://portal.qonqr.com/Images/SocialBanner.png" />
+    <meta property="og:locale" content="en_US" />
+            <meta property="og:locale:alternate" content="es_ES" />
+            <meta property="og:locale:alternate" content="es_MX" />
+            <meta property="og:locale:alternate" content="de_DE" />
+            <meta property="og:locale:alternate" content="pt_BR" />
+            <meta property="og:locale:alternate" content="pt_PT" />
+            <meta property="og:locale:alternate" content="it_IT" />
+            <meta property="og:locale:alternate" content="hu_HU" />
+    <meta property="qonqr_portal:location:latitude">
+    <meta property="qonqr_portal:location:longitude">
+    <meta property="qonqr_portal:date">
+    <meta property="article:author">
+    <meta property="article:publisher">
+
+    <!-- Twitter Meta Tags -->
+    <meta name="twitter:card" content="app">
+    <meta name="twitter:site" content=@QONQR />
+    <meta name="twitter:description" content="QONQR is a free mobile game that brings the game to where you live, pitting you against other players in a battle for your home town and surrounding cities. QONQR is the world, in play.">
+    <meta name="twitter:app:country" content="US">
+    <meta name="twitter:app:name:iphone" content="QONQR">
+    <meta name="twitter:app:id:iphone" content="1049220831">
+    <meta name="twitter:app:url:iphone" content="https://itunes.apple.com/us/app/qonqr-world-in-play/id1049220831?mt=8">
+    <meta name="twitter:app:name:googleplay" content="QONQR">
+    <meta name="twitter:app:id:googleplay" content="com.qonqr.android.blue">
+    <meta name="twitter:app:url:googleplay" content="https://play.google.com/store/apps/details?id=com.qonqr.android.blue&hl=en">
+
+    <link href="/Styles/styles.css?refresh=20161201" rel="stylesheet" type="text/css">
+    <link href="/Styles/jquery-ui.min.css" rel="stylesheet" type="text/css">
+
+    <!-- TODO: THIS SHOULD BE MOVED ONLY THE PAGES THAT NEED IT -->
+    <link href="/Styles/animate.min.css" rel="stylesheet" type="text/css">
+
+    
+    <style>
+        .marker {
+            display: block;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            width: 25px;
+            height: 29px;
+        }
+    </style>
+
+    
+
+    <!-- HTML5 Shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/libs/html5shiv/3.7.0/html5shiv.js"></script>
+      <script src="https://oss.maxcdn.com/libs/respond.js/1.4.2/respond.min.js"></script>
+    <![endif]-->
+
+
+</head>
+<body>
+    <!--
+    Facebook Analytics
+    https://developers.facebook.com/docs/analytics/quickstart-web
+    -->
+    <script>
+        window.fbAsyncInit = function () {
+            FB.init({
+                appId: '1479959368895825',
+                xfbml: true,
+                version: 'v2.8'
+            });
+            FB.AppEvents.logPageView();
+        };
+
+        (function (d, s, id) {
+            var js, fjs = d.getElementsByTagName(s)[0];
+            if (d.getElementById(id)) { return; }
+            js = d.createElement(s); js.id = id;
+            js.src = "//connect.facebook.net/en_US/sdk.js";
+            fjs.parentNode.insertBefore(js, fjs);
+        }(document, 'script', 'facebook-jssdk'));
+    </script>
+
+    
+
+    <div class="wrapper">
+        <!-- Sidebar -->
+        <div class="sidebar-wrapper blue">
+            <ul class="sidebar-nav">
+                <li class="sidebar-brand">
+                    <a href="/Home"><img src="/Images/logo.png" alt="logo"><span>WEB PORTAL</span></a>
+                </li>
+                    <li class="nav-links">
+                        <a href="/Home/Login">Login</a>
+                    </li>
+                <li class="nav-links">
+                    <a href="/Atlantis">Atlantis</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Comic/SelectFaction">Comic</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Market/Cubes">Cubes &amp; Coins</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Home/MostActiveZones">Most Active Zones</a>
+                </li>
+                    <li class="nav-links">
+                        <a href="/Home/Support">Support &amp; Tools</a>
+                    </li>
+            <li style="padding-top:30px;padding-left:20px;">
+                <div>
+                    <span class="small glyphicon glyphicon-globe" style="vertical-align:middle"></span>&nbsp;<a href="/Home/Language" style="font-size:12px;font-family:Arial;vertical-align:middle">English (en)</a>
+                </div>
+                <div style="font-size:12px;font-family:Arial">
+                    &copy; 2010 - 2026
+                </div>
+                <div style="font-size:12px;font-family:Arial">
+                    v: 20260609.1145
+                </div>
+            </li>
+            </ul>
+        </div>
+        <div class="page-content-wrapper">
+            <button type="button" id="menu-toggle" class="btn btn-default btn-lg blue">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="glyphicon glyphicon-list"></span>
+            </button>
+            
+<form action="/Home/MostActiveZones" id="form" method="post">    <div class="content-header">
+        <h1>
+                Top 10
+            Most Active Zones
+        </h1>
+    </div>
+    <div class="page-content inset">
+        <div class="row bottom-buffer">
+            <div class="col-lg-3">
+                <dl>
+                    <dt>DATE:</dt>
+                    <dd>
+                        <span class="field-validation-valid" data-valmsg-for="DateText" data-valmsg-replace="true"></span>
+                        <input class="blue form-control bottom-buffer" id="DateText" name="DateText" type="text" value="2026-08-07" />
+                    </dd>
+                </dl>
+                <br />
+            </div>
+            <div class="col-lg-9">
+                <div id='map' style="position:relative; width:100%; height:400px; max-width:900px; min-width:40px;"></div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-xs-12">
+                <div class="divider bottom-buffer"></div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-lg-12">
+                    <div class="table-responsive">
+                        <table class="table table-hover blue">
+                            <thead>
+                                <tr>
+                                    <th></th>
+                                    <th>
+                                        Zone
+                                    </th>
+                                    <th>
+                                        Region
+                                    </th>
+                                    <th>
+                                        Country
+                                    </th>
+                                    <th>
+                                        Total Launches
+                                    </th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                    <tr>
+                                        <td>
+                                            1
+                                        </td>
+                                        <td>
+                                            Dover Heights
+                                        </td>
+                                        <td>
+                                            New South Wales
+                                        </td>
+                                        <td>
+                                            Australia
+                                        </td>
+                                        <td style="text-align:center;">
+                                            1666
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131012">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            2
+                                        </td>
+                                        <td>
+                                            Loomis
+                                        </td>
+                                        <td>
+                                            California
+                                        </td>
+                                        <td>
+                                            United States
+                                        </td>
+                                        <td style="text-align:center;">
+                                            903
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131013">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            3
+                                        </td>
+                                        <td>
+                                            Bonnet Bay
+                                        </td>
+                                        <td>
+                                            New South Wales
+                                        </td>
+                                        <td>
+                                            Australia
+                                        </td>
+                                        <td style="text-align:center;">
+                                            638
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131014">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            4
+                                        </td>
+                                        <td>
+                                            Kloten / Kloten (Zentrum)
+                                        </td>
+                                        <td>
+                                            Kanton Zurich
+                                        </td>
+                                        <td>
+                                            Switzerland
+                                        </td>
+                                        <td style="text-align:center;">
+                                            482
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131015">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            5
+                                        </td>
+                                        <td>
+                                            Santa Rita
+                                        </td>
+                                        <td>
+                                            California
+                                        </td>
+                                        <td>
+                                            United States
+                                        </td>
+                                        <td style="text-align:center;">
+                                            470
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131016">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            6
+                                        </td>
+                                        <td>
+                                            Barbechat
+                                        </td>
+                                        <td>
+                                            Pays de la Loire
+                                        </td>
+                                        <td>
+                                            France
+                                        </td>
+                                        <td style="text-align:center;">
+                                            378
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131017">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            7
+                                        </td>
+                                        <td>
+                                            Hebron
+                                        </td>
+                                        <td>
+                                            Texas
+                                        </td>
+                                        <td>
+                                            United States
+                                        </td>
+                                        <td style="text-align:center;">
+                                            366
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131018">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            8
+                                        </td>
+                                        <td>
+                                            Grenelle
+                                        </td>
+                                        <td>
+                                            Ile-de-France
+                                        </td>
+                                        <td>
+                                            France
+                                        </td>
+                                        <td style="text-align:center;">
+                                            349
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131019">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            9
+                                        </td>
+                                        <td>
+                                            Witterswil
+                                        </td>
+                                        <td>
+                                            Kanton Solothurn
+                                        </td>
+                                        <td>
+                                            Switzerland
+                                        </td>
+                                        <td style="text-align:center;">
+                                            347
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131020">Details</a>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>
+                                            10
+                                        </td>
+                                        <td>
+                                            Sioux Falls
+                                        </td>
+                                        <td>
+                                            South Dakota
+                                        </td>
+                                        <td>
+                                            United States
+                                        </td>
+                                        <td style="text-align:center;">
+                                            344
+                                        </td>
+                                        <td>
+                                            <a class="list-link" href="/Home/BattleStatistics/131021">Details</a>
+                                        </td>
+                                    </tr>
+                            </tbody>
+                        </table>
+                    </div>
+            </div>
+        </div>
+    </div>
+<input name="__RequestVerificationToken" type="hidden" value="CfDJ8CRxRtVhy8RDtnTPiJVCQiJyNwjleOpYZNGMVZSgV1jok7XIUPG3nNb65JoEaQGGjPKY5exCof4I4-NQb8vousGfXnMBcJspl9yu0cinJHWvssSJLj-36LUppTykomjq8eg6JNIj9wW2oLiqT6SuW5c" /></form>
+
+
+        </div>
+    </div>
+
+    <script src="/Scripts/jquery-3.1.1.min.js"></script>
+    <script src="/Scripts/jquery-ui.min.js"></script>
+    <script src="/Scripts/bootstrap.min.js"></script>
+    <script>
+        $("#menu-toggle").click(function (e) {
+            e.preventDefault();
+            $(".wrapper").toggleClass("active");
+        });
+    </script>
+    
+    <script src='https://api.mapbox.com/mapbox-gl-js/v1.10.1/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v1.10.1/mapbox-gl.css' rel='stylesheet' />
+    <script>
+        var map = null;
+        function getMap(zoomLevel, lat, lon) {
+            mapboxgl.accessToken = 'pk.REDACTED_THIRD_PARTY_TOKEN';
+
+            map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/dark-v10',
+            zoom: zoomLevel,
+            center: [lon, lat]
+            });
+        }
+
+        // Add zones to the map
+        function addZones() {
+            var marker = null;
+
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Dover Heights New South Wales');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([151.27917, -33.87083]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_s_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Loomis California');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([-121.193, 38.82129]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Bonnet Bay New South Wales');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([151.05, -34]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Kloten / Kloten (Zentrum) Kanton Zurich');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([8.58683, 47.45134]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_l_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Santa Rita California');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([-121.65606, 36.72385]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_l_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Barbechat Pays de la Loire');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([-1.28333, 47.28333]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Hebron Texas');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([-96.86361, 33.02651]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Grenelle Ile-de-France');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([2.3, 48.85]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_s_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Witterswil Kanton Solothurn');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([7.52117, 47.48658]);
+                    marker.addTo(map);
+                
+                    // create a DOM element for the marker
+                    var el = document.createElement('div');
+                    el.className = 'marker';
+                    el.style.backgroundImage = 'url(/Images/pin_s_sm.png)';
+                    el.addEventListener('click', function () {
+                        window.alert('Sioux Falls South Dakota');
+                    });
+
+                    marker = new mapboxgl.Marker(el);
+                    marker.setLngLat([-96.70033, 43.54997]);
+                    marker.addTo(map);
+                        }
+
+        $(function () {
+            getMap(1, 10, 0);
+            addZones();
+
+            $(".date").datepicker({
+                maxDate: -1,
+                minDate: new Date(2012, 3, 4),
+                changeMonth: true,
+                changeYear: true,
+                showAnim: 'slideDown',
+                dateFormat: "yy-mm-dd",
+                onSelect: function () { $("#form").submit(); }
+            });
+        });
+
+        window.addEventListener('resize', function() {
+            map.getViewPort().resize();
+        });
+
+        function ShareFacebook() {
+            FB.ui({
+                method: 'feed',
+                link: 'https://portal.qonqr.com/Home/MostActiveZones',
+                caption: ''
+            }, function (response) { });
+        }
+    </script>
+
+</body>
+</html>

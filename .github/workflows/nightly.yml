@@ -79,36 +79,57 @@ jobs:
         working-directory: pipeline
         run: uv run python -m znhstry ingest ${{ inputs.slots && format('--slots {0}', inputs.slots) || '' }}
 
-      - name: Nothing new
-        if: steps.ingest.outputs.events == '0'
-        run: echo "no new events; upstream has not published since the last run" >> "$GITHUB_STEP_SUMMARY"
+      # A separate source: the game's live portal, not the Dropbox drop. Allowed to fail
+      # without taking the map down with it -- battle reports are an overlay, and a slow
+      # web page is not a reason to stop publishing zone control. A run where nothing is
+      # missing costs one request.
+      - name: Collect battle reports
+        id: battlestats
+        continue-on-error: true
+        working-directory: pipeline
+        run: uv run python -m znhstry battlestats
+
+      # One place to decide, because six copies of the same expression is six chances
+      # to get it wrong. A failed battlestats step leaves its output empty, and empty
+      # must not read as "new data".
+      - name: Anything to publish?
+        id: changed
+        run: |
+          events="${{ steps.ingest.outputs.events }}"
+          reports="${{ steps.battlestats.outputs.reports }}"
+          if [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "no new events or battle reports since the last run" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Build warehouse
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         working-directory: transform
         env:
           DBT_PROFILES_DIR: .
         run: uv run dbt build
 
       - name: Export payloads
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry export
 
       - name: Upload data
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry upload
 
       # After the export, not before: if a run gets this far the raw layer produced a
       # site, which is the only evidence that what we are about to archive is good.
       - name: Archive raw layer
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry archive
 
       - name: Check the manifest is reachable
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         env:
           DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
         run: |
@@ -116,7 +137,7 @@ jobs:
             || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
 
       - name: Report
-        if: steps.ingest.outputs.events != '0'
+        if: steps.changed.outputs.any == 'true'
         env:
           DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
         run: |

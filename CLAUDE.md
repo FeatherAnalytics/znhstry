@@ -1,41 +1,47 @@
 # znhstry (Zone History)
 
 Historical visualization of QONQR zone control: where every zone stands, what moved over
-any window, and how the whole thing got here. Public read-only SQL mirror -> Parquet ->
+any window, and how the whole thing got here. QONQR's published CSV drop -> Parquet ->
 dbt/DuckDB -> deck.gl dashboard.
 
 **Slug is `znhstry`; display name is "Zone History".** Use the display name in page titles,
 headings, and prose. The slug is for the repo, URL, and package only.
 
+**This repo is self-contained.** It reads QONQR's own published data and nothing else — no
+third-party mirror, no other repository, no server that belongs to a person rather than the
+game. See "Where the data comes from".
+
 ## Tech Stack
 
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
-- **Extract**: `httpx` + `polars` -> Parquet in `data/raw/`.
-- **Transform**: dbt-duckdb in `transform/` — 5 staging views, 1 intermediate, 5 marts,
-  9 data tests. `uv run dbt build` takes ~35 s over 9.88M events.
+- **Ingest**: `httpx` + `polars` -> Parquet in `data/raw/`.
+- **Transform**: dbt-duckdb in `transform/` — 6 staging views, 1 intermediate, 6 marts,
+  1 seed, 12 data tests, 1 unit test, 2 exposures. `uv run dbt build` takes ~25 s over
+  9.88M events.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
 - **Hosting**: the site on GitHub Pages, the data in Cloudflare R2. Two deployments.
 
 ## Commands
 
-The refresh chain is three steps and they are not optional — exporting without rebuilding
+The refresh chain is four steps and they are not optional — exporting without rebuilding
 the warehouse ships whatever the marts last held:
 
 ```bash
-cd pipeline  && uv run python -m znhstry update   # refetch zones + the open changelog window
-cd transform && uv run dbt build                  # rebuild the marts (~35 s)
-cd pipeline  && uv run python -m znhstry export   # rebuild dist/data (~26 min)
-cd pipeline  && uv run python -m znhstry upload   # push changed objects to R2
+cd pipeline  && uv run python -m znhstry ingest    # read the day's slot from Dropbox
+cd transform && uv run dbt build                   # rebuild the marts (~25 s)
+cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~26 min)
+cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
+cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
 ```
 
 Other steps:
 
 ```bash
 cd pipeline
-uv run python -m znhstry all          # full extraction (idempotent, resumable)
-uv run python -m znhstry changelog    # one step: lookups|zones|changelog|baseline
-uv run python -m znhstry boundaries   # rebuild the admin outlines
+uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
+uv run python -m znhstry boundaries       # rebuild the admin outlines
 
 cd web
 npm run data   # serve dist/data on :3002 — the map is empty without it
@@ -329,26 +335,53 @@ Two brotli qualities, because the curve has a knee. On a 26.9 MB payload: q9 3.9
 4.5 s, **q10 3.60 MB in 46 s**, **q11 3.43 MB in 130 s**. q11 for anything on the critical
 path, q10 for the bulk trees — 4% of the ratio for most of the export's running time.
 
-## Upstream API
+## Where the data comes from
 
-`https://api-proxy.auckland-cer.cloud.edu.au/QONQR/<url-encoded SQL>` — SQL in the URL
-**path**, not a query param. Full data dictionary: `QONQR-API-data-dictionary.md` in the
-Code root. Reference implementation: `../QONQR` (neon-ninja), a current-state Leaflet map
-with no time dimension.
+QONQR publishes its own data to a public Dropbox folder. That is the only live source.
+Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
+`QONQR-API-data-dictionary.md` in the Code root.
 
-**This is someone else's research box** (16 gunicorn workers, University of Auckland).
-`api.py` caps concurrency at 3, enforces a 0.5 s global floor between requests, and sends an
-identifying User-Agent. Do not raise those limits.
+| | What | Cadence |
+|---|---|---|
+| `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
+| `Countries.csv`, `Regions.csv` | lookups | rarely |
+| `portal.qonqr.com` | battle reports, one HTML page per report | not yet collected by us |
 
-**Upstream publishes complete days.** `neon-ninja/QONQR_zonedata` runs `update.sh` on a cron
-at 00:02, 01:03 and 12:02 UTC, loading QONQR's 31 rotating daily CSVs into an append-only
-MySQL `changelog`. Every date in the record is whole except the one still happening.
+**Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
+filename says which month, so a stale slot is indistinguishable from a fresh one until it
+is parsed — slot 03 holding July while slot 01 holds August is the normal resting state in
+the first days of a month, not a fault.
 
-- Returns 414 for SQL between 6KB and 9KB encoded. `MAX_SQL_BYTES` guards at 6000.
-- Errors come back as HTTP 200 with `{"results": {"error": …}}` — a dict where rows would
-  be a list. `api.query()` raises on that shape.
-- CORS is `*` and gzip is supported, so the browser *could* query it directly. Don't; the
-  volumes are too large and it isn't our server to lean on.
+**The dump is written just after midnight UTC, so slot `NN` holds all of day `NN` plus the
+first seconds of day `NN+1`.** That sliver is load-bearing: it is the only proof that day
+`NN` was read completely. `plan_slots` treats a day as finished only when events *after* it
+are on disk, because a max date of `NN` alone means slot `NN-1` was the last one read and
+`NN` is still a fragment.
+
+**A gap wider than 31 days is permanent.** The slot holding that day has been overwritten
+with a newer month. `plan_slots` raises rather than fetching it and appending the wrong
+month's events under a successful exit code. Restore from R2 instead.
+
+**Dropbox needs `?dl=1` and answers no freshness question.** Without it you get an HTML
+interstitial with a 200 status, which is why `_download` checks the body starts with a
+known header rather than trusting the status. There is no `Last-Modified` on the response
+and no year in the filename, so "has today landed" costs a full fetch and parse — which is
+why the nightly runs once on a timer instead of polling.
+
+### The SQL mirror, and why it is gone
+
+`neon-ninja/QONQR_zonedata` runs `update.sh` on a cron, loading these same CSVs into an
+append-only MySQL `changelog` exposed at `api-proxy.auckland-cer.cloud.edu.au`. Everything
+here was originally read through it.
+
+It was only ever an accumulation of the files above, verified before the cutover: over a
+full ring, 83,870 events on both sides, no row present in one and absent from the other,
+and no differing value on control state or any count. So reading it added a dependency
+without adding data.
+
+Do not reintroduce it, and note that their git history is not a fallback either — they
+force-push, so a shallow clone cannot even pull. `extract.py` and `api.py` remain only as
+a verification oracle and are on no scheduled path.
 
 ## Data facts (measured, not guessed)
 
@@ -365,11 +398,12 @@ MySQL `changelog`. Every date in the record is whole except the one still happen
   last changed in 2019 or earlier. Any time-window slice that ignores older events loses
   their state entirely.
 - **Pre-2012 rows are backfill sentinels.** 1,449,170 of them, of which only **29** carry
-  any bots. Extraction skips the rest and treats pre-first-event state as zero.
-  `extract_baseline()` pulls those 29 separately.
-- **2019 has a collection gap**: 337,859 events vs 627,035 in 2018 and 1,438,855 in 2020.
-  This is almost certainly missing data, not a quiet year. Annotate it in any continuous
-  time series; do not silently interpolate.
+  any bots. Everything else is genuinely zero, so pre-first-event state is treated as zero.
+  Those 29 live in `changelog/year=2010/` and are the whole of the starting state.
+- **2019's gap is a collection artifact, and battlestats proves it**: 337,859 events vs
+  627,035 in 2018 and 1,438,855 in 2020 — but **3,614 battle reports in 2019**, flat against
+  every neighbouring year. A second, independent source says the game was busy and the
+  collection was not. Annotate the gap in any continuous time series; never interpolate it.
 - **Only 1,595,086 of 2,682,442 zones have ever changed.** The rest are real places that
   have never been played, and the viewer draws them as faint grey terrain, so the export
   carries all of them (`active_only = False`). They ride in the geometry tiles and never
@@ -387,8 +421,14 @@ MySQL `changelog`. Every date in the record is whole except the one still happen
   and drop the region label when it disagrees rather than printing a contradiction.
 - **`battlestats` column names contain spaces** and need backticks.
   `Country = 'Atlantis'` marks test/tutorial zones — exclude.
-- Per-player data (`battlestats_players.csv`, `player_details.csv`) is **not in the
-  database**, only in the upstream repo `../QONQR_zonedata`.
+- **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed
+  number of reports a day from its Most Active Zones page: exactly 10 on 3,451 of the 4,598
+  covered days, 27–29 on most of the rest. A row means *this zone was among the most active
+  in the world that day* — never relabel it "battles that day", which would imply the other
+  ~3,000 active zones were quiet. No zone is reported twice in a day, so battle grain and
+  zone-day grain coincide. Coverage starts 2014-01-01, eighteen months after release.
+- Per-player data (`battlestats_players.csv`, `player_details.csv`) exists only in the
+  community scrape and is not collected here.
 
 ### changelog does not perfectly reconcile to zones
 
@@ -404,27 +444,30 @@ exactly, with no remainder:
 - **3 orphan zones** (`2836390`, `2836391`, `2836392`) exist in `changelog` but not in
   `zones`. They land in `fct_zone_events` with a null `country_id`, so they count toward
   `fct_global_daily` but not `fct_country_daily`. Do not "fix" this by inner-joining.
-- **1,429 zones (0.09%)** have a last `changelog` row that disagrees with their `zones` row,
-  always with `changelog` higher. Upstream runs `import_mysql.py` and
-  `import_mysql_changelog.py` as separate steps, so the two can drift.
+- **1,429 zones (0.09%)** have a last event that disagrees with their `zones` row, always
+  with the event higher. Both come from the same daily CSV now, so this is the game's own
+  drift rather than a mirror's two-step import, and it is expected to persist.
 
 0.004% of bots is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
 ### Bugs worth not reintroducing
 
-- **Never let the idempotent check freeze an unfinished window.** `extract_changelog` skips
-  any shard already on disk, which is right for a window that has *ended* and wrong for the
-  one covering today: a run part-way through a month writes a shard holding the month up to
-  that instant, and every later run skips it as present. The current window is always
-  refetched, whichever entry point asks. Verify the tail against upstream after any
-  extraction; never assume a thin final day is real.
+- **Never mistake a day's first sliver for the whole day.** A slot spans midnight, so
+  having events *dated* day D usually means slot D-1 was read and D is a fragment. Deciding
+  completeness by comparing dates skips D forever. `plan_slots` requires events strictly
+  after D, and `tests/test_ingest.py` pins it. This is the same class of bug that used to
+  freeze an unfinished extraction window: never assume a thin final day is real.
 - **`fct_zone_checkpoints` must compare timestamps, not dates.** Casting to date drops every
   boundary an event lands on — the preceding event fails `next > B` and the event itself
   fails `B > observed`, so no row matches. This silently lost 19,062 checkpoints.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
-- **Do not hardcode a max ZoneId.** New zones appear above the previous maximum;
-  `extract_zones()` discovers it at runtime and adds headroom.
+- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones came
+  out labelled "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both, so
+  a contradicted region is null rather than wrong, and
+  `tests/assert_region_label_agrees_with_country.sql` fails if it returns.
+- **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
+  discovers them because they arrive in the daily CSVs like any other change.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
@@ -655,22 +698,45 @@ Rings are simplified with Douglas-Peucker at `SIMPLIFY_TOLERANCE = 0.01` degrees
 which takes admin1 from 1.30M points to 382k. admin0 is 0.32 MB, admin1 is 1.55 MB; both
 load with the page. Rebuild with `uv run python -m znhstry boundaries`.
 
+## The raw layer
+
+`data/raw`, ~290 MB, gitignored, and **not rebuildable from upstream** — the ring reaches
+back 31 days and the record starts in 2012. R2 holds the only other copy, under `raw/`.
+
+| | Layout | Rows |
+|---|---|---|
+| `changelog/year=YYYY/events.parquet` | 16 partitions, hive | 9.88M |
+| `zones/zones.parquet` | one file | 2,682,442 |
+| `battlestats/battlestats.parquet` | one file, 77 columns verbatim | 61,517 |
+| `lookups/`, `boundaries/` | | 251 countries, 3,799 regions |
+
+- **Year partitions, because an append should rewrite one file.** The old 88-shard layout
+  sized API responses; there is no API to size for. DuckDB prunes on the directory name.
+- **`(ZoneId, LastUpdateDateUtc)` is unique across all 9.88M rows**, which is what makes the
+  merge keyed rather than appended — so re-reading a slot adds nothing and a retried run is
+  free. Never change this to an append.
+- **`upload_all` deletes every bucket key the export does not name.** The `raw/` prefix is
+  explicitly excluded, and the archive's own sweep is scoped to `raw/` in reverse. Remove
+  either fence and one job silently destroys the other's data.
+- **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
+  DuckDB reads them through one glob; a column differing in width between them makes the
+  source unreadable, not merely inconsistent.
+
 ## Performance notes
 
 - Query cost is dominated by planning, not transfer. Bigger chunks beat more chunks.
-- **Never ask MySQL for point-in-time state.** A `ROW_NUMBER() OVER (PARTITION BY ZoneId)`
-  snapshot took 48 s for 5,397 zones; pulling the raw event stream for the same zones took
-  5.4 s and yields every frame, not one.
-- Filter inside CTEs, not after — `changelog` is 11.3M rows.
+- Filter inside CTEs, not after — the event stream is 9.88M rows.
 - `BETWEEN` needs the low bound first or it silently returns nothing.
-- Changelog windows are yearly while history is sparse and monthly from 2020, 88 in total.
-  That is the *extraction* shard size, not upstream's cadence.
 
 ## Conventions
 
-- Extraction is **idempotent**: a chunk whose Parquet exists is skipped, except the window
-  covering today. Writes go to a `.tmp` then atomically rename, so interruption never leaves
-  a partial file.
-- `data/` and `dist/` are gitignored and fully rebuildable.
+- Ingest is **idempotent**: the merge is keyed, so re-reading a slot is a no-op. Writes go
+  to a `.tmp` then atomically rename, so interruption never leaves a partial file.
+- `data/` and `dist/` are gitignored. `dist/` is fully rebuildable; `data/` is not — see
+  "The raw layer".
 - Conventional commits: `feat:`, `fix:`, `data:`, `docs:`, `refactor:`.
-- Testing is deliberately minimal. The dbt layer carries 9 data tests; the viewer has none.
+- Testing is deliberately concentrated where failures are invisible, not spread evenly.
+  dbt carries 12 data tests and 1 unit test; `pipeline/tests/` covers the ring arithmetic
+  and the dtype contract, which decide what gets written before dbt can see it. The viewer
+  has none. `dbt source freshness` warns at 2 days stale and errors at 7 — well inside the
+  31-day ring, so there is time to act before a gap becomes unrecoverable.

@@ -9,11 +9,19 @@ on:
     # 02:15 UTC, which is as early as this can usefully run.
     #
     # QONQR publishes a day's batch just after midnight on the *following* day,
-    # not during the day itself: checked at 23:23 UTC, the newest upstream event
-    # was 00:01:21 that same morning and nothing had been added since, even
-    # though upstream's 12:02 run had been and gone. So day D is complete
-    # upstream by the 01:03 UTC run on D+1, and everything after that adds
-    # nothing until the next midnight.
+    # not during the day itself. Upstream runs three times daily and only one of
+    # them carries data - by commit size on neon-ninja/QONQR_zonedata, the same
+    # shape every day:
+    #
+    #   00:02   +1 -0, 1 file             a no-op
+    #   01:03   +15,143 -12,196, 4 files  the day's changelog import
+    #   12:02   +8,724 -9,517, 1 file     battlestats only
+    #
+    # So the first run after midnight is not the one to wait for. `update.sh`
+    # commits after `import_mysql_changelog.py`, so the database is current
+    # slightly before that 01:03 timestamp; day D is complete by 01:03 on D+1
+    # and nothing more arrives until the next midnight. 02:15 leaves 72 minutes
+    # of margin, which GitHub's cron drift can eat into without hurting.
     #
     # Off the hour because everything on GitHub's cron queues up there, and a
     # late start only helps. Any row that does arrive late is picked up anyway:

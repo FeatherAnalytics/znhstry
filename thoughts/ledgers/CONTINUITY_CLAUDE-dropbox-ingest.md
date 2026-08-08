@@ -44,11 +44,19 @@ Zone History updates itself from QONQR's own Dropbox CSVs and nothing else. Done
   that is one slot. A missed run heals itself on the next one, and a gap wider than the
   31-slot ring raises instead of writing a hole — that data is genuinely unrecoverable
   and a silent success would be the worst outcome.
-- **Battlestats: seed once from the mirror, scrape forward after.** 61,711 rows,
-  BRN 291-131,021, 77 columns. The table is *sparse* across that BRN range, so
-  re-scraping the history would mean ~130k requests to `portal.qonqr.com` to recover
-  61k rows. Seeding is cheaper and much politer to the game's own server. Ongoing
-  collection scrapes a few times a day, which the developer has informally accepted.
+- **Battlestats: seeded from the community scrape, not the mirror.** 61,517 rows read
+  out of `git show origin/main:battlestats.csv` — their working tree untouched, because
+  they force-push and a shallow pull refuses to merge. Ongoing collection scrapes
+  `portal.qonqr.com` a few times a day, which the developer has informally accepted.
+- **Battlestats is a daily leaderboard, not a log of fights.** Exactly 10 reports on
+  3,451 of 4,598 covered days, 27-29 on most of the rest — it is the Most Active Zones
+  page. A row means "among the most active in the world that day". Never label it
+  "battles that day" in the viewer; that would imply the other ~3,000 active zones were
+  quiet. Battle grain and zone-day grain coincide (no zone reported twice in a day).
+- **2019's gap is confirmed a collection artifact.** 3,614 battle reports that year,
+  flat against every neighbour, while the changelog has 337,859 events against 2018's
+  627,035. A second, independent source says the game was busy and the collection was
+  not. Worth saying out loud on any long time series.
 - **`factions` becomes a dbt seed.** 4 static rows, not in Dropbox, never changes.
 - **Lookup CSVs need no transformation.** `Countries.csv` is already
   `countryid,Code,Description` and `Regions.csv` is already
@@ -65,9 +73,9 @@ Zone History updates itself from QONQR's own Dropbox CSVs and nothing else. Done
   - [x] Phase 1: `schema.py` + `ingest.py` — fetch Dropbox slots, normalise to Parquet
   - [x] Phase 2: Year partitions, keyed merge, dbt source on `hive_partitioning`
   - [x] Phase 3: zones + lookups from the daily CSVs; factions as a dbt seed
-- Now: [→] Phase 4: One-time battlestats seed through the mirror, then retire the API
+  - [x] Phase 4: battlestats seeded from the community scrape, staged, and modelled
+- Now: [→] Phase 5: R2 `raw/` archive + restore command
 - Remaining:
-  - [ ] Phase 5: R2 `raw/` archive + restore command
   - [ ] Phase 6: Rewrite `nightly.yml` (one slot + manual override); delete
         `archive-raw-data.yml`
   - [ ] Phase 7: dbt source freshness; tests on the ingest contract

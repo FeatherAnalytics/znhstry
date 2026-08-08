@@ -30,8 +30,8 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from hashlib import md5
 from datetime import date
+from hashlib import md5
 from pathlib import Path
 
 from . import config
@@ -40,6 +40,17 @@ log = logging.getLogger(__name__)
 
 IMMUTABLE = "public, max-age=31536000, immutable"
 MANIFEST = "public, max-age=60"
+
+# The raw layer's home in the same bucket. It is not part of the export and no
+# browser ever asks for it, but it shares the bucket because a second one would
+# mean a second set of credentials for no benefit - the data is QONQR's public
+# record either way, and having it fetchable is what lets anyone clone this repo
+# and rebuild the whole warehouse without a single upstream request.
+#
+# Load-bearing: `upload_all` deletes every key the export does not name, so
+# without fencing this prefix off, publishing the site would wipe the archive.
+ARCHIVE_PREFIX = "raw/"
+ARCHIVE = "no-store"
 
 # For everything a nightly run can rewrite under a name it already used.
 #
@@ -68,6 +79,8 @@ def _cache_control(key: str) -> str:
     their filenames, so the only thing standing between a reader and stale data
     is this header.
     """
+    if key.startswith(ARCHIVE_PREFIX):
+        return ARCHIVE
     name = key.rsplit("/", 1)[-1]
     if name == "meta.json":
         return MANIFEST
@@ -85,6 +98,7 @@ def _cache_control(key: str) -> str:
 
     return VOLATILE
 
+
 # A full export is ~1,850 small objects. Serial puts would take many minutes of
 # almost pure round-trip; R2 is happy with this much concurrency.
 WORKERS = 16
@@ -97,9 +111,7 @@ def _client():
         f"https://{account}.r2.cloudflarestorage.com" if account else None
     )
     access_key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get(
-        "AWS_SECRET_ACCESS_KEY"
-    )
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
 
     if not (endpoint and access_key and secret_key):
         raise SystemExit(
@@ -108,6 +120,7 @@ def _client():
         )
 
     import boto3
+    from botocore.config import Config
 
     return boto3.client(
         "s3",
@@ -115,6 +128,10 @@ def _client():
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name="auto",
+        # botocore pools 10 connections by default and we run 16 threads, so the
+        # surplus six spend the run opening a socket, being discarded on return,
+        # and opening another. Matching the pool to the workers is the whole fix.
+        config=Config(max_pool_connections=WORKERS),
     )
 
 
@@ -163,11 +180,91 @@ def _existing(s3, bucket: str) -> dict[str, str]:
         token = page.get("NextContinuationToken")
 
 
+def _bucket(name: str | None = None) -> str:
+    name = name or os.environ.get("R2_BUCKET") or os.environ.get("R2_BUCKET_NAME")
+    if not name:
+        raise SystemExit("Set R2_BUCKET (or R2_BUCKET_NAME).")
+    return name
+
+
+def archive_raw(bucket: str | None = None) -> None:
+    """Push `data/raw` to the bucket under `raw/`.
+
+    This is the durable copy. Once the nightly reads Dropbox instead of the SQL
+    mirror, the ring only reaches back 31 days, so everything before that exists
+    solely because we kept it - an Actions cache is evictable and a laptop is a
+    laptop. The ETag skip means a nightly archive sends the year partition that
+    changed and the ~200 MB that did not stays put.
+    """
+    bucket = _bucket(bucket)
+    if not config.RAW.exists():
+        raise SystemExit(f"{config.RAW} does not exist - nothing to archive.")
+
+    s3 = _client()
+    files = sorted(p for p in config.RAW.rglob("*") if p.is_file() and p.suffix != ".tmp")
+    key_of = {p: ARCHIVE_PREFIX + p.relative_to(config.RAW).as_posix() for p in files}
+    remote = _existing(s3, bucket)
+
+    force = os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1"
+    pending = [
+        p for p in files if force or remote.get(key_of[p]) != md5(p.read_bytes()).hexdigest()
+    ]
+
+    log.info(
+        "archiving %s of %s files (%s MB)",
+        f"{len(pending):,}",
+        f"{len(files):,}",
+        f"{sum(p.stat().st_size for p in pending) / 1e6:.1f}",
+    )
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        list(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
+
+    # Only within the archive's own prefix, so this can never touch the export.
+    stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
+    if stale:
+        log.info("removing %s stale archive objects", f"{len(stale):,}")
+        batch = sorted(stale)
+        for i in range(0, len(batch), 1000):
+            s3.delete_objects(
+                Bucket=bucket, Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]}
+            )
+
+    log.info("archive complete: %s files under %s", f"{len(files):,}", ARCHIVE_PREFIX)
+
+
+def restore_raw(bucket: str | None = None) -> None:
+    """Pull `raw/` back down into `data/raw`.
+
+    The first step on a fresh clone or a cold CI runner. The ring cannot seed a
+    history it does not hold, so `ingest` refuses to run without this.
+    """
+    bucket = _bucket(bucket)
+    s3 = _client()
+    keys = [k for k in _existing(s3, bucket) if k.startswith(ARCHIVE_PREFIX)]
+    if not keys:
+        raise SystemExit(f"nothing under {ARCHIVE_PREFIX} in {bucket} - has `archive` run?")
+
+    log.info("restoring %s files from %s", f"{len(keys):,}", bucket)
+
+    def one(key: str) -> int:
+        dest = config.RAW / key[len(ARCHIVE_PREFIX) :]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(dest)
+        return len(body)
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        total = sum(pool.map(one, keys))
+
+    log.info("restore complete: %s files, %s MB", f"{len(keys):,}", f"{total / 1e6:.1f}")
+
+
 def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     source = source or config.WEB_DATA
-    bucket = bucket or os.environ.get("R2_BUCKET") or os.environ.get("R2_BUCKET_NAME")
-    if not bucket:
-        raise SystemExit("Set R2_BUCKET (or R2_BUCKET_NAME).")
+    bucket = _bucket(bucket)
     if not source.exists():
         raise SystemExit(f"{source} does not exist - run `znhstry export` first.")
 
@@ -222,7 +319,11 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
 
     # Orphans from a previous layout. Deleted after the new shards are all in
     # place and before the manifest names them, so no client sees a gap.
-    stale = set(remote) - set(key_of.values())
+    #
+    # The archive prefix is excluded, not merely absent from `key_of`: it lives in
+    # this bucket and is not part of the export, so without this line publishing
+    # the site would delete the only off-machine copy of the raw layer.
+    stale = {k for k in remote if not k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
     if stale:
         log.info("removing %s orphaned objects", f"{len(stale):,}")
         batch = sorted(stale)

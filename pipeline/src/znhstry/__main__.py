@@ -13,6 +13,10 @@ STEPS = {
     "ingest": ingest.ingest_daily,
     "export": export.export_all,
     "upload": upload.upload_all,
+    # The raw layer's durable copy. `restore` is the first step on a fresh clone:
+    # the 31-slot ring cannot seed a history it does not hold.
+    "archive": upload.archive_raw,
+    "restore": upload.restore_raw,
     # One-time move off the API-era file layouts.
     "migrate": ingest.migrate,
     # Scope-independent and rarely rerun.

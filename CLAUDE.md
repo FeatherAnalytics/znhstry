@@ -481,7 +481,7 @@ against a threshold, because thresholds on upstream drift are brittle.
 ## Export format
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
-uploaded to R2. 2,682,442 zones (1,595,086 ever played), 9.88M events, **1,932 files,
+uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **1,930 files,
 94.7 MB**, ~26 minutes.
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
@@ -565,8 +565,9 @@ One row per zone-day that saw **any** event, not only the ones that changed the 
 Anchors carry only zones actually holding something; the client zero-fills first, so an
 absent zone is an empty one. There is no anchor for the first year in the record.
 
-16 year shards running 0.7–2.05 MB and 15 anchors up to 1.11 MB, so the worst case for
-landing on any date is **3.16 MB**.
+15 year shards up to 2.05 MB and 14 anchors up to 1.11 MB — one shard per year from
+`RECORD_START`, so 2010's sentinels get neither — and the worst case for landing on any
+date is **3.16 MB**.
 
 ### `zone_history/` — the exact record, by block of zone index
 

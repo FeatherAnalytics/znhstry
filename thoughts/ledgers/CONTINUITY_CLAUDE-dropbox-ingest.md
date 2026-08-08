@@ -1,108 +1,68 @@
 # Continuity: Dropbox ingest cutover
 
+Branch `feat/dropbox-ingest`. **Complete and verified. Not merged — awaiting user testing.**
+
 ## Goal
 
-Zone History updates itself from QONQR's own Dropbox CSVs and nothing else. Done means:
+Zone History updates itself from QONQR's own published data and nothing else. All met:
 
-- The nightly run makes **zero** requests to `api-proxy.auckland-cer.cloud.edu.au`.
-- No dependency on `neon-ninja/QONQR_zonedata` — not its git history, not its MySQL.
-- The full 9.88M-event history is retained and durably stored off this machine.
-- `uv run dbt build` and the export still produce a byte-identical site.
+- [x] The nightly makes zero requests to `api-proxy.auckland-cer.cloud.edu.au`
+- [x] No dependency on `neon-ninja/QONQR_zonedata` — not its git history, not its MySQL
+- [x] The full 9.88M-event history is retained and durably stored off this machine
+- [x] `dbt build` and the export still produce a correct site
 
-## Constraints
+## What to test before merging
 
-- **Only QONQR-owned sources.** Dropbox for zone events and lookups; `portal.qonqr.com`
-  for battlestats going forward. Never neon-ninja's box or repo — with one bounded
-  exception: a **one-time historical seed** through the SQL mirror, taken during this
-  branch and never repeated.
-- **Fetch one slot per run, not the ring.** Slot `NN` = day of month, overwritten in
-  place. A nightly needs exactly the slot for the day that just closed; pulling all 31
-  to learn one day is waste, both ours and QONQR's. The manual override exists for the
-  rare case where a specific slot has to be re-read.
-- **The 31-slot ring is the only lifeline for new data.** Miss more than 31 days and the
-  window is gone permanently, so the gap check is not optional — see the decision below.
-- Merge key is `(ZoneId, LastUpdateDateUtc)`. Verified unique across all 9,878,738 rows.
-- dbt owns all logic. Ingest stays a thin EL step: fetch CSV -> Parquet, nothing else.
-- Ingest must be source-agnostic — battlestats is a planned second source.
-- Don't merge. Regular commits on `feat/dropbox-ingest`. User tests before merge.
+1. `cd pipeline && uv run python -m znhstry ingest` — should read one slot, or say nothing
+   to ingest if today's is already in.
+2. `cd transform && uv run dbt build` — 30 pass, 2 no-op, ~25 s.
+3. `cd web && npm run data` then `npm run dev` — the map against the freshly exported
+   `dist/data`. This is the part no automated check covers.
+4. Trigger `Nightly data update` manually from the Actions tab. It should restore from the
+   Actions cache, ingest, and no-op out if there is nothing new.
 
-## Key Decisions
+## Verification already done
 
-- **Dropbox reproduces the API exactly** — verified over 2026-07-03 to 2026-08-03:
-  83,870 rows both sides, 0 rows missing either way, 0 value mismatches on
-  `ZoneControlState` + all three counts. Cutover is lossless.
-- **Year partitions, not monthly shards.** The 88-window split existed only to keep API
-  responses manageable (`changelog_windows()`, extract.py:118). With no API, a nightly
-  append rewrites one ~15 MB `year=YYYY/` partition instead of a 156 MB spread.
-- **Stay on R2, plain `r2.dev`, no CDN for now.** Public usage has not hit the rate
-  limit, so this is not a live problem. The fix when it becomes one: R2 custom domains
-  require the *zone* to be on Cloudflare, so `featheranalytics.dev` would point its
-  nameservers at Cloudflare's free tier — the registrar does not change. Out of scope
-  here; recorded so nobody re-derives it.
-- **Target slots come from the history, not the calendar.** A run computes which days
-  are missing between the newest event on disk and the day that just closed. Normally
-  that is one slot. A missed run heals itself on the next one, and a gap wider than the
-  31-slot ring raises instead of writing a hole — that data is genuinely unrecoverable
-  and a silent success would be the worst outcome.
-- **Battlestats: seeded from the community scrape, not the mirror.** 61,517 rows read
-  out of `git show origin/main:battlestats.csv` — their working tree untouched, because
-  they force-push and a shallow pull refuses to merge. Ongoing collection scrapes
-  `portal.qonqr.com` a few times a day, which the developer has informally accepted.
-- **Battlestats is a daily leaderboard, not a log of fights.** Exactly 10 reports on
-  3,451 of 4,598 covered days, 27-29 on most of the rest — it is the Most Active Zones
-  page. A row means "among the most active in the world that day". Never label it
-  "battles that day" in the viewer; that would imply the other ~3,000 active zones were
-  quiet. Battle grain and zone-day grain coincide (no zone reported twice in a day).
-- **2019's gap is confirmed a collection artifact.** 3,614 battle reports that year,
-  flat against every neighbour, while the changelog has 337,859 events against 2018's
-  627,035. A second, independent source says the game was busy and the collection was
-  not. Worth saying out loud on any long time series.
-- **`factions` becomes a dbt seed.** 4 static rows, not in Dropbox, never changes.
-- **Lookup CSVs need no transformation.** `Countries.csv` is already
-  `countryid,Code,Description` and `Regions.csv` is already
-  `countryid,regionid,description` — exact schema parity with the existing parquet.
-- **Keep `extract.py` intact but unused.** It is the reconciliation oracle for verifying
-  the cutover, and costs nothing idle. It is not called by any nightly path.
-- **Delete `archive-raw-data.yml`.** Set up by a previous session, never requested,
-  never ran (`gh release list` is empty). Superseded by the R2 raw archive.
+| | |
+|---|---|
+| Dropbox vs mirror, full ring | 83,870 events both sides, 0 missing either way, 0 value mismatches |
+| Repartition to year partitions | 9,878,738 rows both sides, frames identical after sort |
+| Final reconciliation vs mirror | every year 2012–2026 exact; 2010 differs by the 1,449,141 all-zero sentinels we skip by design |
+| R2 archive round trip | 25 files, 289.9 MB, byte-identical on restore |
+| Ingest idempotency | re-run is a no-op; forcing the same slot adds 0 rows |
+| Full export | exit 0, 1,930 files, 94.7 MB, every per-tree figure matches the docs |
+| Tests | pytest 10 passed, dbt 30/32 (2 no-op), ruff clean |
 
-## State
+## Key decisions
 
-- Done:
-  - [x] Phase 0: Verify Dropbox fidelity against the API; confirm merge key uniqueness
-  - [x] Phase 1: `schema.py` + `ingest.py` — fetch Dropbox slots, normalise to Parquet
-  - [x] Phase 2: Year partitions, keyed merge, dbt source on `hive_partitioning`
-  - [x] Phase 3: zones + lookups from the daily CSVs; factions as a dbt seed
-  - [x] Phase 4: battlestats seeded from the community scrape, staged, and modelled
-  - [x] Phase 5: R2 `raw/` archive + restore, round trip verified byte-for-byte
-  - [x] Phase 6: `nightly.yml` rewritten; `archive-raw-data.yml` deleted
-  - [x] Phase 7: freshness, exposures, unit test, region fix, 10 Python tests
-  - [x] Phase 8: reconciled against the mirror, every year exact; CLAUDE.md rewritten
-- Now: [→] Phase 9: verify the export, then delete everything in MIGRATION-INDEX.md
+- **Fetch one slot per run.** Slot `NN` = day of month, overwritten in place. Target slots
+  come from the history on disk, not the calendar, so a missed run heals itself and a gap
+  wider than the 31-slot ring raises instead of writing a hole.
+- **Year partitions.** The old 88-shard layout sized API responses; nothing sizes them now.
+- **R2 holds the raw layer** under `raw/`, in the serving bucket. Both `upload_all` and
+  `archive_raw` scope their orphan sweeps so neither can delete the other's objects.
+- **Battlestats is a daily leaderboard**, ~10 reports/day from Most Active Zones. Seeded
+  once, 61,517 rows; ongoing collection would scrape `portal.qonqr.com`. Modelled but not
+  wired into the viewer.
+- **No dbt Semantic Layer.** The consumer is precomputed static binaries; there is no
+  query-time consumer for it to serve. Exposures, contracts and unit tests fit; it does not.
+- **R2 stays on `r2.dev`.** A CDN needs `featheranalytics.dev` on Cloudflare nameservers.
+  Public usage has not hit the rate limit, so this is deferred, not forgotten.
 
-## Reconciliation result (the last thing the mirror was used for)
+## Open
 
-Per-year counts match exactly for 2012-2026. 2010 differs by design: 29 rows kept of
-1,449,170, the rest being all-zero backfill sentinels, and the total diff is exactly
-1,449,141. Nothing else to check — the history on disk is the history upstream has.
+- Battlestats has no viewer feature. `fct_zone_battles` is built, tested, and read by
+  nothing. Needs a design conversation about how marks should read against the dots.
+- Battlestats stops updating until a `portal.qonqr.com` scraper exists.
+- UNCONFIRMED: whether `zones` needs a periodic full refresh. Upserting from daily CSVs
+  never sees a correction to a zone that is otherwise quiet.
+- `series/country.bin.br` and `series/region.bin.br` still rewrite in full nightly (4.1 MB).
 
-## Open Questions
+## Working set
 
-- Battlestats *modelling* is unscoped. Phase 4 only lands the raw table; no staging
-  model, no mart, no viewer feature. Those come when the user asks for the feature.
-- UNCONFIRMED: whether `zones` still needs a periodic full refresh. The daily CSVs carry
-  every changed zone, so in principle it can be maintained by upsert forever — but the
-  `zones` table is also where a zone's *position* would be corrected upstream, and a
-  correction to an otherwise-quiet zone would never appear in a daily file. Cheap
-  insurance would be a yearly full rebuild; decide in Phase 3.
-
-## Working Set
-
-- Branch: `feat/dropbox-ingest`
-- New: `pipeline/src/znhstry/ingest.py`, `pipeline/src/znhstry/dropbox_links.txt`
-- Touch: `extract.py` (leave API path), `config.py`, `upload.py`,
-  `transform/models/staging/_sources.yml`, `.github/workflows/nightly.yml`
-- Reference: upstream `update.sh:4` (the fetch), `update_battlestats.py:76` (the scrape)
-- Verify: `cd transform && uv run dbt build` (~35 s), then `python -m znhstry export`
-- Deleted: `thoughts/upstream-dispatch-request.md` (obsolete — that ask was to reduce
-  polling against a server we no longer touch at all)
+- Branch: `feat/dropbox-ingest`, 9 commits, not merged
+- New: `ingest.py`, `schema.py`, `dropbox_links.txt`, `pipeline/tests/`,
+  `stg_battlestats.sql`, `fct_zone_battles.sql`, `_exposures.yml`, `_unit_tests.yml`,
+  `seeds/factions.csv`, two singular tests
+- Deleted: `extract.py`, `api.py`, `archive-raw-data.yml`
+- Delete this file on merge.

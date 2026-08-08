@@ -431,13 +431,28 @@ numbers it does not already have. A normal run costs one index page and stops.
   data dictionary documents both join paths as equivalent. They are not. Trust `CountryId`,
   and drop the region label when it disagrees rather than printing a contradiction.
 - **`battlestats` column names contain spaces** and need backticks.
-  `Country = 'Atlantis'` marks test/tutorial zones — exclude.
+  `Country = 'Atlantis'` marks **tournament** zones — see below. Not test data.
 - **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed
   number of reports a day from its Most Active Zones page: exactly 10 on 3,451 of the 4,598
   covered days, 27–29 on most of the rest. A row means *this zone was among the most active
   in the world that day* — never relabel it "battles that day", which would imply the other
   ~3,000 active zones were quiet. No zone is reported twice in a day, so battle grain and
   zone-day grain coincide. Coverage starts 2014-01-01, eighteen months after release.
+- **Atlantis is the tournament world, and its reports are real.** 15,837 of the 61,517, over
+  2,812 tournament zones from 2014-06-06 onward, and they carry the heaviest fighting in
+  the game — a median 36 active players against 6 for a mapped zone. Do not treat them as
+  test or tutorial data.
+
+  A tournament report is shaped differently and every field has to be read accordingly:
+  **`Zone ID` is negative**, `Region` holds the owning faction (Central, Legion, Swarm,
+  Faceless) rather than a place, and `Zone Name` is a player handle. None of them join
+  `dim_zone` and none have coordinates.
+
+  The negative id is the discriminator — exact and total, all 15,837 have one and no other
+  report does, guarded by `tests/assert_tournament_zones_are_negative_ids.sql`.
+  `fct_zone_battles` excludes them because it is a geographic model with nowhere to draw
+  them, **not** because they are noise. Anything counting all battle reports reads
+  `stg_battlestats`.
 - Per-player data (`battlestats_players.csv`, `player_details.csv`) exists only in the
   community scrape and is not collected here.
 

@@ -25,8 +25,12 @@ models:
       fct_zone_events, and one that must not be relabelled as "battles that day".
 
       No zone is reported twice in a day, so battle grain and zone-day grain coincide.
-      Excludes Atlantis test zones (15,837) and reports whose zone is not in dim_zone
-      (5). Coverage starts 2014-01-01, eighteen months after release.
+      Coverage starts 2014-01-01, eighteen months after release.
+
+      Mapped battles only. The 15,837 Atlantis tournament reports are excluded because
+      their zones have no coordinates, not because they are noise -- they are the
+      heaviest fighting in the game. Anything counting all battle reports must read
+      stg_battlestats. Five further reports name a zone absent from dim_zone.
     columns:
       - name: battle_report_number
         description: QONQR's own identifier for the report. Unique.

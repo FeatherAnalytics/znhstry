@@ -16,12 +16,15 @@
 -- distinct (zone_id, battle_date) pairs - so battle grain and zone-day grain are the
 -- same thing here, and a viewer can key on either without aggregating.
 --
--- Two exclusions, both deliberate:
+-- **Mapped battles only.** Two exclusions, and neither is a judgement about the data:
 --
---   * Test zones. `Country = 'Atlantis'` is QONQR's tutorial world, a quarter of all
---     reports, and drawing them would put battles in the middle of the ocean.
---   * Reports whose zone is not in `dim_zone`. Four of them. The inner join drops
---     them rather than carrying a battle that cannot be placed on a map.
+--   * Tournament reports (15,837). The Atlantis tournament world is real, heavily
+--     fought competition -- see `stg_battlestats` -- but its zones have negative ids,
+--     no coordinates and no row in `dim_zone`, so there is nowhere on a map to draw
+--     them. They are excluded because this model is geographic, not because they are
+--     noise. Anything counting "all battle reports" must read `stg_battlestats`.
+--   * Five reports whose zone is not in `dim_zone`. The inner join drops them rather
+--     than carrying a battle that cannot be placed.
 --
 -- Coverage starts 2014-01-01, not 2012 -- battle reports postdate the game's release
 -- by eighteen months. Any chart spanning the full record has to say so, or it implies
@@ -49,5 +52,5 @@ select
     b.bots_lost
 from {{ ref('stg_battlestats') }} b
 inner join {{ ref('dim_zone') }} z using (zone_id)
-where not b.is_test_zone
+where not b.is_tournament
   and b.battle_date is not null

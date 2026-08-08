@@ -3,43 +3,81 @@ name: Nightly data update
 # Data only. The site is static and fetches its payloads from object storage at
 # runtime, so refreshing the data needs no rebuild and no deploy - see
 # deploy.yml, which runs on code changes instead.
+#
+# This polls rather than guessing. Upstream imports the day's changelog at about
+# 01:03 UTC, but GitHub's scheduled runs drift by ten or twenty minutes under
+# load, so any fixed time has to carry a margin it usually does not need. A
+# cheap freshness check every ten minutes gets within one poll of the real
+# import instead, and costs two HTTP requests when there is nothing to do.
 
 on:
   schedule:
-    # 02:15 UTC, which is as early as this can usefully run.
-    #
-    # QONQR publishes a day's batch just after midnight on the *following* day,
-    # not during the day itself. Upstream runs three times daily and only one of
-    # them carries data - by commit size on neon-ninja/QONQR_zonedata, the same
-    # shape every day:
-    #
-    #   00:02   +1 -0, 1 file             a no-op
-    #   01:03   +15,143 -12,196, 4 files  the day's changelog import
-    #   12:02   +8,724 -9,517, 1 file     battlestats only
-    #
-    # So the first run after midnight is not the one to wait for. `update.sh`
-    # commits after `import_mysql_changelog.py`, so the database is current
-    # slightly before that 01:03 timestamp; day D is complete by 01:03 on D+1
-    # and nothing more arrives until the next midnight. 02:15 leaves 72 minutes
-    # of margin, which GitHub's cron drift can eat into without hurting.
-    #
-    # Off the hour because everything on GitHub's cron queues up there, and a
-    # late start only helps. Any row that does arrive late is picked up anyway:
-    # `extract_update` refetches the whole current month every run.
-    - cron: "15 2 * * *"
+    # Every ten minutes across the window the import lands in. Nearly all of
+    # these do nothing but the freshness check.
+    - cron: "*/10 0-3 * * *"
+    # Backstop. If every run in the window above is dropped - GitHub skips
+    # scheduled runs under load - this catches the day. It no-ops if the window
+    # already did the work.
+    - cron: "15 9 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # Never let two runs extract at once: the upstream endpoint is a shared research
-# box and concurrent runs would double our request rate against it.
+# box and concurrent runs would double our request rate against it. A poll that
+# queues behind a real run will find the data already published and stop at the
+# check.
 concurrency:
   group: nightly
   cancel-in-progress: false
 
 jobs:
+  # Two requests, about a second. Everything expensive is gated on its answer.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      fresh: ${{ steps.probe.outputs.fresh }}
+    steps:
+      - id: probe
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+          API: https://api-proxy.auckland-cer.cloud.edu.au/QONQR
+        run: |
+          set -uo pipefail
+
+          # What we last published. Unreachable means something is wrong with
+          # the bucket, and running is the more useful failure.
+          ours=$(curl -sf --max-time 20 "$DATA_ORIGIN/global/meta.json" | jq -r '.date_range[1]' || echo "")
+          if [ -z "$ours" ] || [ "$ours" = "null" ]; then
+            echo "::warning::could not read the published manifest; running anyway"
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # What upstream has. One row, one column.
+          theirs=$(curl -sf --max-time 30 -A "znhstry/0.1 (freshness check; github.com/FeatherAnalytics/znhstry)" \
+            "$API/select%20max(LastUpdateDateUtc)%20as%20m%20from%20changelog" \
+            | jq -r '.results[0].m // empty' | cut -d' ' -f1)
+          if [ -z "$theirs" ]; then
+            # The endpoint is a shared research box. If it is having a moment,
+            # stop rather than press on into a full extraction.
+            echo "::warning::upstream did not answer; skipping this poll"
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "published through $ours, upstream has $theirs"
+          if [[ "$theirs" > "$ours" ]]; then
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "nothing new" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   update:
+    needs: check
+    if: needs.check.outputs.fresh == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -77,16 +115,10 @@ jobs:
 
       # The data goes to object storage rather than into the site because it
       # needs response headers a static host cannot set: Content-Encoding: br,
-      # and a year-long immutable Cache-Control on shards that never change.
+      # and a long immutable Cache-Control on the shards that never change.
       #
       # Only objects whose ETag differs are sent, so a nightly run pushes a few
       # megabytes rather than the whole 96.
-      # R2_ACCOUNT_ID is a secret rather than a variable, and the endpoint is
-      # derived from it. Variable values are printed verbatim into run logs, and
-      # this repo is public, so anything passed as `vars.` is effectively
-      # published. The account id is an identifier rather than a credential and
-      # Cloudflare treats it as non-secret, but keeping it out of the logs costs
-      # nothing - secrets are masked as ***.
       - name: Upload data
         working-directory: pipeline
         env:
@@ -103,5 +135,7 @@ jobs:
           curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
             || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
 
-      - name: Report sizes
-        run: du -sh dist/data/global/* | sort -h
+      - name: Report
+        run: |
+          echo "published through $(curl -s "${{ vars.DATA_ORIGIN }}/global/meta.json" | jq -r '.date_range[1]')" >> "$GITHUB_STEP_SUMMARY"
+          du -sh dist/data/global/* | sort -h

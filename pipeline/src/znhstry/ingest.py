@@ -210,3 +210,112 @@ def plan_slots(today: date | None = None, source: Path | None = None) -> list[in
 
     log.info("history reaches %s, reading %d slot(s) up to %s", have, len(days), newest_complete)
     return [d.day for d in days]
+
+
+# --- The history, partitioned by year -------------------------------------
+#
+# The old layout was 88 shards - yearly to 2019, monthly after - sized purely so no
+# single API response was enormous. With no API there is no reason to carry that shape,
+# and it made a nightly append touch a 156 MB spread to add one day.
+#
+# A year partition is the natural grain instead: an append rewrites the current year and
+# nothing else, DuckDB prunes whole files from the directory name, and 16 files is a
+# layout a person can look at. Rows sort by `(ZoneId, LastUpdateDateUtc)` within a
+# partition, which is both a total order - the key is unique across all 9.88M rows - and
+# the order that compresses, since it puts each zone's trajectory together.
+
+
+def partition_path(year: int) -> Path:
+    return config.RAW / "changelog" / f"year={year}" / "events.parquet"
+
+
+def _write_partition(df: pl.DataFrame, year: int) -> None:
+    path = partition_path(year)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    df.sort(EVENT_KEY).write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+
+
+def merge(events: pl.DataFrame) -> dict[int, int]:
+    """Fold events into their year partitions. Returns rows added per year.
+
+    Keyed rather than appended, so running twice over the same slot adds nothing. Where
+    a key already exists the incoming row wins: values should be identical, but if
+    QONQR ever corrects one, the correction is the thing worth keeping.
+    """
+    if events.is_empty():
+        return {}
+
+    added: dict[int, int] = {}
+    for (year,), incoming in events.group_by(
+        pl.col("LastUpdateDateUtc").dt.year(), maintain_order=True
+    ):
+        path = partition_path(int(year))
+        before = 0
+        if path.exists():
+            existing = pl.read_parquet(path)
+            before = existing.height
+            incoming = pl.concat([existing, incoming], how="vertical")
+
+        merged = incoming.unique(subset=EVENT_KEY, keep="last", maintain_order=True)
+        _write_partition(merged, int(year))
+        added[int(year)] = merged.height - before
+        log.info("year=%s: %s rows (+%s)", year, f"{merged.height:,}", f"{added[int(year)]:,}")
+
+    return added
+
+
+def ingest_daily(slots: Iterable[int] | None = None, today: date | None = None) -> dict[int, int]:
+    """The nightly step: work out which slots are needed, read them, fold them in.
+
+    `slots` overrides the plan. That is the manual escape hatch for the rare case where
+    a specific slot has to be re-read - a dump that landed late, or one QONQR corrected
+    after the fact - and it deliberately skips the gap check, because an operator asking
+    for a named slot already knows what they are asking for.
+    """
+    chosen = list(slots) if slots is not None else plan_slots(today)
+    if not chosen:
+        log.info("nothing to ingest")
+        return {}
+
+    events = read_daily(fetch([slot_name(s) for s in chosen]))
+    log.info("read %s events from %d slot(s)", f"{events.height:,}", len(chosen))
+    return merge(events)
+
+
+def repartition() -> None:
+    """One-time migration off the API-era shard layout. A no-op once it has run."""
+    root = config.RAW / "changelog"
+    legacy = sorted(root.glob("changelog_*.parquet"))
+    if not legacy:
+        log.info("repartition: nothing to migrate")
+        return
+
+    lf = pl.scan_parquet([str(p) for p in legacy])
+    total = lf.select(pl.len()).collect().item()
+    years = (
+        lf.select(pl.col("LastUpdateDateUtc").dt.year().unique().alias("y"))
+        .collect()
+        .to_series()
+        .sort()
+        .to_list()
+    )
+    log.info(
+        "repartition: %s rows across %d years, from %d files", f"{total:,}", len(years), len(legacy)
+    )
+
+    written = 0
+    for year in years:
+        df = lf.filter(pl.col("LastUpdateDateUtc").dt.year() == year).collect()
+        _write_partition(conform(df, CHANGELOG_DTYPES), int(year))
+        written += df.height
+        log.info("  year=%s: %s rows", year, f"{df.height:,}")
+
+    # Refuse to delete the old layout unless every row is accounted for in the new one.
+    if written != total:
+        raise RuntimeError(f"wrote {written:,} of {total:,} rows; leaving the old shards in place")
+
+    for path in legacy:
+        path.unlink()
+    log.info("repartition: %d legacy shards removed", len(legacy))

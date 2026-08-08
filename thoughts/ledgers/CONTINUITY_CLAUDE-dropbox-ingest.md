@@ -62,10 +62,10 @@ Zone History updates itself from QONQR's own Dropbox CSVs and nothing else. Done
 
 - Done:
   - [x] Phase 0: Verify Dropbox fidelity against the API; confirm merge key uniqueness
-- Now: [→] Phase 1: `schema.py` + `ingest.py` — fetch Dropbox slots, normalise to Parquet
-- Next: Phase 2: Repartition history to `year=YYYY/`; merge with dedup; update dbt source
+  - [x] Phase 1: `schema.py` + `ingest.py` — fetch Dropbox slots, normalise to Parquet
+  - [x] Phase 2: Year partitions, keyed merge, dbt source on `hive_partitioning`
+- Now: [→] Phase 3: zones + lookups from the same CSVs; factions as a dbt seed
 - Remaining:
-  - [ ] Phase 3: zones + lookups from the same CSVs; factions as a dbt seed
   - [ ] Phase 4: One-time battlestats seed through the mirror, then retire the API
   - [ ] Phase 5: R2 `raw/` archive + restore command
   - [ ] Phase 6: Rewrite `nightly.yml` (one slot + manual override); delete

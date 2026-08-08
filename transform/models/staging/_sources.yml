@@ -3,16 +3,23 @@ version: 2
 sources:
   - name: raw
     description: >
-      Parquet written by the extraction pipeline (`uv run python -m znhstry all`).
-      Read in place by DuckDB; nothing is copied into the warehouse.
+      Parquet written by the ingest pipeline (`uv run python -m znhstry ingest`),
+      which reads QONQR's published Dropbox drop. Read in place by DuckDB; nothing
+      is copied into the warehouse.
     tables:
       - name: changelog
         description: >
           Append-only event stream, one row per zone per observation. A row exists
           only when a zone's counts or control state changed, so spacing is
           irregular. Includes the 29 pre-2012 sentinel rows that carry bots.
+
+          Partitioned by year of `LastUpdateDateUtc`. A nightly append rewrites the
+          current year's file and touches nothing else, and DuckDB prunes whole
+          partitions from the directory name before reading a byte. The hive column
+          `year` is deliberately not selected downstream -- it is a physical
+          artifact of the layout, and `observed_at` is the real thing to filter on.
         meta:
-          external_location: "read_parquet('../data/raw/changelog/*.parquet')"
+          external_location: "read_parquet('../data/raw/changelog/**/*.parquet', hive_partitioning = true)"
       - name: zones
         description: Current state and geography for every zone. One row per zone.
         meta:

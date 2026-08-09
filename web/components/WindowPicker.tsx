@@ -19,13 +19,30 @@ interface Props {
   scrollable?: boolean;
 }
 
-const chip = (active: boolean): React.CSSProperties => ({
-  padding: "4px 8px",
-  border: `1px solid ${active ? "var(--text-dim)" : "transparent"}`,
-  background: active ? "var(--hairline)" : "transparent",
-  color: active ? "var(--text)" : "var(--text-dim)",
-  whiteSpace: "nowrap",
-});
+/**
+ * Longhand per side, never the `border` or `padding` shorthands.
+ *
+ * Callers override a single side - `Current` gets its own right border and wider
+ * right padding - and React cannot reconcile a shorthand against a longhand for the
+ * same value. On re-render it applies whichever it sees last, so switching view
+ * would drop or resurrect that divider depending on prop order.
+ */
+const chip = (active: boolean): React.CSSProperties => {
+  const line = `1px solid ${active ? "var(--text-dim)" : "transparent"}`;
+  return {
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingLeft: 8,
+    paddingRight: 8,
+    borderTop: line,
+    borderRight: line,
+    borderBottom: line,
+    borderLeft: line,
+    background: active ? "var(--hairline)" : "transparent",
+    color: active ? "var(--text)" : "var(--text-dim)",
+    whiteSpace: "nowrap",
+  };
+};
 
 /**
  * One row: what the map is being asked.
@@ -75,9 +92,9 @@ export function WindowPicker({
               // gets a rule between it and them rather than sitting in the row
               // as if it were another duration.
               marginRight: v.key === "current" ? 8 : 0,
-              borderRight:
-                v.key === "current" ? "1px solid var(--hairline-bright)" : undefined,
-              paddingRight: v.key === "current" ? 12 : 8,
+              ...(v.key === "current"
+                ? { borderRight: "1px solid var(--hairline-bright)", paddingRight: 12 }
+                : null),
             }}
             title={v.title}
           >

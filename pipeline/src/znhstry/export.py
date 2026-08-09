@@ -57,6 +57,7 @@ def _write(path: Path, payload: bytes, quality: int = BROTLI_QUALITY) -> int:
     path.write_bytes(brotli.compress(payload, quality=quality))
     return path.stat().st_size
 
+
 # Column dtypes, chosen to be the narrowest that cannot overflow.
 #   idx     - dense 0..N-1 index into zones.bin, not the sparse upstream ZoneId
 #   day     - days since config.DAY_EPOCH
@@ -298,14 +299,13 @@ def _clear_shards(out: Path) -> None:
         "zone_history",
         "series",
         "tiles",
-        "terrain",
         "paint",
         "names",
     ):
         shutil.rmtree(out / name, ignore_errors=True)
     # Layouts this replaced. Left behind, they are dead weight that an upload
     # sync would keep serving to anyone holding a stale manifest.
-    for stale_tree in ("geometry", "checkpoints", "events"):
+    for stale_tree in ("geometry", "checkpoints", "events", "terrain"):
         shutil.rmtree(out / stale_tree, ignore_errors=True)
     for stale in ("zones.bin.gz", "zone_names.json.gz", "zone_ids.bin.gz", "lookups.json.gz"):
         (out / stale).unlink(missing_ok=True)
@@ -526,6 +526,10 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         "longitude": "int32",
         "region_id": "uint16",
         "country_id": "uint16",
+        # Whether the zone has ever held a bot. A column rather than which file
+        # the row arrived in - see the note on the tile loop below. All 0s and 1s,
+        # so it costs almost nothing once brotli has seen it.
+        "ever_active": "uint8",
     }
     paint_columns = {"pk": "uint8"}
     delta = frozenset({"idx", "latitude", "longitude"})
@@ -548,6 +552,7 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
                 "longitude": qlon[member],
                 "region_id": rows["region_id"][member],
                 "country_id": rows["country_id"][member],
+                "ever_active": played[member].astype("uint8"),
             },
             position_columns,
             delta,
@@ -559,33 +564,33 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         row, col = int(key // 1000), int(key % 1000)
         name = f"{row:02d}_{col:02d}"
 
-        # Played and unplayed zones split into separate files but keep the tile's
-        # sort order within each, so paint rows line up with position rows.
-        is_played = played[member]
-        played_member = member[is_played]
-        terrain_member = member[~is_played]
-
-        entry: dict[str, int] = {}
-
-        if len(played_member):
-            payload, position_spec = pack_positions(played_member)
-            entry["tile_bytes"] = _write(out / "tiles" / f"{name}.bin.br", payload)
-            paint_payload, paint_spec, _ = _pack(
-                {"pk": display_pk[played_member]}, paint_columns
-            )
-            entry["paint_bytes"] = _write(out / "paint" / f"{name}.bin.br", paint_payload)
-
-        if len(terrain_member):
-            payload, position_spec = pack_positions(terrain_member)
-            entry["terrain_bytes"] = _write(out / "terrain" / f"{name}.bin.br", payload)
+        # Every zone in the tile, in one file, in the tile's spatial order.
+        #
+        # These used to be split by whether the zone had ever been played, so the
+        # played world could paint before the grey arrived. It bought about a
+        # second and cost three things worth more than that:
+        #
+        #   * ~24,000 zones a year are played for the first time, and each one
+        #     moved between the two files. Both changed, both are served
+        #     `immutable`, and a reader holding one and not the other sees a tile
+        #     whose row count disagrees with the manifest.
+        #   * Terrain loaded second, so every grey dot drew on top of every
+        #     coloured one. Merged and sorted by position, they interleave.
+        #   * Two files per tile to keep row-aligned with one paint file.
+        #
+        # A first play is now a change to one byte of `paint/`, which revalidates
+        # normally, and the positions only change when a zone genuinely appears.
+        payload, position_spec = pack_positions(member)
+        tile_bytes = _write(out / "tiles" / f"{name}.bin.br", payload)
+        paint_payload, paint_spec, _ = _pack({"pk": display_pk[member]}, paint_columns)
+        paint_bytes = _write(out / "paint" / f"{name}.bin.br", paint_payload)
 
         tiles.append([
             name,
-            len(played_member),
-            len(terrain_member),
-            entry.get("tile_bytes", 0),
-            entry.get("paint_bytes", 0),
-            entry.get("terrain_bytes", 0),
+            len(member),
+            int(played[member].sum()),
+            tile_bytes,
+            paint_bytes,
             # South-west corner in degrees. The client derives the rest from
             # tile_degrees rather than carrying four floats per tile.
             row * TILE_DEGREES - 90,
@@ -593,36 +598,36 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         ])
 
     first_paint = sum(t[3] + t[4] for t in tiles)
-    terrain_total = sum(t[5] for t in tiles)
     names_manifest = _export_names(idx, names, out)
     names_total = names_manifest["bytes"]
     log.info(
-        "geometry: %d tiles - played %s MB (positions + paint), terrain %s MB, names %s MB",
+        "geometry: %d tiles - %s zones in %s MB (positions + paint), names %s MB",
         len(tiles),
+        f"{sum(t[1] for t in tiles):,}",
         f"{first_paint / 1e6:.2f}",
-        f"{terrain_total / 1e6:.2f}",
         f"{names_total / 1e6:.2f}",
     )
     return {
         "tile_degrees": TILE_DEGREES,
         "coord_scale": COORD_SCALE,
         "magnitude_steps": _MAGNITUDE_STEPS,
-        "paths": {"tiles": "tiles", "paint": "paint", "terrain": "terrain"},
+        "paths": {"tiles": "tiles", "paint": "paint"},
         "position_columns": position_spec,
         "paint_columns": paint_spec,
         "tile_fields": [
             "name",
+            # Every zone in the tile. `played` is how many of them have ever held
+            # a bot, which is a fact for the reader rather than a row count - the
+            # per-zone flag rides in the `ever_active` column.
+            "zones",
             "played",
-            "terrain",
             "tile_bytes",
             "paint_bytes",
-            "terrain_bytes",
             "south",
             "west",
         ],
         "tiles": tiles,
         "first_paint_bytes": first_paint,
-        "terrain_bytes": terrain_total,
         "names_bytes": names_total,
         # Lifted to meta["names"] by export_all: names are keyed by idx and owe
         # nothing to the tile grid any more.
@@ -993,7 +998,10 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     that went quiet in 2019 costs nothing until the reader asks for it.
     """
     day = f"cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)"
-    moved = "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 " "or sum(e.faceless_delta) != 0"
+    moved = (
+        "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 "
+        "or sum(e.faceless_delta) != 0"
+    )
     columns = {
         "area_id": "uint16",
         "day": DAY,
@@ -1230,7 +1238,6 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             + display["shard_bytes"]
             + zone_history["bytes"]
             + geometry["first_paint_bytes"]
-            + geometry["terrain_bytes"]
             + geometry["names_bytes"]
             + zone_ids["bytes"]
             + lookups["bytes"]
@@ -1240,12 +1247,11 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             + area_series["cells"]["bytes"]
         )
         log.info(
-            "export complete: %s MB stored. What a reader actually fetches: %s MB for the "
-            "played world, %s MB terrain, %s MB names, at most %s MB to land on any date. "
+            "export complete: %s MB stored. What a reader actually fetches: %s MB for every "
+            "zone on the map, %s MB names, at most %s MB to land on any date. "
             "The %s MB of exact per-zone history is fetched a block at a time, on a hover.",
             f"{total / 1e6:.1f}",
             f"{geometry['first_paint_bytes'] / 1e6:.2f}",
-            f"{geometry['terrain_bytes'] / 1e6:.2f}",
             f"{geometry['names_bytes'] / 1e6:.2f}",
             f"{scrub / 1e6:.2f}",
             f"{zone_history['bytes'] / 1e6:.1f}",

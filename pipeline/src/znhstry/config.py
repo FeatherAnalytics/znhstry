@@ -38,36 +38,52 @@ def _load_root_env() -> None:
 
 _load_root_env()
 
-API_BASE = "https://api-proxy.auckland-cer.cloud.edu.au/QONQR/"
+# --- Ingest: QONQR's published Dropbox drop -------------------------------
+#
+# The live source. QONQR writes 31 rotating daily CSVs plus two lookups to a public
+# shared folder; this is the same drop the SQL mirror is itself built from, so reading
+# it directly costs nobody anything and depends on nobody's server staying up.
 
-# The endpoint is a shared research box at the University of Auckland
-# (16 gunicorn workers). Identify ourselves and stay well under capacity.
+LANDING = DATA / "landing"
+
+DROPBOX_LINKS = Path(__file__).with_name("dropbox_links.txt")
+
+# Dropbox serves an HTML interstitial to anything it does not recognise as a downloader
+# and there is no Last-Modified on the response, so `?dl=1` is how a file is asked for
+# rather than a page about a file. Freshness therefore comes from the dates inside the
+# CSV, never from a header.
+DROPBOX_DOWNLOAD_PARAM = "dl=1"
+
+# QONQR's Dropbox, not a research box: these can be friendlier than the API limits.
+# Still modest - a nightly asks for three files.
+DROPBOX_WORKERS = 4
+DROPBOX_TIMEOUT = 120.0
+
+# Slot NN of dailyzoneupdates-NN.csv is the day of the month, overwritten in place.
+# The ring is the hard limit on how long a gap can be before it is unrecoverable.
+RING_SLOTS = 31
+
+# --- Battle reports: QONQR's live portal -----------------------------------
+#
+# This is the game's own web server rendering one HTML page per report, not a bulk
+# endpoint, and reading it is tolerated rather than invited. A normal day is ten pages.
+# Do not add concurrency and do not lower the interval.
+
+PORTAL_TIMEOUT = 60.0
+PORTAL_MIN_INTERVAL = 2.0
+
+# Ceiling on a catch-up, so an outage resumes over several runs instead of becoming a
+# crawl of thousands of pages in one. Four days' worth.
+PORTAL_MAX_PER_RUN = 40
+
+# Identify ourselves. QONQR's Dropbox is public, but a request with a name on it
+# is the least we can do for someone publishing data for free.
 USER_AGENT = "znhstry/0.1 (personal analytics project; github.com/mrbri/znhstry)"
 
-MAX_WORKERS = 3          # of the server's 16
-MIN_REQUEST_INTERVAL = 0.5   # seconds between request starts, global
-REQUEST_TIMEOUT = 300.0
-MAX_RETRIES = 4
-BACKOFF_BASE = 2.0
-
-# SQL rides in the URL path; the server returns 414 somewhere between 6KB and 9KB.
-MAX_SQL_BYTES = 6000
-
-# changelog history. Rows before this are the 2010-01-01 backfill sentinel:
-# 1,449,170 of them, of which only 29 carry any bots. Those 29 are pulled
-# separately by extract_baseline(); everything else is genuinely zero.
-HISTORY_START = date(2012, 1, 1)
+# Rows before this are the 2010-01-01 backfill sentinel: 1,449,170 of them, of
+# which only 29 carry any bots. Everything else is genuinely zero, so pre-first-
+# event state is treated as zero.
 SENTINEL_CUTOFF = date(2012, 1, 1)
-
-# Event volume is wildly uneven: ~2.0M events across 2012-2019, then ~1.3M
-# per year from 2020. Yearly chunks early, monthly chunks once it gets dense,
-# so no single response is enormous and no request is mostly overhead.
-MONTHLY_FROM_YEAR = 2020
-
-# Upper bound is discovered at runtime, not hardcoded: new zones appear above
-# the previous maximum over time, and a stale constant would silently skip them.
-ZONE_ID_CHUNK = 200_000
-ZONE_ID_HEADROOM = 200_000
 
 # --- Export ---------------------------------------------------------------
 

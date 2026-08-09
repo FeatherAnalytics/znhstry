@@ -1,41 +1,48 @@
 # znhstry (Zone History)
 
 Historical visualization of QONQR zone control: where every zone stands, what moved over
-any window, and how the whole thing got here. Public read-only SQL mirror -> Parquet ->
+any window, and how the whole thing got here. QONQR's published CSV drop -> Parquet ->
 dbt/DuckDB -> deck.gl dashboard.
 
 **Slug is `znhstry`; display name is "Zone History".** Use the display name in page titles,
 headings, and prose. The slug is for the repo, URL, and package only.
 
+**This repo is self-contained.** It reads QONQR's own published data and nothing else — no
+third-party mirror, no other repository, no server that belongs to a person rather than the
+game. See "Where the data comes from".
+
 ## Tech Stack
 
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
-- **Extract**: `httpx` + `polars` -> Parquet in `data/raw/`.
-- **Transform**: dbt-duckdb in `transform/` — 5 staging views, 1 intermediate, 5 marts,
-  9 data tests. `uv run dbt build` takes ~35 s over 9.88M events.
+- **Ingest**: `httpx` + `polars` -> Parquet in `data/raw/`.
+- **Transform**: dbt-duckdb in `transform/` — 6 staging views, 1 intermediate, 6 marts,
+  1 seed, 12 data tests, 1 unit test, 2 exposures. `uv run dbt build` takes ~25 s over
+  9.88M events.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
 - **Hosting**: the site on GitHub Pages, the data in Cloudflare R2. Two deployments.
 
 ## Commands
 
-The refresh chain is three steps and they are not optional — exporting without rebuilding
+The refresh chain is four steps and they are not optional — exporting without rebuilding
 the warehouse ships whatever the marts last held:
 
 ```bash
-cd pipeline  && uv run python -m znhstry update   # refetch zones + the open changelog window
-cd transform && uv run dbt build                  # rebuild the marts (~35 s)
-cd pipeline  && uv run python -m znhstry export   # rebuild dist/data (~26 min)
-cd pipeline  && uv run python -m znhstry upload   # push changed objects to R2
+cd pipeline  && uv run python -m znhstry ingest      # read the day's slot from Dropbox
+cd pipeline  && uv run python -m znhstry battlestats # scrape any new battle reports
+cd transform && uv run dbt build                   # rebuild the marts (~25 s)
+cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~26 min)
+cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
+cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
 ```
 
 Other steps:
 
 ```bash
 cd pipeline
-uv run python -m znhstry all          # full extraction (idempotent, resumable)
-uv run python -m znhstry changelog    # one step: lookups|zones|changelog|baseline
-uv run python -m znhstry boundaries   # rebuild the admin outlines
+uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
+uv run python -m znhstry boundaries       # rebuild the admin outlines
 
 cd web
 npm run data   # serve dist/data on :3002 — the map is empty without it
@@ -92,13 +99,12 @@ per-zone bot counts at all.** Three questions, three answers, none of which need
 | how many bots in this country / region / area over time | precomputed daily series |
 | exactly how many bots on *this* zone | `zone_history/`, one 35 KB block, on hover |
 
-A cold load is **422 requests and 11.6 MB**, and that is everything needed to draw all
+A cold load is **343 requests and 11.5 MB**, and that is everything needed to draw all
 2.68M zones:
 
 | Pass | Gives | Requests | Size |
 |---|---|---|---|
-| `tiles/` + `paint/` | the played world, positions and colours together, nearest first | 336 | 5.85 MB |
-| `terrain/` | the 1.09M zones never played. Always grey | 79 | 3.55 MB |
+| `tiles/` + `paint/` | every zone, positions and colours together, nearest first | 336 | 9.26 MB |
 | boundaries, manifest, ids, lookups, scope series | | 7 | 2.24 MB |
 
 Fetched only on demand, and never by a visit that just looks at the map:
@@ -120,9 +126,12 @@ in front of everything; production is a fraction of that):
 
 | | |
 |---|---|
-| played world complete — all 1.6M, correctly coloured | **3.3 s** |
-| every zone including terrain — 2.68M | **8.4 s** |
+| every zone on the map — all 2.68M, correctly coloured | **8.4 s** |
 | scrub across eleven years, nothing cached | **526 ms** |
+
+Measured before the tiles and terrain were merged, so the first figure covered the played
+world at 3.3 s and everything at 8.4 s. One pass now delivers both at once; re-measure
+rather than trusting the old split.
 
 Priority order between passes is load-bearing. `display/` is not touched until the reader
 asks for a date `paint/` cannot answer: 3 MB in front of the tiles they are watching
@@ -276,12 +285,11 @@ Cranston and Narragansett Bay.
 
 Tiles are third-party requests, roughly a dozen per view, cached by the browser normally.
 
-### Do not reintroduce a zoom-based LOD
+### No zoom-based LOD
 
-Below zoom 4 the map once drew one aggregated cell per web-mercator tile instead of
-individual zones. It was rejected, and the reason is not performance — **the point of this
-map is the millions of dots tracing the world**. A 16x16 grid of coloured blocks is cheaper
-and says less.
+The map never aggregates zones into cells at low zoom, and the reason is not performance —
+**the point of this map is the millions of dots tracing the world**. A 16x16 grid of
+coloured blocks is cheaper and says less.
 
 Spatial **sharding** is a different thing and is what the viewer does: every zone is in
 exactly one tile, every tile is eventually fetched, nothing is ever aggregated. The grid
@@ -329,26 +337,64 @@ Two brotli qualities, because the curve has a knee. On a 26.9 MB payload: q9 3.9
 4.5 s, **q10 3.60 MB in 46 s**, **q11 3.43 MB in 130 s**. q11 for anything on the critical
 path, q10 for the bulk trees — 4% of the ratio for most of the export's running time.
 
-## Upstream API
+## Where the data comes from
 
-`https://api-proxy.auckland-cer.cloud.edu.au/QONQR/<url-encoded SQL>` — SQL in the URL
-**path**, not a query param. Full data dictionary: `QONQR-API-data-dictionary.md` in the
-Code root. Reference implementation: `../QONQR` (neon-ninja), a current-state Leaflet map
-with no time dimension.
+QONQR publishes its own data to a public Dropbox folder. That is the only live source.
+Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
+`QONQR-API-data-dictionary.md` in the Code root.
 
-**This is someone else's research box** (16 gunicorn workers, University of Auckland).
-`api.py` caps concurrency at 3, enforces a 0.5 s global floor between requests, and sends an
-identifying User-Agent. Do not raise those limits.
+| | What | Cadence |
+|---|---|---|
+| `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
+| `Countries.csv`, `Regions.csv` | lookups | rarely |
+| `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 
-**Upstream publishes complete days.** `neon-ninja/QONQR_zonedata` runs `update.sh` on a cron
-at 00:02, 01:03 and 12:02 UTC, loading QONQR's 31 rotating daily CSVs into an append-only
-MySQL `changelog`. Every date in the record is whole except the one still happening.
+**Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
+filename says which month, so a stale slot is indistinguishable from a fresh one until it
+is parsed — slot 03 holding July while slot 01 holds August is the normal resting state in
+the first days of a month, not a fault.
 
-- Returns 414 for SQL between 6KB and 9KB encoded. `MAX_SQL_BYTES` guards at 6000.
-- Errors come back as HTTP 200 with `{"results": {"error": …}}` — a dict where rows would
-  be a list. `api.query()` raises on that shape.
-- CORS is `*` and gzip is supported, so the browser *could* query it directly. Don't; the
-  volumes are too large and it isn't our server to lean on.
+**The dump is written just after midnight UTC, so slot `NN` holds all of day `NN` plus the
+first seconds of day `NN+1`.** That sliver is load-bearing: it is the only proof that day
+`NN` was read completely. `plan_slots` treats a day as finished only when events *after* it
+are on disk, because a max date of `NN` alone means slot `NN-1` was the last one read and
+`NN` is still a fragment.
+
+**A gap wider than 31 days is permanent.** The slot holding that day has been overwritten
+with a newer month. `plan_slots` raises rather than fetching it and appending the wrong
+month's events under a successful exit code. Restore from R2 instead.
+
+**Dropbox needs `?dl=1` and answers no freshness question.** Without it you get an HTML
+interstitial with a 200 status, which is why `_download` checks the body starts with a
+known header rather than trusting the status. There is no `Last-Modified` on the response
+and no year in the filename, so "has today landed" costs a full fetch and parse — which is
+why the nightly runs once on a timer instead of polling.
+
+**Do not add a third-party mirror.** `neon-ninja/QONQR_zonedata` loads these same CSVs
+into a MySQL `changelog` behind a public SQL API, and reading it adds a dependency without
+adding data — it is an accumulation of the files above and nothing more. Their git history
+is not a fallback either: they force-push, so a shallow clone cannot pull.
+
+### Battle reports are scraped, and the limits are not tuning knobs
+
+`portal.qonqr.com` is the game's own live web server rendering one page per report, not a
+bulk endpoint. Collecting from it is tolerated rather than invited, so `portal.py` fetches
+**serially**, waits `PORTAL_MIN_INTERVAL` between requests, and only asks for report
+numbers it does not already have. A normal run costs one index page and stops.
+
+- **`PORTAL_MAX_PER_RUN` caps a catch-up** so an outage resumes over several runs instead
+  of crawling thousands of pages at once. Do not raise it to "just get caught up".
+- **Most Active Zones only names today's ten.** Reports from a missed day appear on no
+  index anywhere, so the span between what we hold and what is listed is walked by number.
+- **A report number with no report is normal.** ~61k real reports span a range of ~131k
+  numbers, so misses are counted and stepped over, never raised.
+- **`Date` on a report page is US month-first** — `8/7/2026` is 7 August. Parsed with an
+  explicit format, because for any day under 13 the wrong reading is also a valid date and
+  the error would be silent and up to eleven months wrong.
+- **Numbers use a plain space for thousands** (`1 666`).
+- The parser builds column names from the page's own stat labels and each cell's CSS
+  class, which is what makes new rows land in the seeded history's exact 77 columns.
+  `pipeline/tests/test_portal.py` pins that contract against a real saved page.
 
 ## Data facts (measured, not guessed)
 
@@ -365,11 +411,12 @@ MySQL `changelog`. Every date in the record is whole except the one still happen
   last changed in 2019 or earlier. Any time-window slice that ignores older events loses
   their state entirely.
 - **Pre-2012 rows are backfill sentinels.** 1,449,170 of them, of which only **29** carry
-  any bots. Extraction skips the rest and treats pre-first-event state as zero.
-  `extract_baseline()` pulls those 29 separately.
-- **2019 has a collection gap**: 337,859 events vs 627,035 in 2018 and 1,438,855 in 2020.
-  This is almost certainly missing data, not a quiet year. Annotate it in any continuous
-  time series; do not silently interpolate.
+  any bots. Everything else is genuinely zero, so pre-first-event state is treated as zero.
+  Those 29 live in `changelog/year=2010/` and are the whole of the starting state.
+- **2019's gap is a collection artifact, and battlestats proves it**: 337,859 events vs
+  627,035 in 2018 and 1,438,855 in 2020 — but **3,614 battle reports in 2019**, flat against
+  every neighbouring year. A second, independent source says the game was busy and the
+  collection was not. Annotate the gap in any continuous time series; never interpolate it.
 - **Only 1,595,086 of 2,682,442 zones have ever changed.** The rest are real places that
   have never been played, and the viewer draws them as faint grey terrain, so the export
   carries all of them (`active_only = False`). They ride in the geometry tiles and never
@@ -378,17 +425,51 @@ MySQL `changelog`. Every date in the record is whole except the one still happen
   recent observations, which may be years. We recompute deltas from `changelog`.
   `TotalDelta` is also absolute (churn), never negative. Not extracted.
 - **`Description` is not unique** — many zones share a name. `ZoneId` is the only key.
-- **`zones.CountryId` is authoritative; `RegionId` is not.** For 447 zones the region's own
-  `countryid` contradicts the zone's `CountryId`, and coordinates settle it every time in
-  the country's favour: 155 zones filed under West Pomeranian Voivodeship (Poland) sit at
-  161°E, -10° in the Solomon Islands; 135 filed under Northwest Territories (Canada) are at
-  27°E, -10° in the DRC; likewise Tonga↔Azerbaijan (87) and East Timor↔Ukraine (68). The
-  data dictionary documents both join paths as equivalent. They are not. Trust `CountryId`,
-  and drop the region label when it disagrees rather than printing a contradiction.
+- **`zones.CountryId` is authoritative; `zones.RegionId` is the corrupt field.** For 447
+  zones the region they point at belongs to a different country, and coordinates back the
+  country every time: 155 zones pointing at West Pomeranian Voivodeship (Poland) sit at
+  162°E, -10° in the Solomon Islands; 135 pointing at Northwest Territories (Canada) are in
+  the DRC; likewise Tonga↔Azerbaijan (87) and East Timor↔Ukraine (68).
+
+  **The `regions` table is not at fault** — it is correct, and identical in `Regions.csv`
+  and the SQL mirror (3,799 rows, same values). The proof is Kingston, Norfolk Island
+  (zone 27425): region 3869 is `Islands` under Norfolk Island and is right there in the
+  table, but the zone points at 3868, `Islands` under South Georgia. The game renders
+  "Islands" regardless, so the two share a name and the error is invisible in-game.
+
+  Only that one zone is recoverable by matching the region name under the correct country.
+  The other 446 point at a region whose name exists nowhere under their country — the
+  Solomon Islands zones point at 2452 when that country's regions are 2746–2753, so it is
+  wholesale wrong rather than off by one. Not worth a repair rule that fires once.
+
+  The data dictionary documents both join paths as equivalent. They are not. Trust
+  `CountryId`, and drop the region label when it disagrees rather than printing a
+  contradiction.
 - **`battlestats` column names contain spaces** and need backticks.
-  `Country = 'Atlantis'` marks test/tutorial zones — exclude.
-- Per-player data (`battlestats_players.csv`, `player_details.csv`) is **not in the
-  database**, only in the upstream repo `../QONQR_zonedata`.
+  `Country = 'Atlantis'` marks **tournament** zones — see below. Not test data.
+- **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed
+  number of reports a day from its Most Active Zones page: exactly 10 on 3,451 of the 4,598
+  covered days, 27–29 on most of the rest. A row means *this zone was among the most active
+  in the world that day* — never relabel it "battles that day", which would imply the other
+  ~3,000 active zones were quiet. No zone is reported twice in a day, so battle grain and
+  zone-day grain coincide. Coverage starts 2014-01-01, eighteen months after release.
+- **Atlantis is the tournament world, and its reports are real.** 15,837 of the 61,517, over
+  2,812 tournament zones from 2014-06-06 onward, and they carry the heaviest fighting in
+  the game — a median 36 active players against 6 for a mapped zone. Do not treat them as
+  test or tutorial data.
+
+  A tournament report is shaped differently and every field has to be read accordingly:
+  **`Zone ID` is negative**, `Region` holds the owning faction (Central, Legion, Swarm,
+  Faceless) rather than a place, and `Zone Name` is a player handle. None of them join
+  `dim_zone` and none have coordinates.
+
+  The negative id is the discriminator — exact and total, all 15,837 have one and no other
+  report does, guarded by `tests/assert_tournament_zones_are_negative_ids.sql`.
+  `fct_zone_battles` excludes them because it is a geographic model with nowhere to draw
+  them, **not** because they are noise. Anything counting all battle reports reads
+  `stg_battlestats`.
+- Per-player data (`battlestats_players.csv`, `player_details.csv`) exists only in the
+  community scrape and is not collected here.
 
 ### changelog does not perfectly reconcile to zones
 
@@ -404,27 +485,29 @@ exactly, with no remainder:
 - **3 orphan zones** (`2836390`, `2836391`, `2836392`) exist in `changelog` but not in
   `zones`. They land in `fct_zone_events` with a null `country_id`, so they count toward
   `fct_global_daily` but not `fct_country_daily`. Do not "fix" this by inner-joining.
-- **1,429 zones (0.09%)** have a last `changelog` row that disagrees with their `zones` row,
-  always with `changelog` higher. Upstream runs `import_mysql.py` and
-  `import_mysql_changelog.py` as separate steps, so the two can drift.
+- **1,429 zones (0.09%)** have a last event that disagrees with their `zones` row, always
+  with the event higher. Both come from the same daily CSV now, so this is the game's own
+  drift rather than a mirror's two-step import, and it is expected to persist.
 
 0.004% of bots is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
-### Bugs worth not reintroducing
+### Invariants — each one has a failure mode that is silent
 
-- **Never let the idempotent check freeze an unfinished window.** `extract_changelog` skips
-  any shard already on disk, which is right for a window that has *ended* and wrong for the
-  one covering today: a run part-way through a month writes a shard holding the month up to
-  that instant, and every later run skips it as present. The current window is always
-  refetched, whichever entry point asks. Verify the tail against upstream after any
-  extraction; never assume a thin final day is real.
+- **Never mistake a day's first sliver for the whole day.** A slot spans midnight, so
+  having events *dated* day D usually means slot D-1 was read and D is a fragment. Deciding
+  completeness by comparing dates skips D forever. `plan_slots` requires events strictly
+  after D, and `tests/test_ingest.py` pins it. Never assume a thin final day is real.
 - **`fct_zone_checkpoints` must compare timestamps, not dates.** Casting to date drops every
   boundary an event lands on — the preceding event fails `next > B` and the event itself
-  fails `B > observed`, so no row matches. This silently lost 19,062 checkpoints.
+  fails `B > observed`, so no row matches, and 19,062 checkpoints vanish.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
-- **Do not hardcode a max ZoneId.** New zones appear above the previous maximum;
-  `extract_zones()` discovers it at runtime and adds headroom.
+- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones read
+  "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both keys, so a
+  contradicted region is null rather than wrong, and
+  `tests/assert_region_label_agrees_with_country.sql` fails if one appears.
+- **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
+  discovers them because they arrive in the daily CSVs like any other change.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
@@ -450,8 +533,8 @@ against a threshold, because thresholds on upstream drift are brittle.
 ## Export format
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
-uploaded to R2. 2,682,442 zones (1,595,086 ever played), 9.88M events, **1,932 files,
-94.7 MB**, ~26 minutes.
+uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **1,851 files,
+94.6 MB**, ~26 minutes.
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:
@@ -464,9 +547,9 @@ Stored is not what anyone fetches. Four trees are lazy and together they are 81 
 | `series/cells/` | 5.9 MB | the tiles a circle or viewport covers |
 
 `export_all` clears every shard tree before writing, so a layout change cannot leave orphans
-behind. This is not hypothetical: switching layouts once left 187 orphaned directories and
-~12,000 stale files still being served. `upload.py` deletes bucket keys the manifest no
-longer names, for the same reason.
+behind — otherwise a changed layout strands hundreds of directories and thousands of stale
+files that are still served. `upload.py` deletes bucket keys the manifest does not name, for
+the same reason, except under `raw/` — see "The raw layer".
 
 Every `.br` is a brotli stream over a columnar dump: each column is a contiguous run of one
 fixed-width dtype, concatenated in the order `meta.json` lists it. Served with
@@ -489,15 +572,29 @@ successive differences; prefix-sum to recover it, respecting the dtype.
   every row of latitude. The client's prefix-sum respects the dtype for the same reason —
   restoring a signed column into a `Uint32Array` silently wraps.
 
-### Geometry is tiled, and split by whether anyone has ever played there
+### Geometry is tiled, and every zone in a tile is in one file
 
-A 16-degree grid, 168 populated tiles (79 of which also have terrain):
+A 16-degree grid, 168 tiles, all 2,682,442 zones:
 
-| | columns | for all 2.68M |
+| | columns | total |
 |---|---|---|
-| `tiles/RR_CC.bin.br` | `idx, latitude, longitude` (int32 signed delta), `region_id, country_id` (uint16) — played zones only | 5.12 MB |
+| `tiles/RR_CC.bin.br` | `idx, latitude, longitude` (int32 signed delta), `region_id, country_id` (uint16), `ever_active` (uint8) | 8.53 MB |
 | `paint/RR_CC.bin.br` | `pk` (uint8), row-aligned to `tiles/` | 0.73 MB |
-| `terrain/RR_CC.bin.br` | same columns as `tiles/`, for zones never played | 3.55 MB |
+
+**Do not split played zones out of terrain again.** That layout existed so the played
+world could paint before the grey arrived, worth about a second, and it cost three
+things worth more:
+
+- ~24,000 zones a year are played for the first time and moved between the two files.
+  Both changed, both are served `immutable`, and a reader holding a fresh manifest with
+  one stale file sees row counts that disagree — which silently erased Ukraine, western
+  Russia, India and China from the map.
+- Terrain loaded in a second pass, so every grey dot drew on top of every coloured one.
+- It was a second file per tile that had to stay row-aligned with `paint/`.
+
+Merged is also *smaller* — 9.26 MB against 9.39 — because splitting a sorted run in two
+breaks the delta encoding. `ever_active` is a column so the viewer keeps its two shades
+of grey: a zone fought down to empty is part of the story, one never touched is terrain.
 
 - **Coordinates are fixed-point at 1e-4 deg (~11 m), delta-encoded, sorted by latitude then
   longitude within a tile.** float32 mantissas are noise and no compressor can touch them.
@@ -509,8 +606,11 @@ A 16-degree grid, 168 populated tiles (79 of which also have terrain):
   reason for 16 is *requests*, though, not bytes. What it costs is precision in the
   nearest-first ordering: the first tile to land covers four times the area.
 - **Sorting scrambles idx**, so it is an explicit column rather than implied by row order.
-- **The played/terrain split costs ~1.3 MB** of idx compression, because the two files
-  interleave and the runs break. It buys a smaller first paint, so it pays.
+- **Every shard's URL carries a hash of its bytes** — `tiles/09_13.bin.br?v=fe82c88e`,
+  from `meta.geometry.tiles`. That is what makes `immutable` honest: changed bytes are a
+  different URL, so no reader can be served a stale shard and none of them ever has to
+  clear a cache. Per file, not one stamp for the export, so an unchanged shard keeps its
+  URL and stays cached. R2 ignores the query string, so nothing changes in the bucket.
 
 **`pk` is one byte: faction in the top two bits, a log-magnitude bucket in the low six.**
 Radius is `log10(count)` capped in pixels, so six bits carry more resolution than the screen
@@ -534,8 +634,9 @@ One row per zone-day that saw **any** event, not only the ones that changed the 
 Anchors carry only zones actually holding something; the client zero-fills first, so an
 absent zone is an empty one. There is no anchor for the first year in the record.
 
-16 year shards running 0.7–2.05 MB and 15 anchors up to 1.11 MB, so the worst case for
-landing on any date is **3.16 MB**.
+15 year shards up to 2.05 MB and 14 anchors up to 1.11 MB — one shard per year from
+`RECORD_START`, so 2010's sentinels get neither — and the worst case for landing on any
+date is **3.16 MB**.
 
 ### `zone_history/` — the exact record, by block of zone index
 
@@ -592,7 +693,7 @@ is not a concern.
 
    | | Cache-Control | Why |
    |---|---|---|
-   | `tiles/`, `terrain/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels; rewritten byte-identically every run |
+   | `tiles/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels. Honest only because the URL carries a content hash — see the geometry section |
    | `display/YYYY` and `anchor_YYYY` for a **past** year | immutable, 1 year | finished history |
    | `paint/`, `display/<current year>`, `zone_history/`, `series/` | `max-age=300, must-revalidate` | rewritten nightly under the same name |
    | `meta.json` | `max-age=60` | how a client discovers everything else |
@@ -655,22 +756,45 @@ Rings are simplified with Douglas-Peucker at `SIMPLIFY_TOLERANCE = 0.01` degrees
 which takes admin1 from 1.30M points to 382k. admin0 is 0.32 MB, admin1 is 1.55 MB; both
 load with the page. Rebuild with `uv run python -m znhstry boundaries`.
 
+## The raw layer
+
+`data/raw`, ~290 MB, gitignored, and **not rebuildable from upstream** — the ring reaches
+back 31 days and the record starts in 2012. R2 holds the only other copy, under `raw/`.
+
+| | Layout | Rows |
+|---|---|---|
+| `changelog/year=YYYY/events.parquet` | 16 partitions, hive | 9.88M |
+| `zones/zones.parquet` | one file | 2,682,442 |
+| `battlestats/battlestats.parquet` | one file, 77 columns verbatim | 61,517 |
+| `lookups/`, `boundaries/` | | 251 countries, 3,799 regions |
+
+- **Year partitions, because an append should rewrite one file.** The old 88-shard layout
+  sized API responses; there is no API to size for. DuckDB prunes on the directory name.
+- **`(ZoneId, LastUpdateDateUtc)` is unique across all 9.88M rows**, which is what makes the
+  merge keyed rather than appended — so re-reading a slot adds nothing and a retried run is
+  free. Never change this to an append.
+- **`upload_all` deletes every bucket key the export does not name.** The `raw/` prefix is
+  explicitly excluded, and the archive's own sweep is scoped to `raw/` in reverse. Remove
+  either fence and one job silently destroys the other's data.
+- **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
+  DuckDB reads them through one glob; a column differing in width between them makes the
+  source unreadable, not merely inconsistent.
+
 ## Performance notes
 
 - Query cost is dominated by planning, not transfer. Bigger chunks beat more chunks.
-- **Never ask MySQL for point-in-time state.** A `ROW_NUMBER() OVER (PARTITION BY ZoneId)`
-  snapshot took 48 s for 5,397 zones; pulling the raw event stream for the same zones took
-  5.4 s and yields every frame, not one.
-- Filter inside CTEs, not after — `changelog` is 11.3M rows.
+- Filter inside CTEs, not after — the event stream is 9.88M rows.
 - `BETWEEN` needs the low bound first or it silently returns nothing.
-- Changelog windows are yearly while history is sparse and monthly from 2020, 88 in total.
-  That is the *extraction* shard size, not upstream's cadence.
 
 ## Conventions
 
-- Extraction is **idempotent**: a chunk whose Parquet exists is skipped, except the window
-  covering today. Writes go to a `.tmp` then atomically rename, so interruption never leaves
-  a partial file.
-- `data/` and `dist/` are gitignored and fully rebuildable.
+- Ingest is **idempotent**: the merge is keyed, so re-reading a slot is a no-op. Writes go
+  to a `.tmp` then atomically rename, so interruption never leaves a partial file.
+- `data/` and `dist/` are gitignored. `dist/` is fully rebuildable; `data/` is not — see
+  "The raw layer".
 - Conventional commits: `feat:`, `fix:`, `data:`, `docs:`, `refactor:`.
-- Testing is deliberately minimal. The dbt layer carries 9 data tests; the viewer has none.
+- Testing is deliberately concentrated where failures are invisible, not spread evenly.
+  dbt carries 12 data tests and 1 unit test; `pipeline/tests/` covers the ring arithmetic
+  and the dtype contract, which decide what gets written before dbt can see it. The viewer
+  has none. `dbt source freshness` warns at 2 days stale and errors at 7 — well inside the
+  31-day ring, so there is time to act before a gap becomes unrecoverable.

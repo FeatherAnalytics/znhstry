@@ -11,11 +11,19 @@ dependencies = [
     "brotli>=1.2.0",
     # R2 is S3-compatible; `znhstry upload` talks to it through boto3.
     "boto3>=1.35",
+    "beautifulsoup4>=4.15.0",
+    "lxml>=6.1.1",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/znhstry"]

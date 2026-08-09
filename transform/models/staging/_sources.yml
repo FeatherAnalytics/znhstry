@@ -3,26 +3,63 @@ version: 2
 sources:
   - name: raw
     description: >
-      Parquet written by the extraction pipeline (`uv run python -m znhstry all`).
-      Read in place by DuckDB; nothing is copied into the warehouse.
+      Parquet written by the ingest pipeline (`uv run python -m znhstry ingest`),
+      which reads QONQR's published Dropbox drop. Read in place by DuckDB; nothing
+      is copied into the warehouse.
     tables:
       - name: changelog
         description: >
           Append-only event stream, one row per zone per observation. A row exists
           only when a zone's counts or control state changed, so spacing is
           irregular. Includes the 29 pre-2012 sentinel rows that carry bots.
+
+          Partitioned by year of `LastUpdateDateUtc`. A nightly append rewrites the
+          current year's file and touches nothing else, and DuckDB prunes whole
+          partitions from the directory name before reading a byte. The hive column
+          `year` is deliberately not selected downstream -- it is a physical
+          artifact of the layout, and `observed_at` is the real thing to filter on.
         meta:
-          external_location: "read_parquet('../data/raw/changelog/*.parquet')"
+          external_location: "read_parquet('../data/raw/changelog/**/*.parquet', hive_partitioning = true)"
+        # Freshness is measured against the newest event, which is the only honest
+        # clock here -- file mtimes tell you when the ingest ran, not whether it
+        # found anything. The ring is the reason error_after is not generous: past
+        # 31 days the slots holding the gap have been overwritten and the data is
+        # unrecoverable, so a week is the point at which someone must look.
+        loaded_at_field: '"LastUpdateDateUtc"'
+        freshness:
+          warn_after: {count: 2, period: day}
+          error_after: {count: 7, period: day}
       - name: zones
-        description: Current state and geography for every zone. One row per zone.
+        description: >
+          Current state and geography for every zone. One row per zone, upserted from
+          the same daily CSVs the changelog comes from -- a daily file carries a
+          complete zones row for every zone it mentions. The newest observation wins,
+          decided by `LastUpdateDateUtc`, so re-reading an old slot cannot roll a zone
+          backwards.
         meta:
           external_location: "read_parquet('../data/raw/zones/*.parquet')"
+      - name: battlestats
+        description: >
+          One row per battle report: the game's own account of a fight, with starting
+          and ending garrisons, player counts and weapon launches. 77 columns, names
+          and spaces exactly as scraped.
+
+          Not in the Dropbox drop. QONQR publishes these as HTML at
+          `portal.qonqr.com/Home/BattleStatistics/<BRN>`, indexed by the Most Active
+          Zones page. History was seeded once from the long-running community scrape
+          rather than re-fetched - the BRN range is sparse, so reproducing ~61k rows
+          would have meant ~130k requests to the game's own server. `znhstry
+          battlestats` collects forward from there, ten pages on a normal day.
+        meta:
+          external_location: "read_parquet('../data/raw/battlestats/battlestats.parquet')"
       - name: countries
+        description: Straight from `Countries.csv` in the drop; already the right shape.
         meta:
           external_location: "read_parquet('../data/raw/lookups/countries.parquet')"
       - name: regions
+        description: >
+          Straight from `Regions.csv`. `regionid` is not authoritative where it
+          contradicts a zone's own `CountryId` -- see `dim_zone` for the country-wins
+          rule and why it exists.
         meta:
           external_location: "read_parquet('../data/raw/lookups/regions.parquet')"
-      - name: factions
-        meta:
-          external_location: "read_parquet('../data/raw/lookups/factions.parquet')"

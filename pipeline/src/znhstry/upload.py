@@ -10,11 +10,9 @@ which is why the payloads live here rather than in the site bundle:
     Content-Encoding: br    Everything is stored brotli-compressed and the
                             browser unwraps it, so the client carries no
                             decoding code at all.
-    Cache-Control           Per object, and only `immutable` where that is
-                            actually true - see `_cache_control`. Shard names
-                            are stable, so anything a nightly run rewrites must
-                            be allowed to revalidate or a returning reader keeps
-                            yesterday's map for a year.
+    Cache-Control           One rule: revalidate. Shard names are stable and a
+                            nightly run rewrites them, so a browser must ask
+                            before reusing - see `_cache_control`.
 
 Upload order is deliberate: shards first, manifests last. Until the manifest
 lands, clients are still reading the previous one, and every file it names is
@@ -31,59 +29,54 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import md5
-from datetime import date
 from pathlib import Path
 
 from . import config
 
 log = logging.getLogger(__name__)
 
-IMMUTABLE = "public, max-age=31536000, immutable"
-MANIFEST = "public, max-age=60"
-
-# For everything a nightly run can rewrite under a name it already used.
+# One rule for everything, and it is deliberately the boring one.
 #
-# `immutable` is a promise that the bytes at a URL will never change, and the
-# browser holds a promise for the full year without ever asking again - a hard
-# reload does not override it. Marking a shard that churns as immutable means a
-# returning reader keeps yesterday's map forever.
+# `immutable` promises a browser the bytes at a URL will never change and licenses it
+# to skip revalidation for a year - not even a hard reload overrides it. The promise
+# was false. Roughly 24,000 zones a year are played for the first time and `zone_ids`
+# grows whenever a zone appears, so the files marked immutable did change, while
+# `meta.json` refreshed every minute. Readers paired a fresh manifest with year-old
+# shards, the row counts disagreed, and whole regions of the map silently vanished.
 #
-# Five minutes, then revalidate. A 304 carries no body, so the cost of being
-# wrong is a header exchange rather than a re-download.
-VOLATILE = "public, max-age=300, must-revalidate"
+# The fix is not to work out which files are *really* immutable. That is a judgement
+# call made once and then quietly invalidated by the next change - it is exactly the
+# judgement that failed here. `no-cache` does not mean "do not cache": it means "ask
+# before reusing". The browser keeps the body and revalidates against the ETag, so an
+# unchanged shard costs a header exchange and a 304 with no body at all.
+#
+# R2 returns the MD5 as the ETag for every object, so this works by itself and needs
+# nothing in the manifest to support it.
+REVALIDATE = "public, no-cache"
 
-# Positions, names and lookups describe where places are and what they are
-# called. They are rewritten byte-identically every run and genuinely never
-# change, so they keep the year-long promise.
-_IMMUTABLE_TREES = ("tiles/", "terrain/", "names/")
-_IMMUTABLE_FILES = ("zone_ids.bin.br", "lookups.json.br")
+# The raw layer's home in the same bucket. It is not part of the export and no
+# browser ever asks for it, but it shares the bucket because a second one would
+# mean a second set of credentials for no benefit - the data is QONQR's public
+# record either way, and having it fetchable is what lets anyone clone this repo
+# and rebuild the whole warehouse without a single upstream request.
+#
+# Load-bearing: `upload_all` deletes every key the export does not name, so
+# without fencing this prefix off, publishing the site would wipe the archive.
+ARCHIVE_PREFIX = "raw/"
+ARCHIVE = "no-store"
 
 
 def _cache_control(key: str) -> str:
-    """How long this object may be trusted without asking again.
+    """How long this object may be trusted without asking again: never, without asking.
 
-    Immutable only where it is true. `paint/` is state as of now; the current
-    year's display shard grows daily; `zone_history/` blocks are rewritten
-    wherever a zone moved; the series are recomputed in full. All of those keep
-    their filenames, so the only thing standing between a reader and stale data
-    is this header.
+    Deliberately one answer for every object. Deciding per tree means deciding which
+    files really never change, and that judgement is what broke the map - see the note
+    on REVALIDATE. The raw archive is the one exception: no browser fetches it.
     """
-    name = key.rsplit("/", 1)[-1]
-    if name == "meta.json":
-        return MANIFEST
-    if name.startswith("boundaries") or name in _IMMUTABLE_FILES:
-        return IMMUTABLE
-    if any(f"/{tree}" in f"/{key}" for tree in _IMMUTABLE_TREES):
-        return IMMUTABLE
+    if key.startswith(ARCHIVE_PREFIX):
+        return ARCHIVE
+    return REVALIDATE
 
-    # A past year's display shard and anchor are finished history. The current
-    # year's shard gains rows every night, so it is volatile until the year ends.
-    if "/display/" in f"/{key}":
-        digits = "".join(c for c in name if c.isdigit())
-        year = int(digits[:4]) if len(digits) >= 4 else 0
-        return IMMUTABLE if 0 < year < date.today().year else VOLATILE
-
-    return VOLATILE
 
 # A full export is ~1,850 small objects. Serial puts would take many minutes of
 # almost pure round-trip; R2 is happy with this much concurrency.
@@ -97,9 +90,7 @@ def _client():
         f"https://{account}.r2.cloudflarestorage.com" if account else None
     )
     access_key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get(
-        "AWS_SECRET_ACCESS_KEY"
-    )
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
 
     if not (endpoint and access_key and secret_key):
         raise SystemExit(
@@ -108,6 +99,7 @@ def _client():
         )
 
     import boto3
+    from botocore.config import Config
 
     return boto3.client(
         "s3",
@@ -115,6 +107,10 @@ def _client():
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name="auto",
+        # botocore pools 10 connections by default and we run 16 threads, so the
+        # surplus six spend the run opening a socket, being discarded on return,
+        # and opening another. Matching the pool to the workers is the whole fix.
+        config=Config(max_pool_connections=WORKERS),
     )
 
 
@@ -163,11 +159,91 @@ def _existing(s3, bucket: str) -> dict[str, str]:
         token = page.get("NextContinuationToken")
 
 
+def _bucket(name: str | None = None) -> str:
+    name = name or os.environ.get("R2_BUCKET") or os.environ.get("R2_BUCKET_NAME")
+    if not name:
+        raise SystemExit("Set R2_BUCKET (or R2_BUCKET_NAME).")
+    return name
+
+
+def archive_raw(bucket: str | None = None) -> None:
+    """Push `data/raw` to the bucket under `raw/`.
+
+    This is the durable copy. Once the nightly reads Dropbox instead of the SQL
+    mirror, the ring only reaches back 31 days, so everything before that exists
+    solely because we kept it - an Actions cache is evictable and a laptop is a
+    laptop. The ETag skip means a nightly archive sends the year partition that
+    changed and the ~200 MB that did not stays put.
+    """
+    bucket = _bucket(bucket)
+    if not config.RAW.exists():
+        raise SystemExit(f"{config.RAW} does not exist - nothing to archive.")
+
+    s3 = _client()
+    files = sorted(p for p in config.RAW.rglob("*") if p.is_file() and p.suffix != ".tmp")
+    key_of = {p: ARCHIVE_PREFIX + p.relative_to(config.RAW).as_posix() for p in files}
+    remote = _existing(s3, bucket)
+
+    force = os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1"
+    pending = [
+        p for p in files if force or remote.get(key_of[p]) != md5(p.read_bytes()).hexdigest()
+    ]
+
+    log.info(
+        "archiving %s of %s files (%s MB)",
+        f"{len(pending):,}",
+        f"{len(files):,}",
+        f"{sum(p.stat().st_size for p in pending) / 1e6:.1f}",
+    )
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        list(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
+
+    # Only within the archive's own prefix, so this can never touch the export.
+    stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
+    if stale:
+        log.info("removing %s stale archive objects", f"{len(stale):,}")
+        batch = sorted(stale)
+        for i in range(0, len(batch), 1000):
+            s3.delete_objects(
+                Bucket=bucket, Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]}
+            )
+
+    log.info("archive complete: %s files under %s", f"{len(files):,}", ARCHIVE_PREFIX)
+
+
+def restore_raw(bucket: str | None = None) -> None:
+    """Pull `raw/` back down into `data/raw`.
+
+    The first step on a fresh clone or a cold CI runner. The ring cannot seed a
+    history it does not hold, so `ingest` refuses to run without this.
+    """
+    bucket = _bucket(bucket)
+    s3 = _client()
+    keys = [k for k in _existing(s3, bucket) if k.startswith(ARCHIVE_PREFIX)]
+    if not keys:
+        raise SystemExit(f"nothing under {ARCHIVE_PREFIX} in {bucket} - has `archive` run?")
+
+    log.info("restoring %s files from %s", f"{len(keys):,}", bucket)
+
+    def one(key: str) -> int:
+        dest = config.RAW / key[len(ARCHIVE_PREFIX) :]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(dest)
+        return len(body)
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        total = sum(pool.map(one, keys))
+
+    log.info("restore complete: %s files, %s MB", f"{len(keys):,}", f"{total / 1e6:.1f}")
+
+
 def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     source = source or config.WEB_DATA
-    bucket = bucket or os.environ.get("R2_BUCKET") or os.environ.get("R2_BUCKET_NAME")
-    if not bucket:
-        raise SystemExit("Set R2_BUCKET (or R2_BUCKET_NAME).")
+    bucket = _bucket(bucket)
     if not source.exists():
         raise SystemExit(f"{source} does not exist - run `znhstry export` first.")
 
@@ -222,7 +298,11 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
 
     # Orphans from a previous layout. Deleted after the new shards are all in
     # place and before the manifest names them, so no client sees a gap.
-    stale = set(remote) - set(key_of.values())
+    #
+    # The archive prefix is excluded, not merely absent from `key_of`: it lives in
+    # this bucket and is not part of the export, so without this line publishing
+    # the site would delete the only off-machine copy of the raw layer.
+    stale = {k for k in remote if not k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
     if stale:
         log.info("removing %s orphaned objects", f"{len(stale):,}")
         batch = sorted(stale)

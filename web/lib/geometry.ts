@@ -1,19 +1,20 @@
 /**
  * Progressive zone geometry.
  *
- * The export shards the world into an 8-degree grid. This is sharding, not
+ * The export shards the world into a 16-degree grid. This is sharding, not
  * level of detail: every tile is eventually fetched and every zone is drawn as
  * itself. The grid exists only so the patch of world you are looking at can
  * arrive before Antarctica does.
  *
- * Three files per tile, fetched in this order:
+ * Two files per tile, fetched together so a tile is never on screen uncoloured:
  *
- *   tiles/   positions of zones that have ever held a bot
- *   paint/   one byte each for those zones - faction in the top two bits, a log
- *            bucket for size in the low six. Row-aligned to tiles/, and the
- *            reason the map can be complete and correct with no history at all.
- *   terrain/ positions of zones never played in fourteen years. Always grey,
- *            so they carry no paint and load last.
+ *   tiles/  every zone in the tile - position, region, country, and whether it
+ *           has ever held a bot. One file, not one per kind of zone: splitting
+ *           played from never-played meant a zone crossing between them changed
+ *           two files, and drew all the grey on top of all the colour.
+ *   paint/  one byte each - faction in the top two bits, a log bucket for size
+ *           in the low six. Row-aligned to tiles/, and the reason the map can be
+ *           complete and correct with no history loaded at all.
  *
  * Names are not here. They are keyed by zone index and fetched on hover.
  *
@@ -28,56 +29,45 @@
  * anything touching a GPU buffer wants slot.
  */
 
-import { fetchBytes, type ColumnSpec, type Dtype } from "./format";
+import { decodeColumns, fetchBytes, requireRows, type ColumnSpec, type Dtype } from "./format";
 
 export interface GeometryMeta {
   tile_degrees: number;
   coord_scale: number;
   magnitude_steps: number;
-  paths: { tiles: string; paint: string; terrain: string };
+  paths: { tiles: string; paint: string };
   position_columns: ColumnSpec[];
   paint_columns: ColumnSpec[];
   tile_fields: string[];
-  /** [name, played, terrain, tileBytes, paintBytes, terrainBytes, south, west] */
-  tiles: [string, number, number, number, number, number, number, number][];
+  /**
+   * [name, zones, played, tileBytes, paintBytes, south, west]
+   *
+   * Positional, so trailing entries a newer export adds are simply ignored.
+   */
+  tiles: [string, number, number, number, number, number, number][];
   first_paint_bytes: number;
-  terrain_bytes: number;
   names_bytes: number;
 }
 
 export interface Tile {
   name: string;
-  played: number;
-  terrain: number;
-  bytes: number;
+  /** Every zone in the tile. */
+  zones: number;
   centerLat: number;
   centerLon: number;
-  /** Render slot of the first played row, and of the first terrain row. */
-  playedSlot: number;
-  terrainSlot: number;
 }
 
 export function readTiles(meta: GeometryMeta): Tile[] {
   const half = meta.tile_degrees / 2;
-  return meta.tiles.map(([name, played, terrain, tileBytes, paintBytes, , south, west]) => ({
+  return meta.tiles.map(([name, zones, , , , south, west]) => ({
     name,
-    played,
-    terrain,
-    bytes: tileBytes + paintBytes,
+    zones,
     centerLat: south + half,
     centerLon: west + half,
-    playedSlot: -1,
-    terrainSlot: -1,
   }));
 }
 
-const BYTES_OF: Record<Dtype, number> = {
-  uint8: 1,
-  uint16: 2,
-  uint32: 4,
-  int32: 4,
-  float32: 4,
-};
+
 
 /**
  * What the map draws, in one byte per zone.
@@ -179,29 +169,17 @@ function absorbPositions(
   meta: GeometryMeta,
   rows: number,
   buffer: ArrayBuffer,
-  everActive: boolean,
 ): number {
-  const decoded: Record<string, Int32Array | Uint16Array> = {};
-  let offset = 0;
+  requireRows(buffer, rows, meta.position_columns, "positions");
 
-  for (const [name, dtype, encoding] of meta.position_columns) {
-    const source =
-      dtype === "int32"
-        ? new Int32Array(buffer, offset, rows)
-        : (new Uint16Array(buffer, offset, rows) as Uint16Array);
-    offset += rows * BYTES_OF[dtype];
-
-    if (encoding === "delta") {
-      // Signed differences: rows run south to north inside a tile, so
-      // longitude resets westward at every new latitude and idx jumps about.
-      const restored = new Int32Array(rows);
-      let running = 0;
-      for (let i = 0; i < rows; i++) restored[i] = running += source[i];
-      decoded[name] = restored;
-    } else {
-      decoded[name] = source;
-    }
-  }
+  // The shared decoder, not a local copy of it. It handles the one case a
+  // hand-rolled column walk gets wrong: a typed-array view needs its offset to
+  // be a multiple of its width, and `ever_active` is a single byte, so every
+  // column placed after it would start on an odd offset and throw. It only
+  // happens to work here because that column is last, which is an invariant
+  // nothing states - reorder `position_columns` in export.py and the local
+  // version breaks where this one does not.
+  const decoded = decodeColumns(buffer, meta.position_columns, rows);
 
   const scale = meta.coord_scale;
   const idxColumn = decoded.idx as Int32Array;
@@ -209,6 +187,7 @@ function absorbPositions(
   const lonColumn = decoded.longitude as Int32Array;
   const regionColumn = decoded.region_id as Uint16Array;
   const countryColumn = decoded.country_id as Uint16Array;
+  const everActiveColumn = decoded.ever_active as Uint8Array;
 
   const firstSlot = geometry.count;
   let slot = firstSlot;
@@ -222,7 +201,7 @@ function absorbPositions(
     geometry.longitude[idx] = lon;
     geometry.region[idx] = regionColumn[i];
     geometry.country[idx] = countryColumn[i];
-    geometry.everActive[idx] = everActive ? 1 : 0;
+    geometry.everActive[idx] = everActiveColumn[i];
     geometry.idxToSlot[idx] = slot;
     geometry.slotToIdx[slot] = idx;
     geometry.positions[slot * 2] = lon;
@@ -234,14 +213,28 @@ function absorbPositions(
   return firstSlot;
 }
 
-/** Apply a paint file, which is row-aligned to the tile it belongs to. */
+/**
+ * Apply a paint file, which is row-aligned to the tile it belongs to.
+ *
+ * The length check is the point. `new Uint8Array(buffer, 0, rows)` throws when the
+ * body is shorter than the tile claims, and the loader used to swallow that - so a
+ * short paint file left every zone in the tile at pk 0, which draws as an empty zone.
+ * Positions are absorbed first and succeed, so the symptom was a region present in
+ * grey with none of its colour, and nothing said why. Checking here makes the message
+ * name the tile and the two numbers that disagree.
+ */
 function absorbPaint(
   geometry: ZoneGeometry,
   display: ZoneDisplay,
+  meta: GeometryMeta,
   firstSlot: number,
   rows: number,
   buffer: ArrayBuffer,
 ): void {
+  // Reduced over the manifest's own spec rather than assuming one byte a zone, so
+  // this stays right if `paint/` ever gains a column - which is why the manifest
+  // carries `paint_columns` at all.
+  requireRows(buffer, rows, meta.paint_columns, "paint");
   const pk = new Uint8Array(buffer, 0, rows);
   for (let i = 0; i < rows; i++) display.pk[geometry.slotToIdx[firstSlot + i]] = pk[i];
 }
@@ -253,7 +246,7 @@ export interface LoaderHandle {
   readonly done: Promise<void>;
 }
 
-export type LoadStage = "played" | "terrain";
+export type LoadStage = "zones";
 
 export interface LoaderOptions {
   base: string;
@@ -315,8 +308,11 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
       for (let tile = next(); tile && !cancelled; tile = next()) {
         try {
           await work(tile);
-        } catch {
-          // One missing file is a hole in the map, not a dead page.
+        } catch (error) {
+          // One missing file is a hole in the map, not a dead page - but it is
+          // still a hole, and swallowing it silently is how a tile of Ukraine
+          // rendered in grey with none of its colour and nothing said why.
+          console.warn(`znhstry: ${stage} tile ${tile.name} failed —`, error);
         }
         if (!cancelled) onTile(stage, pending.length);
       }
@@ -325,36 +321,31 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
   }
 
   const done = (async () => {
-    // 1. The played world: positions and paint together, so a tile is never
-    //    on screen uncoloured. Two requests, one await, so the pair lands as
-    //    a unit and the second does not queue behind another tile's first.
+    // Every zone in the tile, positions and paint together, so a tile is never
+    // on screen uncoloured. Two requests, one await, so the pair lands as a unit
+    // and the second does not queue behind another tile's first.
+    //
+    // One pass, not two. Terrain used to load in a second stage after the played
+    // world, which meant every grey dot drew on top of every coloured one, and a
+    // zone played for the first time moved between two files that are both served
+    // immutable. Merged, they interleave in the tile's own spatial order and a
+    // first play only changes a byte of paint.
     await drain(
-      "played",
-      all.filter((t) => t.played > 0),
+      "zones",
+      all.filter((t) => t.zones > 0),
       async (tile) => {
         const [positions, paint] = await Promise.all([
           fetchBytes(`${base}/${paths.tiles}/${tile.name}.bin.br`),
           fetchBytes(`${base}/${paths.paint}/${tile.name}.bin.br`),
         ]);
         if (cancelled) return;
-        tile.playedSlot = absorbPositions(geometry, meta, tile.played, positions, true);
-        absorbPaint(geometry, display, tile.playedSlot, tile.played, paint);
+        const firstSlot = absorbPositions(geometry, meta, tile.zones, positions);
+        absorbPaint(geometry, display, meta, firstSlot, tile.zones, paint);
       },
     );
 
-    // 2. The terrain nobody has ever played. Always grey, so no paint.
-    await drain(
-      "terrain",
-      all.filter((t) => t.terrain > 0),
-      async (tile) => {
-        const buffer = await fetchBytes(`${base}/${paths.terrain}/${tile.name}.bin.br`);
-        if (cancelled) return;
-        tile.terrainSlot = absorbPositions(geometry, meta, tile.terrain, buffer, false);
-      },
-    );
-
-    // Two passes only. Names are 12.6 MB for a readout most visits never ask
-    // for, so they are fetched a block at a time on hover; see lib/names.ts.
+    // One pass only. Names are 12.6 MB for a readout most visits never ask for,
+    // so they are fetched a block at a time on hover; see lib/names.ts.
   })();
 
   return {

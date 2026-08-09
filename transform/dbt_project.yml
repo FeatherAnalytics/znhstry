@@ -3,6 +3,7 @@ version: "0.1.0"
 profile: znhstry
 
 model-paths: ["models"]
+seed-paths: ["seeds"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 

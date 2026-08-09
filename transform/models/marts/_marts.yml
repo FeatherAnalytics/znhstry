@@ -14,6 +14,37 @@ models:
       computed against each zone's own previous observation, so they span
       whatever gap that was - never assume a fixed window.
 
+  - name: fct_zone_battles
+    description: >
+      Grain: one row per battle report, at a real zone. 45,675 rows, 11,721 zones.
+
+      A daily leaderboard, not a log of every fight: QONQR publishes exactly 10
+      reports on 3,451 of the 4,598 covered days and 27-29 on most of the rest, from
+      its Most Active Zones page. A row therefore means "this zone was among the most
+      active in the world that day" -- a much stronger claim than an event in
+      fct_zone_events, and one that must not be relabelled as "battles that day".
+
+      No zone is reported twice in a day, so battle grain and zone-day grain coincide.
+      Coverage starts 2014-01-01, eighteen months after release.
+
+      Mapped battles only. The 15,837 Atlantis tournament reports are excluded because
+      their zones have no coordinates, not because they are noise -- they are the
+      heaviest fighting in the game. Anything counting all battle reports must read
+      stg_battlestats. Five further reports name a zone absent from dim_zone.
+    columns:
+      - name: battle_report_number
+        description: QONQR's own identifier for the report. Unique.
+        data_tests: [unique, not_null]
+      - name: zone_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_zone')
+                field: zone_id
+      - name: battle_date
+        data_tests: [not_null]
+
   - name: fct_zone_checkpoints
     description: >
       Grain: one row per zone per year boundary. Dense snapshots that let the

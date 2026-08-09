@@ -46,6 +46,27 @@ export async function fetchBytes(url: string): Promise<ArrayBuffer> {
   return response.arrayBuffer();
 }
 
+/**
+ * Refuse a payload too short for the rows the manifest claims.
+ *
+ * Views are taken at running offsets, so a truncated or stale body either throws a
+ * bare RangeError from deep inside a decoder or - worse - reads a later column out of
+ * an earlier one's bytes. A browser holding a stale shard against a fresh manifest is
+ * exactly how whole regions of the map silently disappeared, so the check names the
+ * shard and both numbers instead.
+ */
+export function requireRows(
+  buffer: ArrayBuffer,
+  rows: number,
+  spec: ColumnSpec[],
+  label: string,
+): void {
+  const need = spec.reduce((n, [, dtype]) => n + BYTES_OF[dtype], 0) * rows;
+  if (buffer.byteLength < need) {
+    throw new Error(`${label}: ${buffer.byteLength} bytes for ${rows} rows, need ${need}`);
+  }
+}
+
 /** Take typed-array views over one decompressed payload. */
 export function decodeColumns(
   buffer: ArrayBuffer,
@@ -81,7 +102,9 @@ export function decodeColumns(
 }
 
 export async function loadShard(base: string, entry: ShardEntry): Promise<Columns> {
-  return decodeColumns(await fetchBytes(`${base}/${entry.path}`), entry.columns, entry.rows);
+  const buffer = await fetchBytes(`${base}/${entry.path}`);
+  requireRows(buffer, entry.rows, entry.columns, entry.path);
+  return decodeColumns(buffer, entry.columns, entry.rows);
 }
 
 export async function loadJson<T>(url: string): Promise<T> {

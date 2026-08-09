@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QONQR Web Portal</title>
+    <meta name="description" content="QONQR is the geosocial game of world domination.">
+    <meta name="author" content="Qonqr LLC.">
+
+    <link rel="icon" type="image/png" href="http://qonqr.com/favicon.ico">
+    <link rel="apple-touch-icon" sizes="57x57" href="http://qonqr.com/Images/favicon.ico/apple-icon-57x57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="http://qonqr.com/Images/favicon.ico/apple-icon-60x60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="http://qonqr.com/Images/favicon.ico/apple-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="http://qonqr.com/Images/favicon.ico/apple-icon-76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="http://qonqr.com/Images/favicon.ico/apple-icon-114x114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="http://qonqr.com/Images/favicon.ico/apple-icon-120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="http://qonqr.com/Images/favicon.ico/apple-icon-144x144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="http://qonqr.com/Images/favicon.ico/apple-icon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="http://qonqr.com/Images/favicon.ico/apple-icon-180x180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="http://qonqr.com/Images/favicon.ico/android-icon-192x192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="http://qonqr.com/Images/favicon.ico/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="http://qonqr.com/Images/favicon.ico/favicon-96x96.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="http://qonqr.com/Images/favicon.ico/favicon-16x16.png">
+    <meta name="msapplication-TileColor" content="#ffffff">
+    <meta name="msapplication-TileImage" content="http://qonqr.com/Images/favicon.ico/ms-icon-144x144.png">
+    <meta name="theme-color" content="#000000">
+
+    <!-- Facebook Meta Tags -->
+    <meta property="fb:app_id" content="1479959368895825" />
+    <meta property="og:title" content="Dover Heights / New South Wales / Australia - 8/7/2026" />
+    <meta property="og:type" content="qonqr_portal:Battle" />
+    <meta property="og:site_name" content="QONQR Web Portal" />
+    <meta property="og:url" content="https://portal.qonqr.com/Home/BattleStatistics/131012" />
+    <meta property="og:description" content="The World. In Play." />
+    <meta property="og:image" content="https://portal.qonqr.com/Images/SocialBanner.png" />
+    <meta property="og:locale" content="en_US" />
+            <meta property="og:locale:alternate" content="es_ES" />
+            <meta property="og:locale:alternate" content="es_MX" />
+            <meta property="og:locale:alternate" content="de_DE" />
+            <meta property="og:locale:alternate" content="pt_BR" />
+            <meta property="og:locale:alternate" content="pt_PT" />
+            <meta property="og:locale:alternate" content="it_IT" />
+            <meta property="og:locale:alternate" content="hu_HU" />
+    <meta property="qonqr_portal:location:latitude" content="-33.870830">
+    <meta property="qonqr_portal:location:longitude" content="151.279170">
+    <meta property="qonqr_portal:date" content="8/7/2026 12:00:00 AM">
+    <meta property="article:author">
+    <meta property="article:publisher">
+
+    <!-- Twitter Meta Tags -->
+    <meta name="twitter:card" content="app">
+    <meta name="twitter:site" content=@QONQR />
+    <meta name="twitter:description" content="QONQR is a free mobile game that brings the game to where you live, pitting you against other players in a battle for your home town and surrounding cities. QONQR is the world, in play.">
+    <meta name="twitter:app:country" content="US">
+    <meta name="twitter:app:name:iphone" content="QONQR">
+    <meta name="twitter:app:id:iphone" content="1049220831">
+    <meta name="twitter:app:url:iphone" content="https://itunes.apple.com/us/app/qonqr-world-in-play/id1049220831?mt=8">
+    <meta name="twitter:app:name:googleplay" content="QONQR">
+    <meta name="twitter:app:id:googleplay" content="com.qonqr.android.blue">
+    <meta name="twitter:app:url:googleplay" content="https://play.google.com/store/apps/details?id=com.qonqr.android.blue&hl=en">
+
+    <link href="/Styles/styles.css?refresh=20161201" rel="stylesheet" type="text/css">
+    <link href="/Styles/jquery-ui.min.css" rel="stylesheet" type="text/css">
+
+    <!-- TODO: THIS SHOULD BE MOVED ONLY THE PAGES THAT NEED IT -->
+    <link href="/Styles/animate.min.css" rel="stylesheet" type="text/css">
+
+                            
+                            <style>
+                                .marker {
+                                    display: block;
+                                    border: none;
+                                    cursor: pointer;
+                                    padding: 0;
+                                    width: 25px;
+                                    height: 29px;
+                                }
+                            </style>
+                        
+    
+
+    <!-- HTML5 Shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/libs/html5shiv/3.7.0/html5shiv.js"></script>
+      <script src="https://oss.maxcdn.com/libs/respond.js/1.4.2/respond.min.js"></script>
+    <![endif]-->
+
+
+</head>
+<body>
+    <!--
+    Facebook Analytics
+    https://developers.facebook.com/docs/analytics/quickstart-web
+    -->
+    <script>
+        window.fbAsyncInit = function () {
+            FB.init({
+                appId: '1479959368895825',
+                xfbml: true,
+                version: 'v2.8'
+            });
+            FB.AppEvents.logPageView();
+        };
+
+        (function (d, s, id) {
+            var js, fjs = d.getElementsByTagName(s)[0];
+            if (d.getElementById(id)) { return; }
+            js = d.createElement(s); js.id = id;
+            js.src = "//connect.facebook.net/en_US/sdk.js";
+            fjs.parentNode.insertBefore(js, fjs);
+        }(document, 'script', 'facebook-jssdk'));
+    </script>
+
+    
+
+    <div class="wrapper">
+        <!-- Sidebar -->
+        <div class="sidebar-wrapper blue">
+            <ul class="sidebar-nav">
+                <li class="sidebar-brand">
+                    <a href="/Home"><img src="/Images/logo.png" alt="logo"><span>WEB PORTAL</span></a>
+                </li>
+                    <li class="nav-links">
+                        <a href="/Home/Login">Login</a>
+                    </li>
+                <li class="nav-links">
+                    <a href="/Atlantis">Atlantis</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Comic/SelectFaction">Comic</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Market/Cubes">Cubes &amp; Coins</a>
+                </li>
+                <li class="nav-links">
+                    <a href="/Home/MostActiveZones">Most Active Zones</a>
+                </li>
+                    <li class="nav-links">
+                        <a href="/Home/Support">Support &amp; Tools</a>
+                    </li>
+            <li style="padding-top:30px;padding-left:20px;">
+                <div>
+                    <span class="small glyphicon glyphicon-globe" style="vertical-align:middle"></span>&nbsp;<a href="/Home/Language" style="font-size:12px;font-family:Arial;vertical-align:middle">English (en)</a>
+                </div>
+                <div style="font-size:12px;font-family:Arial">
+                    &copy; 2010 - 2026
+                </div>
+                <div style="font-size:12px;font-family:Arial">
+                    v: 20260609.1145
+                </div>
+            </li>
+            </ul>
+        </div>
+        <div class="page-content-wrapper">
+            <button type="button" id="menu-toggle" class="btn btn-default btn-lg blue">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="glyphicon glyphicon-list"></span>
+            </button>
+            
+<div class="content-header">
+    <div class="col-lg-6">
+        <div>
+                <a href="/Home/MostActiveZones">« Back to Top Zones</a>
+        </div>
+        <h1>
+            Dover Heights
+            <br />
+            <small>New South Wales / Australia</small>
+            <br />
+            <small>#12642</small>
+        </h1>
+        <br />
+    </div>
+    <div class="col-lg-6">
+        <div id='map' class="inset" style="position:relative; width:100%; height: 500px;"></div>
+    </div>
+</div>
+<!-- Keep all page content within the page-content inset div! -->
+<div class="page-content inset">
+    <div class="row">
+        <div class="col-xs-12 inset bottom-buffer">
+            <h2>BATTLE DATE: <strong>8/7/2026</strong></h2>
+            <div class="col-xs-12 blue">
+                <div class="col-sm-6 top-buffer">
+                    <h3>Start:</h3>
+                    <dl>
+                        <dt>Swarm</dt>
+                        <dd>
+                            <div class="progress progress-Swarm">
+                                <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="1159471"
+                                     style="width: 0.04458929977550107%;">517</div>
+                                </div>
+                            </dd>
+                            <dt>Legion</dt>
+                            <dd>
+                                <div class="progress progress-Legion">
+                                    <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="1159471"
+                                         style="width: 0%;">0</div>
+                                    </div>
+                                </dd>
+                                <dt>Faceless</dt>
+                                <dd>
+                                    <div class="progress progress-Faceless">
+                                        <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="1159471"
+                                             style="width: 99.9554107002245%;">1158954</div>
+                                        </div>
+                                    </dd>
+                                </dl>
+                            </div>
+                            <div class="col-sm-6 top-buffer">
+                                <h3>End:</h3>
+                                <dl>
+                                    <dt>Swarm</dt>
+                                    <dd>
+                                        <div class="progress progress-Swarm">
+                                            <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="258040"
+                                                 style="width: 0%;">0</div>
+                                            </div>
+                                        </dd>
+                                        <dt>Legion</dt>
+                                        <dd>
+                                            <div class="progress progress-Legion">
+                                                <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="258040"
+                                                     style="width: 0%;">0</div>
+                                                </div>
+                                            </dd>
+                                            <dt>Faceless</dt>
+                                            <dd>
+                                                <div class="progress progress-Faceless">
+                                                    <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="258040"
+                                                         style="width: 100%;">258040</div>
+                                                    </div>
+                                                </dd>
+                                            </dl>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div><!--/row-->
+                            <div class="row">
+                                <div class="col-sm-6">
+                                    <h4>Battle Statistics:</h4>
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <dl>
+                                                <dt><small>Total Active Players:</small></dt>
+                                                <dd><h3>13</h3></dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">5</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">8</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <dl>
+                                                <dt><small>Total Launches:</small></dt>
+                                                <dd><h3>1 666</h3></dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">1 142</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">524</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <dl>
+                                                <dt><small>Bots Launched:</small></dt>
+                                                <dd><h3>907 600</h3></dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">598 450</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">309 150</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <dl>
+                                                <dt><small>Bots Killed:</small></dt>
+                                                <dd><h3>1 573 642</h3></dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">1 187 995</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">385 647</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row">
+                                        <div class="col-md-5">
+                                            <dl>
+                                                <dt><small>Bots Lost:</small></dt>
+                                                <dd><h3>1 808 929</h3></dd>
+                                            </dl>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">598 450</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">1 210 479</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row">
+                                        <div class="col-md-12">
+                                            <dl>
+                                                <dt><small>Zone Captures:</small></dt>
+                                                <dd><h3>3</h3></dd>
+                                            </dl>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="clearfix"></div>
+                                    <h4>Launch Statistics:</h4>
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_zone.png" alt="Assault" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Assault Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>31</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">14</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">17</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_shockwave.png" alt="Shockwave" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Shockwave Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>175</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">175</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">0</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_plasma.png" alt="Plasma Beam" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Plasma Beam Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>1 120</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">746</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">374</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_missile.png" alt="NanoMissile" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Nanomissile Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>19</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">13</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">6</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_deflect.png" alt="Deflection" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Deflection Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>162</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">160</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">2</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_absorb.png" alt="Absorber" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Absorber Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>106</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">19</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">87</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_lattice.png" alt="Hardened Lattice" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Hardened Lattice Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>0</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">0</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">0</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_divert.png" alt="Divert" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Divert Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>6</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">0</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">6</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_seekers.png" alt="Seekers" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Seeker Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>17</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">0</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">17</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_booster.png" alt="Boosters" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Booster Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>15</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">8</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">7</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                    <div class="row bottom-buffer-sm">
+                                        <div class="col-md-5">
+                                            <table class="formation-table">
+                                                <tr>
+                                                    <td rowspan="2">
+                                                        <img src="/Images/icn_form_strengthen.png" alt="Strengthen" />
+                                                    </td>
+                                                    <td>
+                                                        <small> Strengthener Launches:</small>
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td>
+                                                        <h3>15</h3>
+                                                    </td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                        <div class="col-md-7">
+                                            <table class="table table-hover table-responsive">
+                                                <tbody>
+                                                    <tr class="single-row">
+                                                        <td class="Swarm">7</td>
+                                                        <td class="Legion">0</td>
+                                                        <td class="Faceless">8</td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div><!--/row-->
+                                </div>
+                                <div class="col-sm-6">
+                                    <h4>Active Players</h4>
+                                    <div class="table-responsive">
+                                        <table class="table table-hover">
+                                            <thead>
+                                                <tr>
+                                                    <th>
+                                                        Rank
+                                                    </th>
+                                                    <th></th>
+                                                    <th></th>
+                                                    <th>
+                                                        Total Launches
+                                                    </th>
+                                                    <th>
+                                                        Bots Killed
+                                                    </th>
+                                                    <th>
+                                                        Bots Lost
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                    <tr class="Swarm">
+                                                        <td><div>1</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile39250.jpg?refresh=1208" class="img-responsive  gold-status" alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class="gold-star"></span>
+                                                            <a href="/Player/Details/sethowar">sethowar</a>
+                                                            <span class="atlantis-gold"></span>
+
+                                                        </td>
+                                                        <td>856</td>
+                                                        <td>1 033 192</td>
+                                                        <td>168 700</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>2</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile974.jpg?refresh=0924" class="img-responsive  gold-status" alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class="gold-star"></span>
+                                                            <a href="/Player/Details/LordStefo">LordStefo</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>478</td>
+                                                        <td>407 521</td>
+                                                        <td>257 321</td>
+                                                    </tr>
+                                                    <tr class="Swarm">
+                                                        <td><div>3</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile65247.jpg?refresh=1026" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/L0ZA">L0ZA</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>95</td>
+                                                        <td>68 212</td>
+                                                        <td>146 050</td>
+                                                    </tr>
+                                                    <tr class="Swarm">
+                                                        <td><div>4</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile68044.jpg?refresh=0647" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/hayellow">hayellow</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>92</td>
+                                                        <td>40 719</td>
+                                                        <td>152 750</td>
+                                                    </tr>
+                                                    <tr class="Swarm">
+                                                        <td><div>5</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile278020.jpg?refresh=0517" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/GreenTea">GreenTea</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>87</td>
+                                                        <td>49 683</td>
+                                                        <td>116 550</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>6</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile2329.jpg?refresh=0355" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/saxonk">saxonk</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>13</td>
+                                                        <td>9 086</td>
+                                                        <td>46 150</td>
+                                                    </tr>
+                                                    <tr class="Swarm">
+                                                        <td><div>7</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile210838.jpg?refresh=1204" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/Sellyme">Sellyme</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>12</td>
+                                                        <td>18 673</td>
+                                                        <td>14 400</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>8</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile2323.jpg?refresh=0443" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/coder">coder</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>6</td>
+                                                        <td>0</td>
+                                                        <td>2 400</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>8</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile2322.jpg?refresh=1049" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/Firenanobug">Firenanobug</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>6</td>
+                                                        <td>3 976</td>
+                                                        <td>39 250</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>8</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile8584.jpg?refresh=0932" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/spanky">spanky</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>6</td>
+                                                        <td>5 208</td>
+                                                        <td>24 859</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>8</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile3993.jpg?refresh=1259" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/badlisa">badlisa</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>6</td>
+                                                        <td>5 660</td>
+                                                        <td>38 400</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>8</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile2355.jpg?refresh=1200" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/Jaker">Jaker</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>6</td>
+                                                        <td>3 076</td>
+                                                        <td>48 372</td>
+                                                    </tr>
+                                                    <tr class="Faceless">
+                                                        <td><div>13</div></td>
+                                                        <td><img src="https://qonqrstorageeast.blob.core.windows.net/playerimages/profile164260.jpg?refresh=0810" class="img-responsive  " alt="Profile Image" /></td>
+                                                        <td>
+                                                            <span class=""></span>
+                                                            <a href="/Player/Details/plantagineum">plantagineum</a>
+                                                            <span class=""></span>
+
+                                                        </td>
+                                                        <td>3</td>
+                                                        <td>6 678</td>
+                                                        <td>3 600</td>
+                                                    </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div><!--/row-->
+                        </div><!--/page-content-wrapper-->
+
+
+
+        </div>
+    </div>
+
+    <script src="/Scripts/jquery-3.1.1.min.js"></script>
+    <script src="/Scripts/jquery-ui.min.js"></script>
+    <script src="/Scripts/bootstrap.min.js"></script>
+    <script>
+        $("#menu-toggle").click(function (e) {
+            e.preventDefault();
+            $(".wrapper").toggleClass("active");
+        });
+    </script>
+    
+
+
+                            <script src='https://api.mapbox.com/mapbox-gl-js/v1.10.1/mapbox-gl.js'></script>
+                            <link href='https://api.mapbox.com/mapbox-gl-js/v1.10.1/mapbox-gl.css' rel='stylesheet' />
+                            <script>
+            var map = null;
+            function getMap(zoomLevel, lat, lon) {
+                mapboxgl.accessToken = 'pk.REDACTED_THIRD_PARTY_TOKEN';
+
+                map = new mapboxgl.Map({
+                container: 'map',
+                style: 'mapbox://styles/mapbox/dark-v10',
+                zoom: zoomLevel,
+                center: [lon, lat]
+                });
+            }
+
+            // Add zones to the map
+            function addZones() {
+                var marker = null;
+                // create a DOM element for the marker
+                var el = document.createElement('div');
+                el.className = 'marker';
+                el.style.backgroundImage = 'url(/Images/pin_f_sm.png)';
+                el.addEventListener('click', function () {
+                    window.alert('Dover Heights New South Wales Australia');
+                });
+
+                marker = new mapboxgl.Marker(el);
+                marker.setLngLat([151.279170, -33.870830]);
+                marker.addTo(map);
+            }
+
+            $(function () {
+                getMap(12, -33.870830, 151.279170);
+                addZones();
+                window.addEventListener('resize', function () {
+                    map.getViewPort().resize();
+                });
+            });
+
+            function shareBattle()
+            {
+
+                FB.getLoginStatus(function(response) {
+                    if (response.status === 'connected') {
+                    console.log('Logged in.');
+                    }
+                    else {
+                    console.log('initiate FB login...');
+                    FB.login();
+                    }
+                });
+
+                var battle = {
+                    'og:url': 'https://portal.qonqr.com/Home/BattleStatistics/131012',
+                    'og:title': 'Dover Heights / New South Wales / Australia - 8/7/2026',
+                    'og:type': 'qonqr-local:battle',
+                    'og:image': 'https://portal.qonqr.com/Images/SocialBanner.png',
+                    'og:description': '',
+                    'fb:app_id': '1479959368895825'
+                };
+
+                FB.api(
+                    'me/qonqr-local:fight',
+                    'post',
+                    {
+                    'battle': battle
+                    },
+
+                    function(response) {
+                    if (!response) {
+                        alert('Error occurred.');
+                    } else if (response.error) {
+                        document.getElementById('ShareResult').innerHTML =
+                            'Error: ' + response.error.message;
+                    } else {
+                        document.getElementById('ShareResult').innerHTML =
+                            '<a href=\"https://www.facebook.com/me/activity/' +
+                            response.id + '\">' +
+                            'Story created.  ID is ' +
+                            response.id + '</a>';
+                    }
+                    }
+                );
+            }
+
+            function ShareFacebook() {
+                FB.ui({
+                    method: 'feed',
+                    link: 'https://portal.qonqr.com/Home/BattleStatistics/131012',
+                    caption: 'Dover Heights / New South Wales / Australia'
+                }, function (response) { });
+            }
+                            </script>
+                        
+</body>
+</html>

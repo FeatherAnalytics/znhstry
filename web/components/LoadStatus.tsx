@@ -17,7 +17,7 @@ export function LoadStatus({
   progress: LoadProgress;
   totalZones: number;
 }) {
-  const streaming = progress.stage === "played" || progress.stage === "terrain";
+  const streaming = progress.stage === "zones";
 
   if (progress.error) {
     return (
@@ -37,11 +37,6 @@ export function LoadStatus({
     <div style={shell} role="status" aria-live="polite">
       <span className="tabular">{progress.zones.toLocaleString()}</span>
       <span style={{ color: "var(--text-dim)" }}> of {totalZones.toLocaleString()} zones</span>
-      {/* The two passes mean different things and are worth naming: the first
-          is the world anyone has played, the second is the rest. */}
-      <span style={{ color: "var(--text-dim)" }}>
-        {progress.stage === "played" ? " · played world" : " · unplayed terrain"}
-      </span>
       <div style={track}>
         <div style={{ ...bar, width: `${pct}%` }} />
       </div>

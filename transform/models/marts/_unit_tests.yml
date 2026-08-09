@@ -1,0 +1,34 @@
+version: 2
+
+unit_tests:
+  - name: region_label_dropped_when_country_disagrees
+    description: >
+      The country-wins rule, stated as an example rather than as a join condition.
+      Zone 1's region agrees with its country and keeps its label. Zone 2's region
+      belongs to a different country -- the real shape of the 447 zones filed under
+      a region on the wrong continent -- and must come out with a country and no
+      region, never with a contradictory pair.
+    model: dim_zone
+    given:
+      - input: ref('stg_zones')
+        rows:
+          - {zone_id: 1, zone_name: "Agrees",    region_id: 10, country_id: 100, control_state: 1,
+             latitude: 0.0, longitude: 0.0, legion_count: 0, swarm_count: 0, faceless_count: 0,
+             total_count: 0, observed_at: null, captured_at: null}
+          - {zone_id: 2, zone_name: "Disagrees", region_id: 20, country_id: 100, control_state: 1,
+             latitude: 0.0, longitude: 0.0, legion_count: 0, swarm_count: 0, faceless_count: 0,
+             total_count: 0, observed_at: null, captured_at: null}
+      - input: ref('stg_regions')
+        rows:
+          - {region_id: 10, country_id: 100, region_name: "Right Place"}
+          - {region_id: 20, country_id: 999, region_name: "Wrong Continent"}
+      - input: ref('stg_countries')
+        rows:
+          - {country_id: 100, country_name: "Realland", country_code: "RL"}
+      - input: ref('stg_factions')
+        rows:
+          - {faction_id: 1, faction_name: "legion"}
+    expect:
+      rows:
+        - {zone_id: 1, country_name: "Realland", region_name: "Right Place"}
+        - {zone_id: 2, country_name: "Realland", region_name: null}

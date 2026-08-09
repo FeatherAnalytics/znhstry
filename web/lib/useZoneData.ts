@@ -153,7 +153,7 @@ export function useZoneData(
       setMeta(m);
       setGeometry(geo);
       setDisplay(disp);
-      setProgress((p) => ({ ...p, stage: "played" }));
+      setProgress((p) => ({ ...p, stage: "zones" }));
 
       loadJson<Lookups>(base, m.lookups.path)
         .then((l) => !cancelled && setLookups(l))
@@ -192,10 +192,10 @@ export function useZoneData(
             setProgress((p) => ({
               ...p,
               zones: geo.count,
-              // Terrain is the last pass now that names load on hover, so the
-              // world is whole when it drains.
-              stage: last && stage === "terrain" ? "done" : stage,
-              playedReady: p.playedReady || (last && stage === "played"),
+              // One pass, and names load on hover, so the world is whole when
+              // it drains.
+              stage: last ? "done" : stage,
+              playedReady: p.playedReady || last,
             }));
           }
         },

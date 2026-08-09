@@ -25,12 +25,12 @@ fetched at runtime.
 
 from __future__ import annotations
 
-import brotli
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
+import brotli
 import httpx
 import numpy as np
 

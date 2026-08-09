@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -184,7 +184,12 @@ def plan_slots(today: date | None = None, source: Path | None = None) -> list[in
     been overwritten with a newer month, and fetching it would append the wrong month's
     events while reporting success - so this raises instead.
     """
-    today = today or date.today()
+    # UTC, not local. Every date in this data is UTC and QONQR writes a slot just
+    # after midnight UTC, so a machine behind UTC spends the end of its evening
+    # believing yesterday has not closed yet and skipping a day that is already
+    # published. CI runs in UTC and never saw it; a laptop at UTC-5 misses the
+    # window every night between 19:00 and midnight local.
+    today = today or datetime.now(UTC).date()
     # The dump for day D lands just after D ends, so D itself is never complete yet.
     newest_complete = today - timedelta(days=1)
 

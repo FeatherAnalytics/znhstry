@@ -82,6 +82,28 @@ def test_exactly_the_ring_is_still_allowed(tmp_path):
     assert len(plan_slots(date(2026, 8, 8), source)) == config.RING_SLOTS
 
 
+def test_the_calendar_is_utc_not_local(tmp_path, monkeypatch):
+    """Days here are UTC days, and the machine's timezone must not decide them.
+
+    QONQR writes a slot just after midnight UTC. A machine behind UTC spends the end
+    of its evening believing yesterday has not closed, so it asks for nothing and
+    silently skips a day that is already published - which is exactly what happened
+    at 03:13 UTC on a UTC-5 laptop, leaving 2,869 events unfetched.
+    """
+    import datetime as dt
+
+    source = _history(tmp_path, "2026-08-08 00:01:00")
+
+    class FakeDate(dt.date):
+        @classmethod
+        def today(cls):  # local clock still on the 8th
+            return cls(2026, 8, 8)
+
+    monkeypatch.setattr("znhstry.ingest.date", FakeDate)
+    # 03:13 UTC on the 9th: the 8th has closed and its slot is published.
+    assert plan_slots(dt.date(2026, 8, 9), source) == [8]
+
+
 def test_no_history_is_not_treated_as_an_empty_gap(tmp_path):
     with pytest.raises(RingGapError, match="no history"):
         plan_slots(date(2026, 8, 8), tmp_path)

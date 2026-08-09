@@ -28,13 +28,13 @@
  * anything touching a GPU buffer wants slot.
  */
 
-import { fetchBytes, type ColumnSpec, type Dtype } from "./format";
+import { decodeColumns, fetchBytes, requireRows, type ColumnSpec, type Dtype } from "./format";
 
 export interface GeometryMeta {
   tile_degrees: number;
   coord_scale: number;
   magnitude_steps: number;
-  paths: { tiles: string; paint: string; terrain: string };
+  paths: { tiles: string; paint: string };
   position_columns: ColumnSpec[];
   paint_columns: ColumnSpec[];
   tile_fields: string[];
@@ -46,7 +46,6 @@ export interface GeometryMeta {
    */
   tiles: [string, number, number, number, number, number, number, string, string][];
   first_paint_bytes: number;
-  terrain_bytes: number;
   names_bytes: number;
 }
 
@@ -54,33 +53,23 @@ export interface Tile {
   name: string;
   /** Every zone in the tile. */
   zones: number;
-  /** How many of them have ever held a bot. A readout, not a row count. */
-  played: number;
-  bytes: number;
   centerLat: number;
   centerLon: number;
   /** Content hashes, one per file this tile owns. */
   tileV: string;
   paintV: string;
-  /** Render slot of this tile's first row. */
-  playedSlot: number;
 }
 
 export function readTiles(meta: GeometryMeta): Tile[] {
   const half = meta.tile_degrees / 2;
-  return meta.tiles.map(
-    ([name, zones, played, tileBytes, paintBytes, south, west, tileV, paintV]) => ({
-      name,
-      zones,
-      played,
-      bytes: tileBytes + paintBytes,
-      centerLat: south + half,
-      centerLon: west + half,
-      tileV: tileV ?? "",
-      paintV: paintV ?? "",
-      playedSlot: -1,
-    }),
-  );
+  return meta.tiles.map(([name, zones, , , , south, west, tileV, paintV]) => ({
+    name,
+    zones,
+    centerLat: south + half,
+    centerLon: west + half,
+    tileV,
+    paintV,
+  }));
 }
 
 /**
@@ -102,13 +91,6 @@ export function shardUrl(base: string, path: string, name: string, version: stri
   return version ? `${url}?v=${version}` : url;
 }
 
-const BYTES_OF: Record<Dtype, number> = {
-  uint8: 1,
-  uint16: 2,
-  uint32: 4,
-  int32: 4,
-  float32: 4,
-};
 
 /**
  * What the map draws, in one byte per zone.
@@ -211,36 +193,16 @@ function absorbPositions(
   rows: number,
   buffer: ArrayBuffer,
 ): number {
-  const rowBytes = meta.position_columns.reduce((n, [, dtype]) => n + BYTES_OF[dtype], 0);
-  if (buffer.byteLength < rows * rowBytes) {
-    throw new Error(
-      `positions have ${buffer.byteLength} bytes for ${rows} zones (need ${rows * rowBytes})`,
-    );
-  }
+  requireRows(buffer, rows, meta.position_columns, "positions");
 
-  const decoded: Record<string, Int32Array | Uint16Array | Uint8Array> = {};
-  let offset = 0;
-
-  for (const [name, dtype, encoding] of meta.position_columns) {
-    const source =
-      dtype === "int32"
-        ? new Int32Array(buffer, offset, rows)
-        : dtype === "uint8"
-          ? new Uint8Array(buffer, offset, rows)
-          : new Uint16Array(buffer, offset, rows);
-    offset += rows * BYTES_OF[dtype];
-
-    if (encoding === "delta") {
-      // Signed differences: rows run south to north inside a tile, so
-      // longitude resets westward at every new latitude and idx jumps about.
-      const restored = new Int32Array(rows);
-      let running = 0;
-      for (let i = 0; i < rows; i++) restored[i] = running += source[i];
-      decoded[name] = restored;
-    } else {
-      decoded[name] = source;
-    }
-  }
+  // The shared decoder, not a local copy of it. It handles the one case a
+  // hand-rolled column walk gets wrong: a typed-array view needs its offset to
+  // be a multiple of its width, and `ever_active` is a single byte, so every
+  // column placed after it would start on an odd offset and throw. It only
+  // happens to work here because that column is last, which is an invariant
+  // nothing states - reorder `position_columns` in export.py and the local
+  // version breaks where this one does not.
+  const decoded = decodeColumns(buffer, meta.position_columns, rows);
 
   const scale = meta.coord_scale;
   const idxColumn = decoded.idx as Int32Array;
@@ -287,13 +249,15 @@ function absorbPositions(
 function absorbPaint(
   geometry: ZoneGeometry,
   display: ZoneDisplay,
+  meta: GeometryMeta,
   firstSlot: number,
   rows: number,
   buffer: ArrayBuffer,
 ): void {
-  if (buffer.byteLength < rows) {
-    throw new Error(`paint has ${buffer.byteLength} bytes for ${rows} zones`);
-  }
+  // Reduced over the manifest's own spec rather than assuming one byte a zone, so
+  // this stays right if `paint/` ever gains a column - which is why the manifest
+  // carries `paint_columns` at all.
+  requireRows(buffer, rows, meta.paint_columns, "paint");
   const pk = new Uint8Array(buffer, 0, rows);
   for (let i = 0; i < rows; i++) display.pk[geometry.slotToIdx[firstSlot + i]] = pk[i];
 }
@@ -398,8 +362,8 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
           fetchBytes(shardUrl(base, paths.paint, tile.name, tile.paintV)),
         ]);
         if (cancelled) return;
-        tile.playedSlot = absorbPositions(geometry, meta, tile.zones, positions);
-        absorbPaint(geometry, display, tile.playedSlot, tile.zones, paint);
+        const firstSlot = absorbPositions(geometry, meta, tile.zones, positions);
+        absorbPaint(geometry, display, meta, firstSlot, tile.zones, paint);
       },
     );
 

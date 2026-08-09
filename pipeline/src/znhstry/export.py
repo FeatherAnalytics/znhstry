@@ -292,6 +292,12 @@ def _write_columnar(
         "columns": spec,
         "bytes": _write(path, payload, quality),
         "raw_bytes": len(payload),
+        # Every columnar shard carries its hash, not just the geometry tiles. This
+        # is the choke point: `zone_ids.bin.br` is one delta-encoded file over all
+        # 2.68M zones in idx order, so appending a single new zone changes it - and
+        # it is served `immutable`. A reader pairing a stale body with a fresh row
+        # count from `meta.json` gets a RangeError or silently wrong zone ids.
+        "v": _fingerprint(payload),
     }
 
 

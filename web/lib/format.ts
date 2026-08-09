@@ -20,6 +20,9 @@ export interface ShardEntry {
   columns: ColumnSpec[];
   bytes: number;
   year?: number;
+  /** Content hash, appended to the URL by `loadShard`. Optional so a manifest
+   *  written before fingerprinting still loads. */
+  v?: string;
 }
 
 export type Columns = Record<string, ArrayBufferView & { [i: number]: number; length: number }>;
@@ -44,6 +47,27 @@ export async function fetchBytes(url: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
   return response.arrayBuffer();
+}
+
+/**
+ * Refuse a payload too short for the rows the manifest claims.
+ *
+ * Views are taken at running offsets, so a truncated or stale body either throws a
+ * bare RangeError from deep inside a decoder or - worse - reads a later column out of
+ * an earlier one's bytes. A browser holding a stale shard against a fresh manifest is
+ * exactly how whole regions of the map silently disappeared, so the check names the
+ * shard and both numbers instead.
+ */
+export function requireRows(
+  buffer: ArrayBuffer,
+  rows: number,
+  spec: ColumnSpec[],
+  label: string,
+): void {
+  const need = spec.reduce((n, [, dtype]) => n + BYTES_OF[dtype], 0) * rows;
+  if (buffer.byteLength < need) {
+    throw new Error(`${label}: ${buffer.byteLength} bytes for ${rows} rows, need ${need}`);
+  }
 }
 
 /** Take typed-array views over one decompressed payload. */
@@ -81,7 +105,14 @@ export function decodeColumns(
 }
 
 export async function loadShard(base: string, entry: ShardEntry): Promise<Columns> {
-  return decodeColumns(await fetchBytes(`${base}/${entry.path}`), entry.columns, entry.rows);
+  // `?v=` is what makes `immutable` honest for these files. They are served with a
+  // year-long promise the browser will not revalidate - not even on a hard reload -
+  // and several of them genuinely change: `zone_ids` grows whenever a zone appears.
+  // A changed shard is a different URL, so a stale body is unreachable.
+  const url = `${base}/${entry.path}` + (entry.v ? `?v=${entry.v}` : "");
+  const buffer = await fetchBytes(url);
+  requireRows(buffer, entry.rows, entry.columns, entry.path);
+  return decodeColumns(buffer, entry.columns, entry.rows);
 }
 
 export async function loadJson<T>(url: string): Promise<T> {

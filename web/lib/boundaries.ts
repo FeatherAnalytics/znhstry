@@ -5,7 +5,7 @@
  * (uint32), with the point count in the manifest so the split is unambiguous.
  */
 
-import { fetchBytes } from "./data";
+import { dataUrl, fetchBytes } from "./data";
 
 export interface BoundaryLayer {
   id: string;
@@ -20,7 +20,9 @@ interface BoundaryManifest {
 }
 
 export async function loadBoundaries(base: string): Promise<BoundaryLayer[]> {
-  const manifest: BoundaryManifest = await (await fetch(`${base}/boundaries.json`)).json();
+  const manifest: BoundaryManifest = await (
+    await fetch(dataUrl(`${base}/boundaries.json`))
+  ).json();
 
   return Promise.all(
     Object.entries(manifest.layers).map(async ([id, entry]) => {

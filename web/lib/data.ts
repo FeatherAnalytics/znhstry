@@ -15,6 +15,7 @@ import type { ShardEntry } from "./format";
 
 export type { ColumnSpec, Columns, Dtype, ShardEntry } from "./format";
 export {
+  dataUrl,
   dateToDay,
   dayToDate,
   factionOf,
@@ -116,7 +117,8 @@ export function zoneIdentity(
 }
 
 export async function loadMeta(base: string): Promise<Meta> {
-  const response = await fetch(`${base}/meta.json`);
+  const { dataUrl } = await import("./format");
+  const response = await fetch(dataUrl(`${base}/meta.json`));
   if (!response.ok) throw new Error(`${response.status} for meta.json`);
   return response.json();
 }
@@ -135,7 +137,8 @@ export async function loadZoneIds(base: string, entry: ShardEntry): Promise<Int3
 }
 
 export async function loadJson<T>(base: string, path: string): Promise<T> {
-  const response = await fetch(`${base}/${path}`);
+  const { dataUrl } = await import("./format");
+  const response = await fetch(dataUrl(`${base}/${path}`));
   if (!response.ok) throw new Error(`${response.status} for ${path}`);
   return response.json();
 }

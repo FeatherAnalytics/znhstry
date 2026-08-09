@@ -40,8 +40,36 @@ const BYTES_OF: Record<Dtype, number> = {
   float32: 4,
 };
 
+/**
+ * A one-time escape from caches poisoned by the old `immutable` header.
+ *
+ * Every payload used to be served `Cache-Control: public, max-age=31536000,
+ * immutable` - a year-long promise the bytes would never change, which licenses a
+ * browser to skip revalidation entirely. Not a hard reload, not a normal reload,
+ * nothing short of clearing site data reaches an entry like that.
+ *
+ * The bytes did change. Fixing the header on the server fixes new visitors and
+ * cannot touch a promise a browser is already holding, so anyone who loaded the
+ * site before the fix keeps serving themselves year-old geometry against a fresh
+ * manifest, and sees the same holes in the map.
+ *
+ * A cache entry is keyed by the whole URL, query string included. Appending this
+ * makes every payload a URL no browser has ever held, so the poisoned entries
+ * become unreachable and simply expire unused.
+ *
+ * **This is not a versioning scheme and must not become one.** Freshness is the
+ * `no-cache` header's job now, and it works. This exists solely to escape entries
+ * written before that header, so it is a constant that should never need to change
+ * again. Bumping it would force every reader to re-download 11.5 MB.
+ */
+const CACHE_EPOCH = "1";
+
+export function dataUrl(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}c=${CACHE_EPOCH}`;
+}
+
 export async function fetchBytes(url: string): Promise<ArrayBuffer> {
-  const response = await fetch(url);
+  const response = await fetch(dataUrl(url));
   if (!response.ok) throw new Error(`${response.status} ${response.statusText} for ${url}`);
   return response.arrayBuffer();
 }
@@ -108,7 +136,7 @@ export async function loadShard(base: string, entry: ShardEntry): Promise<Column
 }
 
 export async function loadJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(dataUrl(url));
   if (!response.ok) throw new Error(`${response.status} for ${url}`);
   return response.json();
 }

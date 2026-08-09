@@ -71,10 +71,14 @@ jobs:
           DBT_PROFILES_DIR: .
         run: uv run dbt parse
 
-      # Runs the models against a tiny fixture warehouse, so the SQL is checked for
-      # more than parseability without shipping the real data to CI.
+      # Unit tests mock every input, so they need a database connection but none of
+      # the real data - which CI does not have. dbt-duckdb still has to be able to
+      # create the file, and `data/` is gitignored, so it does not exist on a fresh
+      # checkout.
       - name: dbt unit tests
         working-directory: transform
         env:
           DBT_PROFILES_DIR: .
-        run: uv run dbt test --select "test_type:unit"
+        run: |
+          mkdir -p ../data
+          uv run dbt test --select "test_type:unit"

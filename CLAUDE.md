@@ -99,13 +99,12 @@ per-zone bot counts at all.** Three questions, three answers, none of which need
 | how many bots in this country / region / area over time | precomputed daily series |
 | exactly how many bots on *this* zone | `zone_history/`, one 35 KB block, on hover |
 
-A cold load is **422 requests and 11.6 MB**, and that is everything needed to draw all
+A cold load is **343 requests and 11.5 MB**, and that is everything needed to draw all
 2.68M zones:
 
 | Pass | Gives | Requests | Size |
 |---|---|---|---|
-| `tiles/` + `paint/` | the played world, positions and colours together, nearest first | 336 | 5.85 MB |
-| `terrain/` | the 1.09M zones never played. Always grey | 79 | 3.55 MB |
+| `tiles/` + `paint/` | every zone, positions and colours together, nearest first | 336 | 9.26 MB |
 | boundaries, manifest, ids, lookups, scope series | | 7 | 2.24 MB |
 
 Fetched only on demand, and never by a visit that just looks at the map:
@@ -127,9 +126,12 @@ in front of everything; production is a fraction of that):
 
 | | |
 |---|---|
-| played world complete — all 1.6M, correctly coloured | **3.3 s** |
-| every zone including terrain — 2.68M | **8.4 s** |
+| every zone on the map — all 2.68M, correctly coloured | **8.4 s** |
 | scrub across eleven years, nothing cached | **526 ms** |
+
+Measured before the tiles and terrain were merged, so the first figure covered the played
+world at 3.3 s and everything at 8.4 s. One pass now delivers both at once; re-measure
+rather than trusting the old split.
 
 Priority order between passes is load-bearing. `display/` is not touched until the reader
 asks for a date `paint/` cannot answer: 3 MB in front of the tiles they are watching
@@ -531,8 +533,8 @@ against a threshold, because thresholds on upstream drift are brittle.
 ## Export format
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
-uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **1,930 files,
-94.7 MB**, ~26 minutes.
+uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **1,851 files,
+94.6 MB**, ~26 minutes.
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:
@@ -570,15 +572,29 @@ successive differences; prefix-sum to recover it, respecting the dtype.
   every row of latitude. The client's prefix-sum respects the dtype for the same reason —
   restoring a signed column into a `Uint32Array` silently wraps.
 
-### Geometry is tiled, and split by whether anyone has ever played there
+### Geometry is tiled, and every zone in a tile is in one file
 
-A 16-degree grid, 168 populated tiles (79 of which also have terrain):
+A 16-degree grid, 168 tiles, all 2,682,442 zones:
 
-| | columns | for all 2.68M |
+| | columns | total |
 |---|---|---|
-| `tiles/RR_CC.bin.br` | `idx, latitude, longitude` (int32 signed delta), `region_id, country_id` (uint16) — played zones only | 5.12 MB |
+| `tiles/RR_CC.bin.br` | `idx, latitude, longitude` (int32 signed delta), `region_id, country_id` (uint16), `ever_active` (uint8) | 8.53 MB |
 | `paint/RR_CC.bin.br` | `pk` (uint8), row-aligned to `tiles/` | 0.73 MB |
-| `terrain/RR_CC.bin.br` | same columns as `tiles/`, for zones never played | 3.55 MB |
+
+**Do not split played zones out of terrain again.** That layout existed so the played
+world could paint before the grey arrived, worth about a second, and it cost three
+things worth more:
+
+- ~24,000 zones a year are played for the first time and moved between the two files.
+  Both changed, both are served `immutable`, and a reader holding a fresh manifest with
+  one stale file sees row counts that disagree — which silently erased Ukraine, western
+  Russia, India and China from the map.
+- Terrain loaded in a second pass, so every grey dot drew on top of every coloured one.
+- It was a second file per tile that had to stay row-aligned with `paint/`.
+
+Merged is also *smaller* — 9.26 MB against 9.39 — because splitting a sorted run in two
+breaks the delta encoding. `ever_active` is a column so the viewer keeps its two shades
+of grey: a zone fought down to empty is part of the story, one never touched is terrain.
 
 - **Coordinates are fixed-point at 1e-4 deg (~11 m), delta-encoded, sorted by latitude then
   longitude within a tile.** float32 mantissas are noise and no compressor can touch them.
@@ -590,8 +606,11 @@ A 16-degree grid, 168 populated tiles (79 of which also have terrain):
   reason for 16 is *requests*, though, not bytes. What it costs is precision in the
   nearest-first ordering: the first tile to land covers four times the area.
 - **Sorting scrambles idx**, so it is an explicit column rather than implied by row order.
-- **The played/terrain split costs ~1.3 MB** of idx compression, because the two files
-  interleave and the runs break. It buys a smaller first paint, so it pays.
+- **Every shard's URL carries a hash of its bytes** — `tiles/09_13.bin.br?v=fe82c88e`,
+  from `meta.geometry.tiles`. That is what makes `immutable` honest: changed bytes are a
+  different URL, so no reader can be served a stale shard and none of them ever has to
+  clear a cache. Per file, not one stamp for the export, so an unchanged shard keeps its
+  URL and stays cached. R2 ignores the query string, so nothing changes in the bucket.
 
 **`pk` is one byte: faction in the top two bits, a log-magnitude bucket in the low six.**
 Radius is `log10(count)` capped in pixels, so six bits carry more resolution than the screen
@@ -674,7 +693,7 @@ is not a concern.
 
    | | Cache-Control | Why |
    |---|---|---|
-   | `tiles/`, `terrain/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels; rewritten byte-identically every run |
+   | `tiles/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels. Honest only because the URL carries a content hash — see the geometry section |
    | `display/YYYY` and `anchor_YYYY` for a **past** year | immutable, 1 year | finished history |
    | `paint/`, `display/<current year>`, `zone_history/`, `series/` | `max-age=300, must-revalidate` | rewritten nightly under the same name |
    | `meta.json` | `max-age=60` | how a client discovers everything else |

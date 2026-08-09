@@ -11,6 +11,7 @@ names, or the raw layer quietly splits into two shapes that only diverge downstr
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -111,6 +112,20 @@ def test_targets_fills_a_gap_the_index_does_not_show():
     hold and what is listed has to be walked by number or those days are lost.
     """
     assert _targets([20, 21], {10}) == list(range(11, 22))
+
+
+def test_fixtures_carry_no_third_party_credentials():
+    """These are whole pages saved from someone else's site.
+
+    QONQR's page ships its own Mapbox token in the markup, and saving the page
+    captured it. It is a publishable `pk.` token rather than a private key, but it is
+    their credential and it has no business in this repo - GitHub's push protection
+    caught it, which is a worse place to find out than here.
+    """
+    pattern = re.compile(r"(?:pk|sk)\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]+")
+    for page in FIXTURES.glob("*.html"):
+        found = pattern.findall(page.read_text(encoding="utf-8"))
+        assert found == [] or all("REDACTED" in f for f in found), page.name
 
 
 def test_targets_caps_a_catch_up():

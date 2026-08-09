@@ -86,7 +86,18 @@ Smaller and more immediate than the timelapse.
 Constraint from the viewer's own rules: whatever this looks like, **picking must apply the
 same tests as drawing**, or a hover confidently describes something the reader cannot see.
 
-## 5. Tournament map layer
+## 5. Tournament (Atlantis) map layer
+
+**Reference material, gathered but not yet read in depth:**
+
+- Community history: <https://qonqr.fandom.com/wiki/Atlantis_History>
+- Mechanics gist: <https://gist.github.com/AgentConDier/57d687c085c7f7687cf08743fd06a539>
+- Live sample of the newest tournament reports:
+  `https://api-proxy.auckland-cer.cloud.edu.au/QONQR/Select%20*%20from%20battlestats%20where%20country=%22Atlantis%22%20order%20by%20%60Battle%20Report%20Number%60%20desc%20limit%2010`
+  (the mirror; our own copy is `stg_battlestats where is_tournament`)
+
+Read those before designing anything — the shape Atlantis zones take on the in-game map is
+the thing that decides what this layer is, and it is not derivable from the report data.
 
 Tournament zones have no coordinates and never will, so they cannot sit in the geographic
 projection. They do take a specific shape on the map in-game, which means this is a real

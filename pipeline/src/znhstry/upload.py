@@ -10,11 +10,9 @@ which is why the payloads live here rather than in the site bundle:
     Content-Encoding: br    Everything is stored brotli-compressed and the
                             browser unwraps it, so the client carries no
                             decoding code at all.
-    Cache-Control           Per object, and only `immutable` where that is
-                            actually true - see `_cache_control`. Shard names
-                            are stable, so anything a nightly run rewrites must
-                            be allowed to revalidate or a returning reader keeps
-                            yesterday's map for a year.
+    Cache-Control           One rule: revalidate. Shard names are stable and a
+                            nightly run rewrites them, so a browser must ask
+                            before reusing - see `_cache_control`.
 
 Upload order is deliberate: shards first, manifests last. Until the manifest
 lands, clients are still reading the previous one, and every file it names is
@@ -30,7 +28,6 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
 from hashlib import md5
 from pathlib import Path
 
@@ -38,8 +35,24 @@ from . import config
 
 log = logging.getLogger(__name__)
 
-IMMUTABLE = "public, max-age=31536000, immutable"
-MANIFEST = "public, max-age=60"
+# One rule for everything, and it is deliberately the boring one.
+#
+# `immutable` promises a browser the bytes at a URL will never change and licenses it
+# to skip revalidation for a year - not even a hard reload overrides it. The promise
+# was false. Roughly 24,000 zones a year are played for the first time and `zone_ids`
+# grows whenever a zone appears, so the files marked immutable did change, while
+# `meta.json` refreshed every minute. Readers paired a fresh manifest with year-old
+# shards, the row counts disagreed, and whole regions of the map silently vanished.
+#
+# The fix is not to work out which files are *really* immutable. That is a judgement
+# call made once and then quietly invalidated by the next change - it is exactly the
+# judgement that failed here. `no-cache` does not mean "do not cache": it means "ask
+# before reusing". The browser keeps the body and revalidates against the ETag, so an
+# unchanged shard costs a header exchange and a 304 with no body at all.
+#
+# R2 returns the MD5 as the ETag for every object, so this works by itself and needs
+# nothing in the manifest to support it.
+REVALIDATE = "public, no-cache"
 
 # The raw layer's home in the same bucket. It is not part of the export and no
 # browser ever asks for it, but it shares the bucket because a second one would
@@ -52,51 +65,17 @@ MANIFEST = "public, max-age=60"
 ARCHIVE_PREFIX = "raw/"
 ARCHIVE = "no-store"
 
-# For everything a nightly run can rewrite under a name it already used.
-#
-# `immutable` is a promise that the bytes at a URL will never change, and the
-# browser holds a promise for the full year without ever asking again - a hard
-# reload does not override it. Marking a shard that churns as immutable means a
-# returning reader keeps yesterday's map forever.
-#
-# Five minutes, then revalidate. A 304 carries no body, so the cost of being
-# wrong is a header exchange rather than a re-download.
-VOLATILE = "public, max-age=300, must-revalidate"
-
-# Positions, names and lookups describe where places are and what they are
-# called. They are rewritten byte-identically every run and genuinely never
-# change, so they keep the year-long promise.
-_IMMUTABLE_TREES = ("tiles/", "names/")
-_IMMUTABLE_FILES = ("zone_ids.bin.br", "lookups.json.br")
-
 
 def _cache_control(key: str) -> str:
-    """How long this object may be trusted without asking again.
+    """How long this object may be trusted without asking again: never, without asking.
 
-    Immutable only where it is true. `paint/` is state as of now; the current
-    year's display shard grows daily; `zone_history/` blocks are rewritten
-    wherever a zone moved; the series are recomputed in full. All of those keep
-    their filenames, so the only thing standing between a reader and stale data
-    is this header.
+    Deliberately one answer for every object. Deciding per tree means deciding which
+    files really never change, and that judgement is what broke the map - see the note
+    on REVALIDATE. The raw archive is the one exception: no browser fetches it.
     """
     if key.startswith(ARCHIVE_PREFIX):
         return ARCHIVE
-    name = key.rsplit("/", 1)[-1]
-    if name == "meta.json":
-        return MANIFEST
-    if name.startswith("boundaries") or name in _IMMUTABLE_FILES:
-        return IMMUTABLE
-    if any(f"/{tree}" in f"/{key}" for tree in _IMMUTABLE_TREES):
-        return IMMUTABLE
-
-    # A past year's display shard and anchor are finished history. The current
-    # year's shard gains rows every night, so it is volatile until the year ends.
-    if "/display/" in f"/{key}":
-        digits = "".join(c for c in name if c.isdigit())
-        year = int(digits[:4]) if len(digits) >= 4 else 0
-        return IMMUTABLE if 0 < year < date.today().year else VOLATILE
-
-    return VOLATILE
+    return REVALIDATE
 
 
 # A full export is ~1,850 small objects. Serial puts would take many minutes of

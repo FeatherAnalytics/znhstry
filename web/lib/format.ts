@@ -20,9 +20,6 @@ export interface ShardEntry {
   columns: ColumnSpec[];
   bytes: number;
   year?: number;
-  /** Content hash, appended to the URL by `loadShard`. Optional so a manifest
-   *  written before fingerprinting still loads. */
-  v?: string;
 }
 
 export type Columns = Record<string, ArrayBufferView & { [i: number]: number; length: number }>;
@@ -105,12 +102,7 @@ export function decodeColumns(
 }
 
 export async function loadShard(base: string, entry: ShardEntry): Promise<Columns> {
-  // `?v=` is what makes `immutable` honest for these files. They are served with a
-  // year-long promise the browser will not revalidate - not even on a hard reload -
-  // and several of them genuinely change: `zone_ids` grows whenever a zone appears.
-  // A changed shard is a different URL, so a stale body is unreachable.
-  const url = `${base}/${entry.path}` + (entry.v ? `?v=${entry.v}` : "");
-  const buffer = await fetchBytes(url);
+  const buffer = await fetchBytes(`${base}/${entry.path}`);
   requireRows(buffer, entry.rows, entry.columns, entry.path);
   return decodeColumns(buffer, entry.columns, entry.rows);
 }

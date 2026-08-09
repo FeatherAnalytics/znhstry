@@ -1,19 +1,20 @@
 /**
  * Progressive zone geometry.
  *
- * The export shards the world into an 8-degree grid. This is sharding, not
+ * The export shards the world into a 16-degree grid. This is sharding, not
  * level of detail: every tile is eventually fetched and every zone is drawn as
  * itself. The grid exists only so the patch of world you are looking at can
  * arrive before Antarctica does.
  *
- * Three files per tile, fetched in this order:
+ * Two files per tile, fetched together so a tile is never on screen uncoloured:
  *
- *   tiles/   positions of zones that have ever held a bot
- *   paint/   one byte each for those zones - faction in the top two bits, a log
- *            bucket for size in the low six. Row-aligned to tiles/, and the
- *            reason the map can be complete and correct with no history at all.
- *   terrain/ positions of zones never played in fourteen years. Always grey,
- *            so they carry no paint and load last.
+ *   tiles/  every zone in the tile - position, region, country, and whether it
+ *           has ever held a bot. One file, not one per kind of zone: splitting
+ *           played from never-played meant a zone crossing between them changed
+ *           two files, and drew all the grey on top of all the colour.
+ *   paint/  one byte each - faction in the top two bits, a log bucket for size
+ *           in the low six. Row-aligned to tiles/, and the reason the map can be
+ *           complete and correct with no history loaded at all.
  *
  * Names are not here. They are keyed by zone index and fetched on hover.
  *
@@ -39,12 +40,11 @@ export interface GeometryMeta {
   paint_columns: ColumnSpec[];
   tile_fields: string[];
   /**
-   * [name, zones, played, tileBytes, paintBytes, south, west, tileV, paintV]
+   * [name, zones, played, tileBytes, paintBytes, south, west]
    *
-   * The two trailing values are content hashes. They go in the query string so a
-   * shard whose bytes changed is a different URL - see `shardUrl`.
+   * Positional, so trailing entries a newer export adds are simply ignored.
    */
-  tiles: [string, number, number, number, number, number, number, string, string][];
+  tiles: [string, number, number, number, number, number, number][];
   first_paint_bytes: number;
   names_bytes: number;
 }
@@ -55,41 +55,18 @@ export interface Tile {
   zones: number;
   centerLat: number;
   centerLon: number;
-  /** Content hashes, one per file this tile owns. */
-  tileV: string;
-  paintV: string;
 }
 
 export function readTiles(meta: GeometryMeta): Tile[] {
   const half = meta.tile_degrees / 2;
-  return meta.tiles.map(([name, zones, , , , south, west, tileV, paintV]) => ({
+  return meta.tiles.map(([name, zones, , , , south, west]) => ({
     name,
     zones,
     centerLat: south + half,
     centerLon: west + half,
-    tileV,
-    paintV,
   }));
 }
 
-/**
- * A shard's URL, with its content hash as a cache-busting query.
- *
- * The position files are served `immutable`, which tells the browser never to ask
- * about them again for a year - and a hard reload does not override that. But they
- * do change: ~24,000 zones a year are played for the first time and move from
- * `terrain/` into `tiles/`. Without the hash a returning reader pairs a fresh
- * manifest with year-old geometry, the row counts disagree, and whole regions of the
- * map disappear.
- *
- * With it, changed bytes mean a changed URL, so nothing stale is reachable and no
- * reader ever has to clear a cache. An unchanged shard keeps its URL and stays
- * cached, which is the whole point of hashing per file rather than per export.
- */
-export function shardUrl(base: string, path: string, name: string, version: string): string {
-  const url = `${base}/${path}/${name}.bin.br`;
-  return version ? `${url}?v=${version}` : url;
-}
 
 
 /**
@@ -358,8 +335,8 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
       all.filter((t) => t.zones > 0),
       async (tile) => {
         const [positions, paint] = await Promise.all([
-          fetchBytes(shardUrl(base, paths.tiles, tile.name, tile.tileV)),
-          fetchBytes(shardUrl(base, paths.paint, tile.name, tile.paintV)),
+          fetchBytes(`${base}/${paths.tiles}/${tile.name}.bin.br`),
+          fetchBytes(`${base}/${paths.paint}/${tile.name}.bin.br`),
         ]);
         if (cancelled) return;
         const firstSlot = absorbPositions(geometry, meta, tile.zones, positions);

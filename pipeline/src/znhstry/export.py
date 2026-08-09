@@ -16,7 +16,6 @@ import json
 import logging
 import math
 import shutil
-from hashlib import md5
 from pathlib import Path
 from typing import Any
 
@@ -58,26 +57,6 @@ def _write(path: Path, payload: bytes, quality: int = BROTLI_QUALITY) -> int:
     path.write_bytes(brotli.compress(payload, quality=quality))
     return path.stat().st_size
 
-
-def _fingerprint(payload: bytes) -> str:
-    """A short content hash, used as a cache-busting query on the shard's URL.
-
-    `tiles/`, `terrain/` and the other position files are served `immutable`, which
-    promises a browser the bytes at that URL will never change and licenses it to
-    skip revalidation for a year - a hard reload does not override it.
-
-    That promise is false. Roughly 24,000 zones a year are played for the first time
-    and move from `terrain/` into `tiles/`, so both files change while `meta.json`
-    refreshes every minute. A returning reader then pairs a fresh manifest with
-    year-old geometry: the row counts disagree, the client's typed-array views run
-    past the end of the buffer, and whole regions vanish.
-
-    Putting the hash in the URL makes `immutable` true instead of a lie. A changed
-    shard is a different URL, so nothing stale is ever reachable and nobody has to
-    clear a cache. Unchanged shards keep their URL and stay cached, which is why this
-    is a per-file hash and not one version stamped across the whole export.
-    """
-    return md5(payload).hexdigest()[:8]
 
 # Column dtypes, chosen to be the narrowest that cannot overflow.
 #   idx     - dense 0..N-1 index into zones.bin, not the sparse upstream ZoneId
@@ -292,12 +271,6 @@ def _write_columnar(
         "columns": spec,
         "bytes": _write(path, payload, quality),
         "raw_bytes": len(payload),
-        # Every columnar shard carries its hash, not just the geometry tiles. This
-        # is the choke point: `zone_ids.bin.br` is one delta-encoded file over all
-        # 2.68M zones in idx order, so appending a single new zone changes it - and
-        # it is served `immutable`. A reader pairing a stale body with a fresh row
-        # count from `meta.json` gets a RangeError or silently wrong zone ids.
-        "v": _fingerprint(payload),
     }
 
 
@@ -622,10 +595,6 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
             # tile_degrees rather than carrying four floats per tile.
             row * TILE_DEGREES - 90,
             col * TILE_DEGREES - 180,
-            # Content hashes. The client puts these in the query string so a shard
-            # whose bytes changed is a different URL - see `_fingerprint`.
-            _fingerprint(payload),
-            _fingerprint(paint_payload),
         ])
 
     first_paint = sum(t[3] + t[4] for t in tiles)
@@ -656,8 +625,6 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
             "paint_bytes",
             "south",
             "west",
-            "tile_v",
-            "paint_v",
         ],
         "tiles": tiles,
         "first_paint_bytes": first_paint,

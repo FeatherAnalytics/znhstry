@@ -181,6 +181,13 @@ function absorbPositions(
   buffer: ArrayBuffer,
   everActive: boolean,
 ): number {
+  const rowBytes = meta.position_columns.reduce((n, [, dtype]) => n + BYTES_OF[dtype], 0);
+  if (buffer.byteLength < rows * rowBytes) {
+    throw new Error(
+      `positions have ${buffer.byteLength} bytes for ${rows} zones (need ${rows * rowBytes})`,
+    );
+  }
+
   const decoded: Record<string, Int32Array | Uint16Array> = {};
   let offset = 0;
 
@@ -234,7 +241,16 @@ function absorbPositions(
   return firstSlot;
 }
 
-/** Apply a paint file, which is row-aligned to the tile it belongs to. */
+/**
+ * Apply a paint file, which is row-aligned to the tile it belongs to.
+ *
+ * The length check is the point. `new Uint8Array(buffer, 0, rows)` throws when the
+ * body is shorter than the tile claims, and the loader used to swallow that - so a
+ * short paint file left every zone in the tile at pk 0, which draws as an empty zone.
+ * Positions are absorbed first and succeed, so the symptom was a region present in
+ * grey with none of its colour, and nothing said why. Checking here makes the message
+ * name the tile and the two numbers that disagree.
+ */
 function absorbPaint(
   geometry: ZoneGeometry,
   display: ZoneDisplay,
@@ -242,6 +258,9 @@ function absorbPaint(
   rows: number,
   buffer: ArrayBuffer,
 ): void {
+  if (buffer.byteLength < rows) {
+    throw new Error(`paint has ${buffer.byteLength} bytes for ${rows} zones`);
+  }
   const pk = new Uint8Array(buffer, 0, rows);
   for (let i = 0; i < rows; i++) display.pk[geometry.slotToIdx[firstSlot + i]] = pk[i];
 }
@@ -315,8 +334,11 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
       for (let tile = next(); tile && !cancelled; tile = next()) {
         try {
           await work(tile);
-        } catch {
-          // One missing file is a hole in the map, not a dead page.
+        } catch (error) {
+          // One missing file is a hole in the map, not a dead page - but it is
+          // still a hole, and swallowing it silently is how a tile of Ukraine
+          // rendered in grey with none of its colour and nothing said why.
+          console.warn(`znhstry: ${stage} tile ${tile.name} failed —`, error);
         }
         if (!cancelled) onTile(stage, pending.length);
       }

@@ -66,7 +66,7 @@ VOLATILE = "public, max-age=300, must-revalidate"
 # Positions, names and lookups describe where places are and what they are
 # called. They are rewritten byte-identically every run and genuinely never
 # change, so they keep the year-long promise.
-_IMMUTABLE_TREES = ("tiles/", "terrain/", "names/")
+_IMMUTABLE_TREES = ("tiles/", "names/")
 _IMMUTABLE_FILES = ("zone_ids.bin.br", "lookups.json.br")
 
 

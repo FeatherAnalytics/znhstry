@@ -38,8 +38,13 @@ export interface GeometryMeta {
   position_columns: ColumnSpec[];
   paint_columns: ColumnSpec[];
   tile_fields: string[];
-  /** [name, played, terrain, tileBytes, paintBytes, terrainBytes, south, west] */
-  tiles: [string, number, number, number, number, number, number, number][];
+  /**
+   * [name, zones, played, tileBytes, paintBytes, south, west, tileV, paintV]
+   *
+   * The two trailing values are content hashes. They go in the query string so a
+   * shard whose bytes changed is a different URL - see `shardUrl`.
+   */
+  tiles: [string, number, number, number, number, number, number, string, string][];
   first_paint_bytes: number;
   terrain_bytes: number;
   names_bytes: number;
@@ -47,28 +52,54 @@ export interface GeometryMeta {
 
 export interface Tile {
   name: string;
+  /** Every zone in the tile. */
+  zones: number;
+  /** How many of them have ever held a bot. A readout, not a row count. */
   played: number;
-  terrain: number;
   bytes: number;
   centerLat: number;
   centerLon: number;
-  /** Render slot of the first played row, and of the first terrain row. */
+  /** Content hashes, one per file this tile owns. */
+  tileV: string;
+  paintV: string;
+  /** Render slot of this tile's first row. */
   playedSlot: number;
-  terrainSlot: number;
 }
 
 export function readTiles(meta: GeometryMeta): Tile[] {
   const half = meta.tile_degrees / 2;
-  return meta.tiles.map(([name, played, terrain, tileBytes, paintBytes, , south, west]) => ({
-    name,
-    played,
-    terrain,
-    bytes: tileBytes + paintBytes,
-    centerLat: south + half,
-    centerLon: west + half,
-    playedSlot: -1,
-    terrainSlot: -1,
-  }));
+  return meta.tiles.map(
+    ([name, zones, played, tileBytes, paintBytes, south, west, tileV, paintV]) => ({
+      name,
+      zones,
+      played,
+      bytes: tileBytes + paintBytes,
+      centerLat: south + half,
+      centerLon: west + half,
+      tileV: tileV ?? "",
+      paintV: paintV ?? "",
+      playedSlot: -1,
+    }),
+  );
+}
+
+/**
+ * A shard's URL, with its content hash as a cache-busting query.
+ *
+ * The position files are served `immutable`, which tells the browser never to ask
+ * about them again for a year - and a hard reload does not override that. But they
+ * do change: ~24,000 zones a year are played for the first time and move from
+ * `terrain/` into `tiles/`. Without the hash a returning reader pairs a fresh
+ * manifest with year-old geometry, the row counts disagree, and whole regions of the
+ * map disappear.
+ *
+ * With it, changed bytes mean a changed URL, so nothing stale is reachable and no
+ * reader ever has to clear a cache. An unchanged shard keeps its URL and stays
+ * cached, which is the whole point of hashing per file rather than per export.
+ */
+export function shardUrl(base: string, path: string, name: string, version: string): string {
+  const url = `${base}/${path}/${name}.bin.br`;
+  return version ? `${url}?v=${version}` : url;
 }
 
 const BYTES_OF: Record<Dtype, number> = {
@@ -179,7 +210,6 @@ function absorbPositions(
   meta: GeometryMeta,
   rows: number,
   buffer: ArrayBuffer,
-  everActive: boolean,
 ): number {
   const rowBytes = meta.position_columns.reduce((n, [, dtype]) => n + BYTES_OF[dtype], 0);
   if (buffer.byteLength < rows * rowBytes) {
@@ -188,14 +218,16 @@ function absorbPositions(
     );
   }
 
-  const decoded: Record<string, Int32Array | Uint16Array> = {};
+  const decoded: Record<string, Int32Array | Uint16Array | Uint8Array> = {};
   let offset = 0;
 
   for (const [name, dtype, encoding] of meta.position_columns) {
     const source =
       dtype === "int32"
         ? new Int32Array(buffer, offset, rows)
-        : (new Uint16Array(buffer, offset, rows) as Uint16Array);
+        : dtype === "uint8"
+          ? new Uint8Array(buffer, offset, rows)
+          : new Uint16Array(buffer, offset, rows);
     offset += rows * BYTES_OF[dtype];
 
     if (encoding === "delta") {
@@ -216,6 +248,7 @@ function absorbPositions(
   const lonColumn = decoded.longitude as Int32Array;
   const regionColumn = decoded.region_id as Uint16Array;
   const countryColumn = decoded.country_id as Uint16Array;
+  const everActiveColumn = decoded.ever_active as Uint8Array;
 
   const firstSlot = geometry.count;
   let slot = firstSlot;
@@ -229,7 +262,7 @@ function absorbPositions(
     geometry.longitude[idx] = lon;
     geometry.region[idx] = regionColumn[i];
     geometry.country[idx] = countryColumn[i];
-    geometry.everActive[idx] = everActive ? 1 : 0;
+    geometry.everActive[idx] = everActiveColumn[i];
     geometry.idxToSlot[idx] = slot;
     geometry.slotToIdx[slot] = idx;
     geometry.positions[slot * 2] = lon;
@@ -272,7 +305,7 @@ export interface LoaderHandle {
   readonly done: Promise<void>;
 }
 
-export type LoadStage = "played" | "terrain";
+export type LoadStage = "zones";
 
 export interface LoaderOptions {
   base: string;
@@ -347,36 +380,31 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
   }
 
   const done = (async () => {
-    // 1. The played world: positions and paint together, so a tile is never
-    //    on screen uncoloured. Two requests, one await, so the pair lands as
-    //    a unit and the second does not queue behind another tile's first.
+    // Every zone in the tile, positions and paint together, so a tile is never
+    // on screen uncoloured. Two requests, one await, so the pair lands as a unit
+    // and the second does not queue behind another tile's first.
+    //
+    // One pass, not two. Terrain used to load in a second stage after the played
+    // world, which meant every grey dot drew on top of every coloured one, and a
+    // zone played for the first time moved between two files that are both served
+    // immutable. Merged, they interleave in the tile's own spatial order and a
+    // first play only changes a byte of paint.
     await drain(
-      "played",
-      all.filter((t) => t.played > 0),
+      "zones",
+      all.filter((t) => t.zones > 0),
       async (tile) => {
         const [positions, paint] = await Promise.all([
-          fetchBytes(`${base}/${paths.tiles}/${tile.name}.bin.br`),
-          fetchBytes(`${base}/${paths.paint}/${tile.name}.bin.br`),
+          fetchBytes(shardUrl(base, paths.tiles, tile.name, tile.tileV)),
+          fetchBytes(shardUrl(base, paths.paint, tile.name, tile.paintV)),
         ]);
         if (cancelled) return;
-        tile.playedSlot = absorbPositions(geometry, meta, tile.played, positions, true);
-        absorbPaint(geometry, display, tile.playedSlot, tile.played, paint);
+        tile.playedSlot = absorbPositions(geometry, meta, tile.zones, positions);
+        absorbPaint(geometry, display, tile.playedSlot, tile.zones, paint);
       },
     );
 
-    // 2. The terrain nobody has ever played. Always grey, so no paint.
-    await drain(
-      "terrain",
-      all.filter((t) => t.terrain > 0),
-      async (tile) => {
-        const buffer = await fetchBytes(`${base}/${paths.terrain}/${tile.name}.bin.br`);
-        if (cancelled) return;
-        tile.terrainSlot = absorbPositions(geometry, meta, tile.terrain, buffer, false);
-      },
-    );
-
-    // Two passes only. Names are 12.6 MB for a readout most visits never ask
-    // for, so they are fetched a block at a time on hover; see lib/names.ts.
+    // One pass only. Names are 12.6 MB for a readout most visits never ask for,
+    // so they are fetched a block at a time on hover; see lib/names.ts.
   })();
 
   return {

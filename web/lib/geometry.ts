@@ -83,9 +83,24 @@ export function readTiles(meta: GeometryMeta): Tile[] {
  * `zone_history/` and are fetched for one zone at a time, because a bucketed
  * magnitude is all a dot on a screen can express and pretending otherwise is
  * what cost 71.5 MB.
+ *
+ * **Both arrays are indexed by `slot`, not by `idx`** - the one place in the
+ * app where display state is held in render order rather than game order. The
+ * draw loops read every byte of both once per frame, and reaching them through
+ * `slotToIdx` is a cache miss per zone: it measured 155 ms a frame against
+ * 64 ms for the same loop reading sequentially. The permutation is done by the
+ * worker, which is already the only thread writing these bytes and has the
+ * frame to itself.
+ *
+ * Anything holding an `idx` - a hover, a MAZ mark, a flip - must go through
+ * `geometry.idxToSlot` first, and check it is not -1.
  */
 export class ZoneDisplay {
-  /** faction = pk >> 6, magnitude = pk & 63. 0 is an empty zone. */
+  /**
+   * faction = pk >> 6, magnitude = pk & 63. 0 is an empty zone.
+   *
+   * By slot. See the class note.
+   */
   pk: Uint8Array;
   /**
    * 1 to draw the zone at all.
@@ -141,6 +156,16 @@ export class ZoneGeometry {
   readonly country: Uint16Array;
   /** 1 if the zone has ever held a bot. The rest are real but never played. */
   readonly everActive: Uint8Array;
+  /**
+   * The same flag by *slot*, so the render loops never look it up through
+   * `slotToIdx`.
+   *
+   * A second copy of one byte per zone, deliberately. The two draw loops in
+   * `ZoneMap` read it once per zone per frame, and reaching it by idx is a
+   * cache miss each time - which is the whole reason `pk` and `visible` are
+   * slot-ordered too. 2.68 MB to keep the frame path sequential.
+   */
+  readonly everActiveBySlot: Uint8Array;
   readonly names: string[];
 
   /** Slots filled so far. Everything at or past this is not yet loaded. */
@@ -155,6 +180,7 @@ export class ZoneGeometry {
     this.region = new Uint16Array(size);
     this.country = new Uint16Array(size);
     this.everActive = new Uint8Array(size);
+    this.everActiveBySlot = new Uint8Array(size);
     this.names = new Array(size);
   }
 
@@ -202,6 +228,7 @@ function absorbPositions(
     geometry.region[idx] = regionColumn[i];
     geometry.country[idx] = countryColumn[i];
     geometry.everActive[idx] = everActiveColumn[i];
+    geometry.everActiveBySlot[slot] = everActiveColumn[i];
     geometry.idxToSlot[idx] = slot;
     geometry.slotToIdx[slot] = idx;
     geometry.positions[slot * 2] = lon;
@@ -236,7 +263,10 @@ function absorbPaint(
   // carries `paint_columns` at all.
   requireRows(buffer, rows, meta.paint_columns, "paint");
   const pk = new Uint8Array(buffer, 0, rows);
-  for (let i = 0; i < rows; i++) display.pk[geometry.slotToIdx[firstSlot + i]] = pk[i];
+  // `paint/` is row-aligned to its tile, and a tile's rows are exactly one run
+  // of slots - so with `pk` held by slot this is a copy rather than a scatter
+  // through `slotToIdx`.
+  display.pk.set(pk, firstSlot);
 }
 
 export interface LoaderHandle {

@@ -17,11 +17,44 @@
  */
 
 import { decodeColumns, fetchBytes, yearOfDay, type Columns, type ShardEntry } from "./format";
-import type { InitMessage, ShowMessage, WorkerRequest, WorkerResponse } from "./displayProtocol";
+import type {
+  InitMessage,
+  PermuteMessage,
+  ShowMessage,
+  WorkerRequest,
+  WorkerResponse,
+} from "./displayProtocol";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 let config: InitMessage | null = null;
+
+/**
+ * The render permutation, grown one tile at a time.
+ *
+ * `idxOfSlot` drives the gather that hands `pk` back in slot order;
+ * `slotOfIdx` is its inverse, which `markMoved` needs because the shards it
+ * reads are keyed by idx. Both are derived from the same append, so they cannot
+ * drift.
+ */
+let idxOfSlot: Int32Array | null = null;
+let slotOfIdx: Int32Array | null = null;
+let slotCount = 0;
+
+function permute(message: PermuteMessage): void {
+  const { zoneCount } = config!;
+  if (!idxOfSlot) {
+    idxOfSlot = new Int32Array(zoneCount);
+    slotOfIdx = new Int32Array(zoneCount).fill(-1);
+  }
+  const { from, idx } = message;
+  for (let k = 0; k < idx.length; k++) {
+    const slot = from + k;
+    idxOfSlot[slot] = idx[k];
+    slotOfIdx![idx[k]] = slot;
+  }
+  slotCount = Math.max(slotCount, from + idx.length);
+}
 const anchors = new Map<number, Columns>();
 const shards = new Map<number, Columns>();
 const inflight = new Map<string, Promise<Columns>>();
@@ -128,13 +161,19 @@ function replay(
  */
 function markMoved(visible: Uint8Array, spans: Columns[], from: number, to: number): number {
   visible.fill(0);
+  const toSlot = slotOfIdx;
+  if (!toSlot) return 0;
+
   let shown = 0;
   for (const { idx, day } of spans) {
     for (let i = 0; i < idx.length; i++) {
-      if (day[i] > from && day[i] <= to && visible[idx[i]] === 0) {
-        visible[idx[i]] = 1;
-        shown++;
-      }
+      if (day[i] <= from || day[i] > to) continue;
+      // Marked by slot, because that is the order the page draws in. A zone
+      // whose tile has not landed has no slot and simply cannot be drawn.
+      const slot = toSlot[idx[i]];
+      if (slot < 0 || visible[slot] !== 0) continue;
+      visible[slot] = 1;
+      shown++;
     }
   }
   return shown;
@@ -259,9 +298,16 @@ async function show(message: ShowMessage): Promise<void> {
 
   stateDay = day;
   stateYear = year;
-  pk.set(state);
 
-  // One sequential pass over bytes already in cache from the copy above.
+  // `state` is idx-keyed, because that is what the shards are keyed by and what
+  // a carry-forward has to accumulate in. The page draws in slot order, so the
+  // permutation happens here - a random read per zone, on the thread that has
+  // the frame to itself, instead of the same read inside the draw loop where it
+  // measured 155 ms a frame against 64 ms.
+  const toIdx = idxOfSlot;
+  if (toIdx) for (let s = 0; s < slotCount; s++) pk[s] = state[toIdx[s]];
+
+  // Order-agnostic, and over bytes still in cache from the gather above.
   let held = 0;
   for (let i = 0; i < zoneCount; i++) if (state[i] !== 0) held++;
 
@@ -290,6 +336,11 @@ scope.onmessage = (event: MessageEvent<WorkerRequest>) => {
 
   if (message.type === "init") {
     config = message;
+    return;
+  }
+
+  if (message.type === "permute") {
+    permute(message);
     return;
   }
 

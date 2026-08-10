@@ -444,13 +444,20 @@ export default function Page() {
       held = data.held;
       drawn = data.shown ?? display.size;
     } else {
+      // By slot, because that is the order `pk` and `visible` are held in. The
+      // mask is the page's own and stays in idx order, so it is the one thing
+      // reached through `slotToIdx` here. Bounded by the slots actually loaded,
+      // so a count taken mid-load describes the zones on the map rather than
+      // the whole world.
       held = 0;
       drawn = 0;
-      for (let i = 0; i < display.size; i++) {
-        if (filter && !filter[i]) continue;
+      const slots = geometry?.count ?? 0;
+      const toIdx = geometry?.slotToIdx;
+      for (let slot = 0; slot < slots; slot++) {
+        if (filter && !filter[toIdx![slot]]) continue;
         count++;
-        if (display.pk[i] !== 0) held++;
-        if (display.visible[i] !== 0) drawn++;
+        if (display.pk[slot] !== 0) held++;
+        if (display.visible[slot] !== 0) drawn++;
       }
     }
 
@@ -488,7 +495,7 @@ export default function Page() {
     };
     // data.version so the counts follow the map as tiles land and dates change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, display, history, day, changing, changeStart, data.version, data.held, data.shown]);
+  }, [filter, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
 
   /** A year earlier on the same series, for the growth figure. */
   const previous: Totals | null = useMemo(() => {
@@ -522,7 +529,9 @@ export default function Page() {
       hoveredIdx.current = idx;
       if (idx === null || !display || !geometry || !meta || day === null) return setHovered(null);
 
-      const pk = display.pk[idx];
+      // `pk` is held by slot; a hover arrives as an idx.
+      const slot = geometry.idxToSlot[idx];
+      const pk = slot < 0 ? 0 : display.pk[slot];
       const describe = (over: Partial<HoveredZone> = {}): HoveredZone => {
         const identity = zoneIdentity(geometry, lookups, zoneIds, idx);
         return {

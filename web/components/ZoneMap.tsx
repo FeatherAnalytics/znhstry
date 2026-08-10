@@ -183,32 +183,38 @@ export function ZoneMap({
   // from these same arrays, so an effect would populate them one frame after
   // deck.gl had already read them as zeroes.
   //
-  // Indexed by *slot*, the render order tiles arrive in, while game state is
-  // indexed by *idx*. slotToIdx is the bridge and the reason this loop looks
-  // indirect.
+  // Everything this reads per zone is in *slot* order - `pk` and `visible` are
+  // permuted by the worker, `everActiveBySlot` is written when the tile lands -
+  // so the whole pass is sequential. Reaching the same three bytes through
+  // `slotToIdx` measured 155 ms a frame against 64 ms for this.
+  //
+  // The two masks are the exception and stay in idx order, because they are
+  // built from idx-keyed geometry and read by everything else that way. They
+  // are usually absent, so `slotToIdx` is consulted only when one exists rather
+  // than once per zone unconditionally.
   //
   // Hoisting the never-played zones into a prebuilt list so this could skip them
-  // was measured and made no difference to playback: the cost is the random read
-  // into `pk` for the zones that *do* draw, not the ones being stepped over. It
-  // cost 21 MB of index arrays for nothing. Don't do it again.
+  // was measured and made no difference: the cost was never the zones being
+  // stepped over. It cost 21 MB of index arrays for nothing. Don't do it again.
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = colors.current;
     const radiusArray = radii.current;
     const pointArray = points.current;
     const backToSlot = drawnToSlot.current;
-    const { slotToIdx, everActive, count, positions } = geometry;
+    const { slotToIdx, everActiveBySlot, count, positions } = geometry;
+    const mask = only ?? null;
+    const masked = filter !== null || mask !== null;
     let n = 0;
 
     for (let slot = 0; slot < count; slot++) {
-      const idx = slotToIdx[slot];
+      // Never-played zones live in the terrain layer below and are skipped here.
+      if (everActiveBySlot[slot] === 0) continue;
+
       // One byte carries both facts, so this is one memory read per zone
       // rather than two - which matters when the loop runs 2.68M times on
       // every scrub.
-      // Never-played zones live in the terrain layer below and are skipped here.
-      if (everActive[idx] === 0) continue;
-
-      const pk = display.pk[idx];
+      const pk = display.pk[slot];
       const magnitude = pk & 63;
 
       // Empty zones are always drawn; held zones answer to the change window,
@@ -219,19 +225,23 @@ export function ZoneMap({
       // processed 2.68M instances and re-uploaded 43 MB whatever was on screen -
       // and on the Day view about three thousand zones are visible. Compacting
       // costs one indirection on pick and buys two orders of magnitude here.
-      if (magnitude !== 0 && (draw === "empty" || display.visible[idx] === 0)) continue;
-      if (magnitude !== 0 && only !== null && only !== undefined && only[idx] === 0) continue;
+      if (magnitude !== 0 && (draw === "empty" || display.visible[slot] === 0)) continue;
+
+      // Outside the filter a zone stays on the map but stops competing for
+      // attention. It is context, not data: dimming to a quarter was not
+      // enough, because there are two million of them and faint times two
+      // million still reads as a wash of color.
+      let muted = false;
+      if (masked) {
+        const idx = slotToIdx[slot];
+        if (magnitude !== 0 && mask !== null && mask[idx] === 0) continue;
+        muted = filter !== null && filter[idx] === 0;
+      }
 
       const o = n * 4;
       pointArray[n * 2] = positions[slot * 2];
       pointArray[n * 2 + 1] = positions[slot * 2 + 1];
       backToSlot[n] = slot;
-
-      // Outside the filter a zone stays on the map but stops competing for
-      // attention. It is context, not data: dimming to a quarter was not
-      // enough, because there are two million of them and faint times two
-      // million still reads as a wash of colour.
-      const muted = filter !== null && filter[idx] === 0;
 
       if (magnitude > 0) {
         const rgb = (pk >> 6) * 3;
@@ -272,12 +282,12 @@ export function ZoneMap({
     const colorArray = terrainColors.current;
     const pointArray = terrainPoints.current;
     const backToSlot = terrainToSlot.current;
-    const { slotToIdx, everActive, positions } = geometry;
+    const { slotToIdx, everActiveBySlot, positions } = geometry;
     let n = 0;
 
     for (let slot = 0; slot < terrainCount; slot++) {
+      if (everActiveBySlot[slot] !== 0) continue;
       const idx = slotToIdx[slot];
-      if (everActive[idx] !== 0) continue;
       const o = n * 4;
       pointArray[n * 2] = positions[slot * 2];
       pointArray[n * 2 + 1] = positions[slot * 2 + 1];

@@ -25,6 +25,9 @@ logs/
 web/public/data/
 
 web/out/
+# `next build` cannot delete web/out while OneDrive holds it, so a local build
+# renames it aside first. Those leftovers are build output too.
+web/out.old-*/
 web/.next/
 web/node_modules/
 

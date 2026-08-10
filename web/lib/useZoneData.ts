@@ -59,6 +59,14 @@ export interface LoadProgress {
  */
 const REPAINT_INTERVAL_MS = 200;
 
+/** Zones that changed hands on one day, in the worker's own idx space. */
+export interface DayFlips {
+  day: number;
+  idx: Uint32Array;
+  from: Uint8Array;
+  to: Uint8Array;
+}
+
 export interface ZoneData {
   meta: Meta | null;
   geometry: ZoneGeometry | null;
@@ -74,6 +82,17 @@ export interface ZoneData {
   shown: number | null;
   /** Bumped whenever the map needs to redraw: new tiles, or a new date. */
   version: number;
+  /** The latest answered day's changes of hands, or null unless asked for. */
+  flips: DayFlips | null;
+  /**
+   * True while a date is outstanding, readable without a re-render.
+   *
+   * `progress.scrubbing` cannot be used for pacing: it is deliberately delayed
+   * so a fast answer never flickers the loading state, which means it reads
+   * false while a request is genuinely in flight. Anything deciding whether to
+   * ask for the next date wants this.
+   */
+  pending: { readonly current: boolean };
   progress: LoadProgress;
   setDay: Dispatch<SetStateAction<number | null>>;
   /** Tell the tile queue where the reader is looking. */
@@ -94,6 +113,18 @@ export function useZoneData(
   base: string,
   span: WindowKey = "year",
   mode: ReadMode = "state",
+  wantFlips = false,
+  /**
+   * Called from the worker's message handler as each answer lands.
+   *
+   * Exists so a caller can accumulate flips without doing it in an effect. An
+   * effect that sets state on every answer makes React count a nested passive
+   * update every frame of playback, and once fifty of those stack up without a
+   * quiet commit in between it logs "Maximum update depth exceeded". Handling
+   * it here keeps the update rooted in the message handler, where it is an
+   * ordinary update rather than a nested one.
+   */
+  onFlips?: (flips: DayFlips) => void,
 ): ZoneData {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [geometry, setGeometry] = useState<ZoneGeometry | null>(null);
@@ -103,6 +134,7 @@ export function useZoneData(
   const [series, setSeries] = useState<SparseSeries | null>(null);
   const [day, setDay] = useState<number | null>(null);
   const [shown, setShown] = useState<number | null>(null);
+  const [flips, setFlips] = useState<DayFlips | null>(null);
   const [version, setVersion] = useState(0);
   const [progress, setProgress] = useState<LoadProgress>({
     stage: "meta",
@@ -122,6 +154,19 @@ export function useZoneData(
   const requested = useRef(0);
   const answered = useRef(-1);
   const repaintAt = useRef(0);
+  const pending = useRef(false);
+  /** Delays the visible loading state; see `pending`. */
+  const scrubTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onFlipsRef = useRef(onFlips);
+  onFlipsRef.current = onFlips;
+
+  const settle = useCallback(() => {
+    pending.current = false;
+    if (scrubTimer.current !== null) {
+      clearTimeout(scrubTimer.current);
+      scrubTimer.current = null;
+    }
+  }, []);
 
   const dayBounds = useMemo(() => {
     if (!series?.rows.length || !meta) return null;
@@ -222,6 +267,7 @@ export function useZoneData(
       const message = event.data;
 
       if (message.type === "error") {
+        settle();
         setProgress((p) => ({ ...p, scrubbing: false, error: `display: ${message.message}` }));
         return;
       }
@@ -242,7 +288,13 @@ export function useZoneData(
       current.pk = state.pk;
       current.visible = state.visible;
 
+      settle();
       setShown(state.shown);
+      if (state.flips) {
+        const answer = { day: state.day, ...state.flips };
+        setFlips(answer);
+        onFlipsRef.current?.(answer);
+      }
       setVersion((v) => v + 1);
       setProgress((p) =>
         p.historyReady && !p.scrubbing ? p : { ...p, historyReady: true, scrubbing: false },
@@ -263,8 +315,12 @@ export function useZoneData(
       // The buffers on loan are gone with the worker; the next one allocates.
       spare.current = null;
       answered.current = -1;
+      // No answer is coming for whatever was outstanding, so the delayed
+      // loading state must be cancelled with it or it fires into a torn-down
+      // worker and leaves "Reading…" on for good.
+      settle();
     };
-  }, [base, meta]);
+  }, [base, meta, settle]);
 
   // --- ask for a date -----------------------------------------------------
 
@@ -282,7 +338,20 @@ export function useZoneData(
     const token = ++requested.current;
     const lent = spare.current;
     spare.current = null;
-    setProgress((p) => (p.scrubbing ? p : { ...p, scrubbing: true }));
+
+    // The loading state is delayed rather than set now. During playback a date
+    // is answered in tens of milliseconds, and flipping a state flag on and off
+    // every frame both flickers the indicator and makes every commit schedule
+    // another update from a passive effect - which is what React counts toward
+    // "Maximum update depth exceeded". A request that outlives the delay is a
+    // genuine wait and says so.
+    pending.current = true;
+    if (scrubTimer.current === null) {
+      scrubTimer.current = setTimeout(() => {
+        scrubTimer.current = null;
+        if (pending.current) setProgress((p) => (p.scrubbing ? p : { ...p, scrubbing: true }));
+      }, 200);
+    }
 
     worker.postMessage(
       {
@@ -292,10 +361,11 @@ export function useZoneData(
         windowStart: changeStart,
         pk: lent?.pk ?? null,
         visible: lent?.visible ?? null,
+        flips: wantFlips,
       },
       lent ? [lent.pk.buffer, lent.visible.buffer] : [],
     );
-  }, [day, changeStart, wanted]);
+  }, [day, changeStart, wanted, wantFlips]);
 
   const setFocus = useCallback((lat: number, lon: number) => {
     loaderRef.current?.focus(lat, lon);
@@ -313,6 +383,8 @@ export function useZoneData(
     changeStart,
     shown: changeStart === null ? null : shown,
     version,
+    flips,
+    pending,
     progress,
     setDay,
     setFocus,

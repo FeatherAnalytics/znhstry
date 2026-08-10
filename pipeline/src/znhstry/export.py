@@ -377,6 +377,109 @@ def _export_zone_ids(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
     return entry
 
 
+def _export_maz(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    """Most Active Zones, as (idx, day) and nothing else.
+
+    A MAZ is not "a battle happened here". QONQR publishes a fixed number of
+    reports a day from its Most Active Zones page, so a row means *this zone was
+    among the most active in the world that day* - which is why the viewer draws
+    it as a ring rather than folding it into the dots.
+
+    **Keyed by idx, not zone_id.** The viewer already holds every zone's position
+    at its idx, so shipping coordinates again would be a second copy that can
+    disagree with the first, and shipping zone_id would make the client scan all
+    2,682,442 entries of `zone_ids` to translate. Neither is necessary.
+
+    Nothing else travels. The battle reports carry launches, players, bots
+    killed and 70-odd other columns, and the map uses none of them: a ring's
+    brightness and size are both appearances in a trailing window. Names come
+    from `names/` on hover like any other zone.
+
+    Sorted `(day, idx)` because every read is a contiguous range of days - the
+    client bisects to a window and walks it. That ordering is also why `idx` is
+    not delta-encoded: it restarts on every day boundary, so the differences
+    would be negative and `_pack` only accepts ascending runs for an unsigned
+    column.
+
+    Tournament reports are excluded upstream by `fct_zone_battles`, which is a
+    geographic model; their zones have negative ids and no coordinates.
+    """
+    entry = _write_columnar(
+        out / "maz.bin.br",
+        f"""
+        select s.idx,
+               cast(date_diff('day', date '{config.DAY_EPOCH}', b.battle_date) as integer) as day
+        from fct_zone_battles b
+        join scope s on s.zone_id = b.zone_id
+        where b.battle_date >= date '{config.RECORD_START}'
+        group by 1, 2
+        order by day, idx
+        """,
+        {"idx": IDX, "day": DAY},
+        con,
+        delta=frozenset({"day"}),
+    )
+    span = con.execute(f"""
+        select min(cast(date_diff('day', date '{config.DAY_EPOCH}', b.battle_date) as integer)),
+               max(cast(date_diff('day', date '{config.DAY_EPOCH}', b.battle_date) as integer))
+        from fct_zone_battles b
+        join scope s on s.zone_id = b.zone_id
+        where b.battle_date >= date '{config.RECORD_START}'
+    """).fetchone()
+    entry["day_min"] = int(span[0])
+    entry["day_max"] = int(span[1])
+    entry["stats"] = _export_maz_stats(con, out)
+    log.info("maz: %s reports, %s KB", f"{entry['rows']:,}", entry["bytes"] // 1024)
+    return entry
+
+
+def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    """What each MAZ report measured, **row-aligned with `maz.bin.br`**.
+
+    No key columns at all: row *i* here describes row *i* there, and `idx` joins
+    on to the geometry, names and history the viewer already has. Repeating the
+    zone and the day would be two more columns saying what the other file
+    already says, and two more chances for the two to disagree.
+
+    The map never fetches this. Ring brightness and size are both appearances in
+    a window, so nothing on screen depends on a launch count; this exists so the
+    numbers are collected automatically and are there when something wants to
+    read them. A per-*player* breakdown is a different job - the report pages
+    carry a packed string of roughly 924,728 player rows that ingest does not
+    unpack yet.
+
+    The same `group by` and `order by` as `_export_maz`, which is what keeps the
+    rows aligned. Change one and you must change both.
+    """
+    entry = _write_columnar(
+        out / "maz_stats.bin.br",
+        f"""
+        select max(b.total_active_players) as players,
+               max(b.total_launches)       as launches,
+               max(b.bots_launched)        as bots_launched,
+               max(b.bots_killed)          as bots_killed,
+               max(b.bots_lost)            as bots_lost
+        from fct_zone_battles b
+        join scope s on s.zone_id = b.zone_id
+        where b.battle_date >= date '{config.RECORD_START}'
+        group by s.idx, b.battle_date
+        order by cast(date_diff('day', date '{config.DAY_EPOCH}', b.battle_date) as integer),
+                 s.idx
+        """,
+        {
+            "players": "uint16",
+            "launches": COUNT,
+            "bots_launched": COUNT,
+            "bots_killed": COUNT,
+            "bots_lost": COUNT,
+        },
+        con,
+        quality=BROTLI_QUALITY_BULK,
+    )
+    log.info("maz stats: %s KB", entry["bytes"] // 1024)
+    return entry
+
+
 # The map draws a dot from two facts: who holds the zone, and how big to make
 # it. Radius is log10(count) capped in pixels, so a few bits carry far more
 # resolution than the screen has. 0 means empty; 1..63 are log buckets.
@@ -1150,6 +1253,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         zone_history = _export_zone_history(con, out)
         series = _export_series(con, out)
         area_series = _export_area_series(con, out)
+        maz = _export_maz(con, out)
 
         span = con.execute(
             "select min(activity_date), max(activity_date) from zone_events e "
@@ -1204,6 +1308,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             "lookups": lookups,
             "display": display,
             "zone_history": zone_history,
+            "maz": maz,
             "series": series,
             "area_series": area_series,
             "encoding": {

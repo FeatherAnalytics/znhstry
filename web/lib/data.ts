@@ -36,7 +36,11 @@ export interface SparseSeries {
   rows: number[][];
 }
 
+import type { MazEntry } from "./maz";
+
 export interface Meta {
+  /** Most Active Zones, `(idx, day)`. Absent until an export has written it. */
+  maz?: MazEntry;
   scope: {
     name: string;
     label: string;

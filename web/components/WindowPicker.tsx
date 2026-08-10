@@ -5,9 +5,9 @@ import { VIEWS, type ViewKey } from "@/lib/windows";
 interface Props {
   view: ViewKey;
   onView: (view: ViewKey) => void;
-  /** Draw zones holding no bots, as grey terrain. */
-  uncapped: boolean;
-  onUncapped: (show: boolean) => void;
+  /** True when the map is showing empty zones and nothing else. */
+  emptyOnly: boolean;
+  onEmptyOnly: (only: boolean) => void;
   /** True while the view's zones are still being worked out. */
   pending: boolean;
   /**
@@ -55,8 +55,8 @@ const chip = (active: boolean): React.CSSProperties => {
 export function WindowPicker({
   view,
   onView,
-  uncapped,
-  onUncapped,
+  emptyOnly,
+  onEmptyOnly,
   pending,
   scrollable = false,
 }: Props) {
@@ -103,17 +103,35 @@ export function WindowPicker({
         ))}
       </div>
 
-      {/* Off by default. A zone with no bots is a real place and part of the
-          world, but two million grey dots also drown the ones being fought
-          over, and that is what a reader came for. */}
+      {/* A mode rather than another window, so it sits behind a rule. Choosing
+          it swaps the bottom bar for the timelapse's own controls, which run on
+          a date range the windows have no concept of. */}
+      <span
+        aria-hidden
+        style={{ width: 1, alignSelf: "stretch", background: "var(--hairline)", flexShrink: 0 }}
+      />
       <button
         className="eyebrow"
-        onClick={() => onUncapped(!uncapped)}
-        aria-pressed={uncapped}
-        style={{ ...chip(uncapped), flexShrink: 0 }}
-        title="Draw zones holding no bots, including the 1.09M never played"
+        onClick={() => onView("timelapse")}
+        aria-pressed={view === "timelapse"}
+        style={{ ...chip(view === "timelapse"), flexShrink: 0 }}
+        title="Play the record day by day, with Most Active Zones and changes of hands"
       >
-        Empty zones
+        Timelapse
+      </button>
+
+      {/* Empty zones are always on the map now, so this is not a "show them"
+          switch - it is "show me *only* them". A zone with no bots is a real
+          place, and the question worth a control is where the world is
+          unclaimed, not whether the terrain is drawn. */}
+      <button
+        className="eyebrow"
+        onClick={() => onEmptyOnly(!emptyOnly)}
+        aria-pressed={emptyOnly}
+        style={{ ...chip(emptyOnly), flexShrink: 0 }}
+        title="Show only zones holding no bots, including the 1.09M never played"
+      >
+        Only empty
       </button>
 
       {pending && (

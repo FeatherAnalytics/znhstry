@@ -80,8 +80,19 @@ Three things that will cost you an hour if you do not know them:
   the immutable header stays stale for a year; clear site data once to be rid of it.
 - **`npm run build` fails at `EBUSY … rmdir web/out` on this machine.** `next build`
   clears `out/` before writing it and `OneDrive.Sync.Service` holds the directory open.
-  Everything before that step succeeds. Pause OneDrive sync for a real local export; CI on
-  Linux never hits it.
+  Everything before that step succeeds. Rename `web/out` aside first and the build has
+  nothing to delete — `Rename-Item web\out out.old` works where `rmdir` does not, so no need
+  to pause sync. Delete the leftover afterwards. CI on Linux never hits it.
+- **Measuring a production build locally needs the data origin overridden.** `.env` names the
+  bucket, and a production build inlines it, so `npm run build` on its own points the page at
+  R2 — where the prototype's payload deliberately does not exist. Build with
+  `NEXT_PUBLIC_DATA_ORIGIN=http://localhost:3002` to talk to `npm run data`, then serve
+  `web/out` with any static server.
+
+  Worth doing before optimising anything in the viewer: `next dev` runs React in StrictMode,
+  which double-invokes every render and effect. Day-by-day playback measures roughly **twice
+  the frame rate in a production build** as in dev, so dev numbers overstate how much work
+  there is to remove.
 
 ## The viewer
 
@@ -156,8 +167,12 @@ Mutually exclusive choices, not a window plus a mode toggle:
 - **Day / Week / Month / Quarter / Year / All time** — only the zones that saw activity in
   that span. Everything else is hidden outright, not dimmed.
 
-**Day is the default.** It is the liveliest honest view — 2,000–3,100 zones, yesterday's
-fighting — and it is what the map is for.
+**Current is the default, and the reason is load time as much as framing.** It is the only
+view that needs no display stream at all — `paint/` already answers it — so the map is
+complete and correctly coloured after the first tile pass, with nothing else fetched. Every
+window is a change window, so choosing one forces an anchor plus a year of `display/`, up
+to 3.16 MB, before the map is right. Defaulting to a window puts that in front of every
+cold visit.
 
 Current and the windows are peers because they are different questions, not modifiers of
 one another. A window paired with a "show everything" mode makes half the combinations
@@ -197,25 +212,37 @@ Never colour by *which faction gained most* over a window. That is a delta, it m
 colour mean two different things depending on the view, and one meaning is all a map whose
 entire vocabulary is three faction colours can carry.
 
-### Empty zones are a toggle, and it is off
+### Empty zones are always drawn, and the toggle asks for only them
 
-A zone holding no bots is drawn only when "Empty zones" is on. Off by default: the 1.09M
-never played plus everything fought down to nothing is most of the map, and two million
-grey dots drown the ones being fought over.
+A zone holding no bots is on the map at all times. "Only empty" hides everything that *is*
+held, leaving the unclaimed world by itself.
+
+There is no "hide them" state. Hiding the 1.09M never played plus everything fought down to
+nothing removes most of the map to answer a question nobody has; the question worth a
+control is the opposite one — where is there nothing — and that is what "Only empty" shows.
 
 **Empty zones answer to the toggle alone, never to the window.** "This zone holds
 nothing" is a fact about now, not about the span, so hiding an empty zone because it did
 not happen to move this week answers a question nobody asked. Zones that *do* hold
-something answer to the window. So a Day window with the toggle on is the day's fighting
-in colour over the whole world in grey, which is what makes it readable.
+something answer to the window. So a Day window is the day's fighting in colour over the
+whole world in grey, which is what makes it readable.
 
 It is a render-time test in `ZoneMap`, not a data one; nothing refetches.
 
-**Picking must apply the same tests as drawing.** deck.gl picks by geometry, and a zone
-hidden by a window or by this toggle is still there — drawn at zero alpha and zero radius,
-which the picking pass does not care about. `ZoneMap`'s `picked()` repeats both checks, or
-hovering empty space confidently describes a zone the reader cannot see. Any new reason to
-hide a zone has to be added in both places.
+**The draw lists are compacted, and picking reads back through them.** A zone the view is
+hiding is left out of the buffers entirely rather than written at zero alpha, so the GPU
+never sees it — on a Day view that is about three thousand rows instead of 2,682,442. A
+deck.gl pick index is therefore a row in a draw list, not a slot, and `ZoneMap`'s `picked()`
+maps it back through `drawnToSlot` / `terrainToSlot`. Everything in a list passed the
+visibility test when it was written, so the pick agrees with the screen by construction
+rather than by repeating the test somewhere else and hoping the two stay in step.
+
+**Terrain is its own layer, drawn underneath.** The 1,087,356 zones never played are empty
+in every frame of every year, so their colour and radius cannot change with the date; they
+are built when tiles land or the focus mask moves, and never per date. Order is explicit and
+must stay that way — terrain over the played world buries it. This is a render-time draw
+list and has nothing to do with the geometry export, which keeps every zone in one tile file
+(see "Geometry is tiled").
 
 ### Focus: an area, a location, or one zone
 
@@ -305,22 +332,47 @@ only buys an order.
 `slotToIdx` / `idxToSlot` in `lib/geometry.ts` convert. Anything touching game state wants
 idx; anything touching a GPU buffer wants slot.
 
-### Every date is a full rebuild, in a worker
+### Rebuild for a jump, carry forward for a run — in a worker
 
-`lib/displayWorker.ts` owns the display state. A request zeroes the buffer, applies the
-anchor for the target year, then applies that year's rows up to the target day — about
-1.6M plus at most 1.4M writes, a few milliseconds — and transfers the filled buffers back.
+`lib/displayWorker.ts` owns the display state and keeps its own copy of it, `state`, along
+with the day and year that copy stands at. Two paths reach a requested date:
 
-**Scrubbing backwards costs exactly what scrubbing forwards costs**, so there is no
-incremental fast path, no by-day index, and no rule about which direction is cheap. One
-byte per zone-day is what makes a rebuild affordable enough to delete all of that.
+- **Rebuild.** Zero the buffer, apply the anchor for the target year, then apply that year's
+  rows up to the target day — about 1.6M scattered writes plus a 1.4M-row scan.
+- **Carry forward.** Any move *forward inside the year the state already sits in*: scan the
+  year once and apply only the rows falling in `(held, target]`.
 
-Buffers are lent to the worker and returned rather than reallocated: playback asks eight
-times a second and each `pk`/`visible` pair is 5.4 MB.
+Because the shard is ordered `(idx, day)` for compression, a day's rows are scattered
+through it and the scan reads the year either way — so **advancing ten days costs the same
+as advancing one**. That is what makes it usable during playback, where the map trails the
+playhead and the days it is asked for arrive in jumps. Going backwards, or crossing a year
+boundary, rebuilds: backwards has nothing to carry forward, and a new year needs its anchor.
 
-Playback is paced by the clock, not by ticks. A step costs 2.7M dots re-coloured plus a
-buffer upload, and a fixed days-per-tick would make the run last anywhere from 20 s to a
-minute depending on the machine.
+The worker holds `state` itself rather than trusting whichever buffer came back, because a
+superseded request has its buffers returned unused and a carry-forward has to build on the
+last day *processed*, not the last day drawn.
+
+There is deliberately no by-day index. It would turn a carry-forward into ~3,000 reads
+instead of 1.4M, but costs 5.6 MB per year and a counting sort, for a pass that is no longer
+on the critical path. Measure before adding one.
+
+`VERIFY_EVERY` in that file rebuilds into a scratch buffer every Nth carry-forward and
+compares. It ships at 0. Turn it on and watch it cross a year boundary before believing any
+change to `step` or `replay`.
+
+Buffers are lent to the worker and returned rather than reallocated: each `pk`/`visible`
+pair is 5.4 MB.
+
+The worker also reports, on request, which zones changed **faction** on the target date —
+`flips`, a short list of `idx` with `from`/`to`, derived in the same pass that colours the
+map so a mark can never appear on a dot that did not change colour. A busy day is about a
+thousand zones and the worst in the record is 10,449, which is why it is a list rather than
+a 2.68M-wide mask. Off unless asked for.
+
+Playback is paced by the clock, not by ticks, and the playhead does not wait for the map.
+Holding the two in lockstep so the worker only ever saw consecutive days serialises three
+React renders per day and is much slower than letting the playhead lead; carrying forward
+across a gap is free, so there is nothing to gain by waiting.
 
 ### Serve it with `Content-Encoding: br`
 
@@ -336,6 +388,77 @@ boundaries 2.80 -> 1.83 (35%).
 Two brotli qualities, because the curve has a knee. On a 26.9 MB payload: q9 3.93 MB in
 4.5 s, **q10 3.60 MB in 46 s**, **q11 3.43 MB in 130 s**. q11 for anything on the critical
 path, q10 for the bulk trees — 4% of the ratio for most of the export's running time.
+
+### Timelapse is a mode, not another window
+
+`Timelapse` sits after a divider in the view row and swaps the bottom bar for its own
+controls. It runs on a **date range**, which the windows have no concept of; keeping the two
+time models apart is deliberate, because reconciling them would mean rebuilding `StatsPanel`
+and the chart around ranges.
+
+**One day per frame, never more.** The other playback loop covers the record in a fixed
+twenty seconds and skips whatever it must; this one shows every day and slows down instead,
+so a run is as long as its period. The playhead does not wait for the map — the worker
+carries state forward across a gap for the cost of one day, so letting it lead is free.
+Holding the two in lockstep was tried and is three times slower: it serialises three React
+renders per day.
+
+Three backdrops, and they answer different questions:
+
+| | |
+|---|---|
+| **Daily** | zones with an event that day |
+| **All zones** | the standings on that date |
+| **Cumulative** | starts unclaimed and fills in — a zone appears the day it changes hands and stays, in whatever color it currently holds |
+
+Two overlays draw on top, through `ZoneMap`'s `overlays` prop:
+
+- **MAZ**, an amber ring per zone, brightness and size both from appearances in a trailing
+  30-day window. Amber specifically because it is none of the three faction colors: a MAZ is
+  not a faction fact. Flash, decay and streak encodings were built and compared on a real
+  map and lost — a one-day flash is ten dots on a world map and reads as nothing.
+- **Changes of hands**, a small mark in the new holder's color with a dark disc under it,
+  trailing five days and fading. A stroke instead of the disc is most of the mark at that
+  size and the color never shows.
+
+**"Changed hands" includes a zone going from empty to held**, and that is not a detail.
+Before 2018 the record holds *zero* faction-to-faction changes, so excluding arrivals leaves
+the entire early timelapse with nothing to draw. See the data facts above.
+
+`lib/timelapse.ts` is split into two hooks for an ordering reason rather than taste:
+`useFlipStream` must hand `absorb` to `useZoneData` before that hook runs, while
+`useMazOverlays` needs the geometry and display state it returns.
+
+**Neither the trail nor the cumulative mask is React state updated from an effect.** Both
+live in refs, are filled from the worker's answer handler, and publish with one version bump.
+An effect that sets state on every answer makes React count a nested passive update on every
+frame, and after fifty without a quiet commit between them it logs "Maximum update depth
+exceeded". For the same reason `useZoneData` delays its `scrubbing` flag by 200 ms and
+exposes a `pending` ref for pacing: a date answered in tens of milliseconds must not touch
+React state at all.
+
+**The MAZ payload carries no key it does not need, and nothing it can get elsewhere.**
+
+| | Columns | Size |
+|---|---|---|
+| `maz.bin.br` | `idx` (uint32), `day` (uint16 delta) | 268 KB -> **63 KB** |
+| `maz_stats.bin.br` | `players` (uint16), `launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 803 KB -> 425 KB |
+
+45,685 reports over 11,723 zones, sorted `(day, idx)` because every read is a contiguous
+range of days. That ordering is why `idx` is not delta-encoded: it restarts on every day
+boundary, and `_pack` only accepts ascending runs for an unsigned column.
+
+**`maz_stats` is row-aligned and has no key columns at all** - row *i* describes row *i* of
+`maz.bin.br*, and `idx` joins on to the geometry, names and history the viewer already
+holds. Both queries share a `group by` and `order by`; change one and you must change both.
+Coordinates and names are deliberately absent: `tiles/` and `names/` already hold them at
+the same `idx`, and a second copy is a second chance to disagree.
+
+The map fetches only `maz.bin.br`, and only on entering the mode. Nothing on screen depends
+on a launch count - a ring's brightness and size are both appearances in a window - so the
+stats exist to be collected automatically rather than to be drawn. A per-*player* breakdown
+is a separate job: the report pages carry a packed string of roughly 924,728 player rows
+that ingest does not unpack. See `thoughts/future-features.md`.
 
 ## Where the data comes from
 
@@ -413,6 +536,30 @@ numbers it does not already have. A normal run costs one index page and stops.
 - **Pre-2012 rows are backfill sentinels.** 1,449,170 of them, of which only **29** carry
   any bots. Everything else is genuinely zero, so pre-first-event state is treated as zero.
   Those 29 live in `changelog/year=2010/` and are the whole of the starting state.
+- **Before late 2018 the changelog is a thin stream of first sightings, not the game's
+  history.** Zone-days with any predecessor: **1 in 2017**, 39,698 in 2018, then over a
+  million a year. So for 2012–2017 almost every row is a zone's first ever observation and
+  essentially nothing can be seen to *change*.
+
+  Zones by year of first event ramp 1,311 (2012) → 356,228 (2017) → **475,582 (2018)**, then
+  fall to roughly 50k a year. Part of that rise is real — first sightings step from ~22k a
+  month through April 2017 to ~34k from May and hold, right after the in-game missile range
+  increase — and part is plainly collection: the Sept–Oct 2018 months alone run 79,626 then
+  20,954 then 6,953.
+
+  **MAZ proves the early record is incomplete rather than quiet**, the same way it does for
+  2019. Battle reports landing on zones with no changelog state yet: **100% in 2014** (3,568
+  of 3,568), 3,609 of 3,617 in 2017, and **zero from 2019 on**. The Dallas–Fort Worth box
+  holds 315 zones with no event before 2018 and all 315 first seen in Sept/Oct 2018, while
+  MAZ has them among the most active zones in the world from January 2014 — Watauga is
+  reported on 2014-01-01 and enters the changelog on 2018-09-22.
+
+  The practical consequence: **"uncaptured became captured" is not answerable before late
+  2018.** Over 2017-04-01 to 2019-12-31 there are 790 conversions we actually witnessed —
+  seen empty first, then held — against 817,344 zones whose first row of any kind falls
+  inside the window, and none of the 790 land before October 2018. Anything counting new
+  captures in that period is counting the crawler. Say "first seen holding bots", never
+  "captured". Not recoverable: the ring reaches back 31 days and these are 2014–2017 slots.
 - **2019's gap is a collection artifact, and battlestats proves it**: 337,859 events vs
   627,035 in 2018 and 1,438,855 in 2020 — but **3,614 battle reports in 2019**, flat against
   every neighbouring year. A second, independent source says the game was busy and the
@@ -508,6 +655,12 @@ against a threshold, because thresholds on upstream drift are brittle.
   `tests/assert_region_label_agrees_with_country.sql` fails if one appears.
 - **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
   discovers them because they arrive in the daily CSVs like any other change.
+- **Every input to a deck.gl binary attribute belongs in its `updateTriggers`.** `ZoneMap`
+  mutates `colors` and `radii` in place, and deck.gl cannot see a mutation — only a changed
+  trigger makes it re-upload. Listing the date but not the focus mask or the empty-zone mode
+  means dimming an area silently stops repainting the map. It is invisible while anything
+  else happens to rebuild the `data` object every render, and appears the moment that is
+  memoised.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
@@ -595,6 +748,10 @@ things worth more:
 Merged is also *smaller* — 9.26 MB against 9.39 — because splitting a sorted run in two
 breaks the delta encoding. `ever_active` is a column so the viewer keeps its two shades
 of grey: a zone fought down to empty is part of the story, one never touched is terrain.
+
+This is about the **export**. The viewer does draw terrain as its own deck.gl layer, which
+is a different thing and is fine: one file, one fetch, one row count, and the draw order set
+explicitly in `ZoneMap` rather than decided by which request finished first.
 
 - **Coordinates are fixed-point at 1e-4 deg (~11 m), delta-encoded, sorted by latitude then
   longitude within a tile.** float32 mantissas are noise and no compressor can touch them.
@@ -689,17 +846,13 @@ is not a concern.
    it for the full year without asking again — a hard reload does not override it. Marking a
    shard that churns as immutable means a returning reader keeps yesterday's map.
 
-   `upload.py`'s `_cache_control` sets it per object:
+   **`upload.py`'s `_cache_control` gives one answer for every object: revalidate.** The
+   only exception is the `raw/` archive, which no browser fetches.
 
-   | | Cache-Control | Why |
-   |---|---|---|
-   | `tiles/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels. Honest only because the URL carries a content hash — see the geometry section |
-   | `display/YYYY` and `anchor_YYYY` for a **past** year | immutable, 1 year | finished history |
-   | `paint/`, `display/<current year>`, `zone_history/`, `series/` | `max-age=300, must-revalidate` | rewritten nightly under the same name |
-   | `meta.json` | `max-age=60` | how a client discovers everything else |
-
-   A 304 carries no body, so the cost of revalidating is a header exchange, not a
-   re-download.
+   That is deliberate, and it replaced a per-tree table that marked positions and finished
+   years immutable. Deciding which files "really never change" is exactly the judgement that
+   broke the map, and a new shard is added by someone who has not read the table. A 304
+   carries no body, so being right costs a header exchange rather than a re-download.
 
    The ETag skip compares *bodies*, not headers, so changing this policy does not restamp
    objects whose bytes are unchanged. `ZNHSTRY_UPLOAD_FORCE=1` re-sends everything; it is
@@ -793,6 +946,10 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
 - `data/` and `dist/` are gitignored. `dist/` is fully rebuildable; `data/` is not — see
   "The raw layer".
 - Conventional commits: `feat:`, `fix:`, `data:`, `docs:`, `refactor:`.
+- **American English everywhere.** UI strings, code comments, docs, commit messages: color,
+  gray, meter, behavior, normalize, analyze. Not colour, grey, metre, behaviour, normalise.
+  This file and parts of the codebase still carry British spellings from earlier work; fix
+  them as you touch them rather than in one sweep.
 - Testing is deliberately concentrated where failures are invisible, not spread evenly.
   dbt carries 12 data tests and 1 unit test; `pipeline/tests/` covers the ring arithmetic
   and the dtype contract, which decide what gets written before dbt can see it. The viewer

@@ -28,8 +28,15 @@ export const WINDOWS = [
 export type WindowKey = (typeof WINDOWS)[number]["key"];
 export type ReadMode = "state" | "change";
 
-/** "current", or one of the windows. What the picker actually selects. */
-export type ViewKey = "current" | WindowKey;
+/**
+ * "current", a window, or the timelapse. What the picker actually selects.
+ *
+ * `timelapse` is a mode rather than a peer of the others: it swaps the bottom
+ * bar for its own controls and runs on a date range, which the windows have no
+ * concept of. Keeping the two time models separate is deliberate - reconciling
+ * them would mean rebuilding the stat panel and the chart around ranges.
+ */
+export type ViewKey = "current" | "timelapse" | WindowKey;
 
 export const VIEWS: { key: ViewKey; label: string; title: string }[] = [
   {
@@ -44,11 +51,16 @@ export const VIEWS: { key: ViewKey; label: string; title: string }[] = [
   })),
 ];
 
-export const isWindow = (view: ViewKey): view is WindowKey => view !== "current";
+export const isWindow = (view: ViewKey): view is WindowKey =>
+  view !== "current" && view !== "timelapse";
 
-/** Current reads levels; a window reads what moved across it. */
-export const readModeOf = (view: ViewKey): ReadMode =>
-  view === "current" ? "state" : "change";
+/**
+ * Current reads levels; a window reads what moved across it.
+ *
+ * The timelapse decides for itself, from its backdrop, so this returns the
+ * harmless default for it and the page overrides.
+ */
+export const readModeOf = (view: ViewKey): ReadMode => (isWindow(view) ? "change" : "state");
 
 /**
  * The span the chart plots.
@@ -56,8 +68,7 @@ export const readModeOf = (view: ViewKey): ReadMode =>
  * Current has no window of its own, so it plots the whole record - the full
  * growth curve is the context for "where do things stand".
  */
-export const chartSpanOf = (view: ViewKey): WindowKey =>
-  view === "current" ? "all" : view;
+export const chartSpanOf = (view: ViewKey): WindowKey => (isWindow(view) ? view : "all");
 
 export function windowDays(key: WindowKey): number {
   return WINDOWS.find((w) => w.key === key)!.days;

@@ -12,6 +12,7 @@ import {
 import { AreaPicker, type Area } from "@/components/AreaPicker";
 import { LoadStatus } from "@/components/LoadStatus";
 import { dayToDate, zoneIdentity } from "@/lib/data";
+import { dateToDay } from "@/lib/format";
 import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 import { HistoryBar, type HistoryMode } from "@/components/HistoryBar";
 import {
@@ -36,8 +37,16 @@ import { loadNames } from "@/lib/names";
 import { useZoneData } from "@/lib/useZoneData";
 import { useCompact } from "@/lib/useCompact";
 import { BottomSheet, type SheetStop } from "@/components/BottomSheet";
-import { chartSpanOf, readModeOf, windowPhrase, type ViewKey } from "@/lib/windows";
+import { chartSpanOf, readModeOf, windowPhrase, type ReadMode, type ViewKey } from "@/lib/windows";
 import { WindowPicker } from "@/components/WindowPicker";
+import { TimelapseBar, PERIODS, type Period } from "@/components/TimelapseBar";
+import { loadMaz, type MazData } from "@/lib/maz";
+import {
+  useFlipStream,
+  useMazOverlays,
+  PLAY_DAYS_PER_SECOND as LAPSE_DAYS_PER_SECOND,
+  type Backdrop,
+} from "@/lib/timelapse";
 
 // The payloads live in object storage, not in the site bundle, because they
 // need response headers a static host cannot set: Content-Encoding: br, and a
@@ -75,16 +84,40 @@ type GeoStatus = "idle" | "asking" | "denied" | "unavailable";
 
 export default function Page() {
   // One control. `current` is "where things stand"; a window is "what moved".
-  // Day, because the most recent finished day is the liveliest honest view -
-  // roughly 2,000-3,100 zones - and it is what the map is for.
-  const [view, setView] = useState<ViewKey>("day");
-  const [uncapped, setUncapped] = useState(false);
+  //
+  // Current, and the reason is load time as much as framing. It is the only
+  // view that needs no display stream at all - `paint/` already answers it - so
+  // the map is complete and correctly coloured after the first tile pass. Day
+  // is a change window, so it forces an anchor plus a year of `display/`, up to
+  // 3.16 MB, before the map is right, on every cold visit.
+  const [view, setView] = useState<ViewKey>("current");
+  // Empty zones are always drawn; this asks for *only* them.
+  const [emptyOnly, setEmptyOnly] = useState(false);
 
   const compact = useCompact();
   const [sheetStop, setSheetStop] = useState<SheetStop>("peek");
 
   const span = chartSpanOf(view);
-  const readMode = readModeOf(view);
+  const timelapse = view === "timelapse";
+
+  // --- timelapse mode ------------------------------------------------------
+  //
+  // Its own date range, its own backdrop, and its own playback. None of it is
+  // wired into the windows: they are a different question and reconciling the
+  // two time models would mean rebuilding the stat panel around ranges.
+  const [backdrop, setBackdrop] = useState<Backdrop>("daily");
+  const [rangeStart, setRangeStart] = useState<number | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<number | null>(null);
+  const [activePeriod, setActivePeriod] = useState<string | null>("Whole record");
+  const [maz, setMaz] = useState<MazData | null>(null);
+
+  // Daily reads what moved; the other two read levels and restrict what is
+  // drawn afterwards.
+  const readMode: ReadMode = timelapse
+    ? backdrop === "daily"
+      ? "change"
+      : "state"
+    : readModeOf(view);
 
   const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
   const [hovered, setHovered] = useState<HoveredZone | null>(null);
@@ -109,9 +142,68 @@ export default function Page() {
   const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
   const historyToken = useRef(0);
 
-  const data = useZoneData(BASE, span, readMode);
+  // `absorb` has to exist before `useZoneData` runs, but the zone count only
+  // arrives with the manifest that hook fetches. Held separately and filled in
+  // once, rather than reordering the two.
+  const [zoneCount, setZoneCount] = useState<number | null>(null);
+  const stream = useFlipStream(zoneCount, backdrop, rangeStart);
+
+  const data = useZoneData(BASE, span, readMode, timelapse, stream.absorb);
   const { meta, geometry, display, lookups, zoneIds, series, day, dayBounds, changeStart, progress } =
     data;
+
+  useEffect(() => {
+    if (meta) setZoneCount(meta.scope.zone_count);
+  }, [meta]);
+
+  // MAZ is only ever needed by the timelapse, so it is not on the load path.
+  useEffect(() => {
+    if (!timelapse || maz || !meta?.maz) return;
+    loadMaz(BASE, meta.maz)
+      .then(setMaz)
+      .catch(() => undefined);
+  }, [timelapse, maz, meta]);
+
+  /** The furthest the period controls may reach: the whole display record. */
+  const outer = useMemo(
+    () => (dayBounds ? { min: dayBounds.min, max: dayBounds.max } : null),
+    [dayBounds],
+  );
+
+  /** What playback and the timelapse scrubber actually run between. */
+  const lapseBounds = useMemo(() => {
+    if (!outer) return null;
+    const min = Math.max(outer.min, rangeStart ?? outer.min);
+    const max = Math.min(outer.max, rangeEnd ?? outer.max);
+    return max > min ? { min, max } : { min, max: min + 1 };
+  }, [outer, rangeStart, rangeEnd]);
+
+  const applyPeriod = useCallback(
+    (period: Period) => {
+      if (!meta) return;
+      const toDay = (value: string | null) =>
+        value === null ? null : dateToDay(meta.day_epoch, new Date(`${value}T00:00:00Z`));
+      setRangeStart(toDay(period.start));
+      setRangeEnd(toDay(period.end));
+      setActivePeriod(period.label);
+      // A preset about something global opens on the globe. Leaving a region
+      // selected would show a worldwide change through a keyhole.
+      if (period.world) {
+        setArea(null);
+        setHome(null);
+        setSelectedZone(null);
+      }
+    },
+    [meta],
+  );
+
+  // Keep the playhead inside the chosen period, and only when it falls out, so
+  // narrowing a range around where the reader is looking leaves them there.
+  useEffect(() => {
+    if (!timelapse || !lapseBounds || day === null) return;
+    if (day < lapseBounds.min) data.setDay(lapseBounds.min);
+    else if (day > lapseBounds.max) data.setDay(lapseBounds.max);
+  }, [timelapse, lapseBounds, day, data]);
 
   // Boundaries are independent of everything else, so they load on their own.
   useEffect(() => {
@@ -236,6 +328,19 @@ export default function Page() {
     if (!geometry || selectedZone === null) return mapFilter;
     return singleZoneFilter(geometry.size, selectedZone);
   }, [geometry, selectedZone, mapFilter]);
+
+  // The timelapse's own layers. `mapFilter` rather than `filter`, so clicking a
+  // zone to read about it does not empty the map of marks.
+  const overlays = useMazOverlays({
+    maz,
+    geometry,
+    display,
+    version: data.version,
+    day: timelapse ? day : null,
+    zoom: viewState.zoom ?? 0,
+    focus: timelapse ? mapFilter : null,
+    stream,
+  });
 
   // --- the chart, which is also where every bot count comes from -----------
 
@@ -461,9 +566,8 @@ export default function Page() {
    * anywhere from twenty seconds to a minute. Reading the real elapsed time
    * keeps the run the same length everywhere.
    *
-   * Every step is a full rebuild in the worker now, which is what makes this
-   * simple: there is no forward-only fast path to fall off, and scrubbing
-   * backwards costs exactly what scrubbing forwards costs.
+   * The worker carries state forward across a gap for the cost of one day, so
+   * the playhead never waits for the map; it leads and the map catches up.
    */
   useEffect(() => {
     if (!playing || !dayBounds) return;
@@ -482,7 +586,43 @@ export default function Page() {
       });
     }, 1000 / PLAY_HZ);
     return () => clearInterval(id);
-  }, [playing, dayBounds, data]);
+  }, [playing, timelapse, dayBounds, data]);
+
+  /**
+   * Timelapse playback: one day per frame, never more.
+   *
+   * Separate from the loop above because it is a different promise. That one
+   * covers the record in a fixed twenty seconds and skips whatever it must; this
+   * one shows every single day and slows down instead, so a run is as long as
+   * the period is. The readout is the date itself.
+   */
+  const dayRef = useRef<number | null>(null);
+  dayRef.current = day;
+
+  useEffect(() => {
+    if (!playing || !timelapse || !lapseBounds) return;
+    let frame = 0;
+    let last = performance.now();
+    let debt = 0;
+
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick);
+      debt += ((now - last) / 1000) * LAPSE_DAYS_PER_SECOND;
+      last = now;
+      if (debt > 1) debt = 1;
+      if (debt < 1) return;
+      debt = 0;
+
+      const current = dayRef.current;
+      if (current === null) return;
+      const next = current + 1 > lapseBounds.max ? lapseBounds.min : current + 1;
+      dayRef.current = next;
+      data.setDay(next);
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, timelapse, lapseBounds, data]);
 
   const clearFocus = useCallback(() => {
     setSelectedZone(null);
@@ -549,6 +689,32 @@ export default function Page() {
       onSelect={gotoArea}
     />
   );
+
+  const timelapseBar = meta ? (
+    <TimelapseBar
+      epoch={meta.day_epoch}
+      outer={outer}
+      bounds={lapseBounds}
+      day={day}
+      onDay={data.setDay}
+      rangeStart={rangeStart}
+      rangeEnd={rangeEnd}
+      onRange={(start, end) => {
+        setRangeStart(start);
+        setRangeEnd(end);
+        setActivePeriod(null);
+      }}
+      activePeriod={activePeriod}
+      onPeriod={applyPeriod}
+      backdrop={backdrop}
+      onBackdrop={setBackdrop}
+      playing={playing}
+      onTogglePlay={() => setPlaying((p) => !p)}
+      marks={overlays.marks}
+      flips={overlays.flips}
+      claimed={stream.claimed}
+    />
+  ) : null;
 
   const togglePlay = () => {
     // Pressing play at the end of the record replays it rather than doing
@@ -703,8 +869,8 @@ export default function Page() {
             <WindowPicker
               view={view}
               onView={changeView}
-              uncapped={uncapped}
-              onUncapped={setUncapped}
+              emptyOnly={emptyOnly}
+              onEmptyOnly={setEmptyOnly}
               pending={changing && data.shown === null}
               scrollable
             />
@@ -719,8 +885,8 @@ export default function Page() {
             <WindowPicker
               view={view}
               onView={changeView}
-              uncapped={uncapped}
-              onUncapped={setUncapped}
+              emptyOnly={emptyOnly}
+              onEmptyOnly={setEmptyOnly}
               pending={changing && data.shown === null}
             />
             {areaPicker}
@@ -738,7 +904,10 @@ export default function Page() {
             boundaries={boundaries}
             viewState={viewState}
             filter={mapFilter}
-            uncapped={uncapped}
+            draw={emptyOnly ? "empty" : "all"}
+            only={timelapse && backdrop === "cumulative" ? stream.mask : null}
+            onlyVersion={stream.version}
+            overlays={timelapse ? overlays.layers : undefined}
             ring={home ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM } : null}
             onViewStateChange={setViewState}
             onHover={handleHover}
@@ -771,7 +940,10 @@ export default function Page() {
         )}
       </div>
 
-      {!compact && historyBar}
+      {/* The timelapse replaces the chart rather than sitting beside it: it runs
+          on a date range, and a chart drawn for a window would be describing a
+          different span from the one playing. */}
+      {timelapse ? timelapseBar : !compact && historyBar}
     </main>
   );
 }

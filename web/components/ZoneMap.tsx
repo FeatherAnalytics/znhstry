@@ -24,16 +24,23 @@ function graticule(step = 15) {
 
 const FACTION_VARS = ["--dormant", "--legion", "--swarm", "--faceless"] as const;
 
-function readFactionColors(): number[][] {
+/**
+ * Four RGB triples, flat: faction `f` is bytes `f * 3` onwards.
+ *
+ * Flat and typed rather than `number[][]` because the fill loop below reads it
+ * up to 1.6M times a frame, and every element of an array-of-arrays is a boxed
+ * pointer chase where a Uint8Array is a byte load.
+ */
+function readFactionColors(): Uint8Array {
   const styles = getComputedStyle(document.documentElement);
-  return FACTION_VARS.map((name) => {
+  const out = new Uint8Array(FACTION_VARS.length * 3);
+  FACTION_VARS.forEach((name, f) => {
     const hex = styles.getPropertyValue(name).trim();
-    return [
-      parseInt(hex.slice(1, 3), 16),
-      parseInt(hex.slice(3, 5), 16),
-      parseInt(hex.slice(5, 7), 16),
-    ];
+    out[f * 3] = parseInt(hex.slice(1, 3), 16);
+    out[f * 3 + 1] = parseInt(hex.slice(3, 5), 16);
+    out[f * 3 + 2] = parseInt(hex.slice(5, 7), 16);
   });
+  return out;
 }
 
 /** A ring of `steps` points at `radiusKm` around a point, for the range overlay. */
@@ -151,6 +158,22 @@ export function ZoneMap({
   const terrainToSlot = useRef(new Int32Array(geometry.size));
   const terrain = useRef(0);
 
+  /**
+   * Radius for every magnitude bucket, so the loop below reads a byte-indexed
+   * table instead of calling a method 1.6M times a frame.
+   *
+   * `pk` carries six bits of magnitude, so 64 entries is the whole domain and
+   * the table is exact rather than an approximation of the function it replaces.
+   * The call was 3.7% of all CPU during playback on its own.
+   */
+  const radiusFor = useMemo(() => {
+    const table = new Float32Array(64);
+    for (let m = 1; m < 64; m++) table[m] = display.radius(m);
+    return table;
+  }, [display]);
+
+  const terrainCount = geometry.count;
+
   // Binary attributes rather than accessor functions. deck.gl calls an
   // accessor once per object per update, which is fine for 144k zones and far
   // too slow at 2.7M -- filling typed arrays directly keeps a global scrub
@@ -163,6 +186,11 @@ export function ZoneMap({
   // Indexed by *slot*, the render order tiles arrive in, while game state is
   // indexed by *idx*. slotToIdx is the bridge and the reason this loop looks
   // indirect.
+  //
+  // Hoisting the never-played zones into a prebuilt list so this could skip them
+  // was measured and made no difference to playback: the cost is the random read
+  // into `pk` for the zones that *do* draw, not the ones being stepped over. It
+  // cost 21 MB of index arrays for nothing. Don't do it again.
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = colors.current;
@@ -206,30 +234,30 @@ export function ZoneMap({
       const muted = filter !== null && filter[idx] === 0;
 
       if (magnitude > 0) {
-        const rgb = palette[pk >> 6] ?? palette[0];
-        colorArray[o] = rgb[0];
-        colorArray[o + 1] = rgb[1];
-        colorArray[o + 2] = rgb[2];
+        const rgb = (pk >> 6) * 3;
+        colorArray[o] = palette[rgb];
+        colorArray[o + 1] = palette[rgb + 1];
+        colorArray[o + 2] = palette[rgb + 2];
         colorArray[o + 3] = muted ? 26 : 215;
         // Counts span six orders of magnitude, so size is logarithmic and
         // capped in pixels. Colour carries who holds a zone; size stays quiet.
-        radiusArray[n] = muted ? 300 : display.radius(magnitude);
+        radiusArray[n] = muted ? 300 : radiusFor[magnitude];
       } else {
         // An empty zone is grey whoever nominally holds it: with no bots there
         // is nothing to own, and colouring it by faction overstates control.
         // This branch is only ever a zone that has been played and fought down
         // to nothing - part of the story. One never touched in fourteen years
         // is terrain, and is drawn by the layer below.
-        colorArray[o] = palette[0][0];
-        colorArray[o + 1] = palette[0][1];
-        colorArray[o + 2] = palette[0][2];
+        colorArray[o] = palette[0];
+        colorArray[o + 1] = palette[1];
+        colorArray[o + 2] = palette[2];
         colorArray[o + 3] = muted ? 12 : 110;
         radiusArray[n] = 400;
       }
       n++;
     }
     drawn.current = n;
-  }, [geometry, display, version, filter, draw, only, onlyVersion]);
+  }, [geometry, display, radiusFor, version, filter, draw, only, onlyVersion]);
 
   /**
    * Terrain: built as tiles land and when the filter moves, and never per date.
@@ -239,7 +267,6 @@ export function ZoneMap({
    * The count changes only while tiles are arriving, so during a timelapse these
    * buffers are uploaded zero times.
    */
-  const terrainCount = geometry.count;
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = terrainColors.current;
@@ -255,9 +282,9 @@ export function ZoneMap({
       pointArray[n * 2] = positions[slot * 2];
       pointArray[n * 2 + 1] = positions[slot * 2 + 1];
       backToSlot[n] = slot;
-      colorArray[o] = palette[0][0];
-      colorArray[o + 1] = palette[0][1];
-      colorArray[o + 2] = palette[0][2];
+      colorArray[o] = palette[0];
+      colorArray[o + 1] = palette[1];
+      colorArray[o + 2] = palette[2];
       colorArray[o + 3] = filter !== null && filter[idx] === 0 ? 12 : 55;
       n++;
     }

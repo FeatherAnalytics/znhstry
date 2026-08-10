@@ -80,6 +80,12 @@ export interface ZoneData {
   changeStart: number | null;
   /** Zones drawn after a change window has hidden the ones that stood still. */
   shown: number | null;
+  /**
+   * Zones holding bots on the answered date, or null before the worker has
+   * answered at all - during the first tile pass `paint/` fills `display.pk`
+   * directly and no worker answer has landed yet, so the panel counts its own.
+   */
+  held: number | null;
   /** Bumped whenever the map needs to redraw: new tiles, or a new date. */
   version: number;
   /** The latest answered day's changes of hands, or null unless asked for. */
@@ -134,6 +140,7 @@ export function useZoneData(
   const [series, setSeries] = useState<SparseSeries | null>(null);
   const [day, setDay] = useState<number | null>(null);
   const [shown, setShown] = useState<number | null>(null);
+  const [held, setHeld] = useState<number | null>(null);
   const [flips, setFlips] = useState<DayFlips | null>(null);
   const [version, setVersion] = useState(0);
   const [progress, setProgress] = useState<LoadProgress>({
@@ -290,6 +297,7 @@ export function useZoneData(
 
       settle();
       setShown(state.shown);
+      setHeld(state.held);
       if (state.flips) {
         const answer = { day: state.day, ...state.flips };
         setFlips(answer);
@@ -382,6 +390,7 @@ export function useZoneData(
     dayBounds,
     changeStart,
     shown: changeStart === null ? null : shown,
+    held,
     version,
     flips,
     pending,

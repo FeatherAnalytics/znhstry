@@ -261,6 +261,10 @@ async function show(message: ShowMessage): Promise<void> {
   stateYear = year;
   pk.set(state);
 
+  // One sequential pass over bytes already in cache from the copy above.
+  let held = 0;
+  for (let i = 0; i < zoneCount; i++) if (state[i] !== 0) held++;
+
   const shown =
     windowStart === null
       ? (visible.fill(1), zoneCount)
@@ -274,7 +278,7 @@ async function show(message: ShowMessage): Promise<void> {
       }
     : null;
 
-  post({ type: "state", token, day, shown, pk, visible, flips }, [
+  post({ type: "state", token, day, shown, held, pk, visible, flips }, [
     pk.buffer,
     visible.buffer,
     ...(flips ? [flips.idx.buffer, flips.from.buffer, flips.to.buffer] : []),

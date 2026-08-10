@@ -64,6 +64,17 @@ export interface StateMessage {
   day: number;
   /** Zones drawn, after a change window has hidden the ones that stood still. */
   shown: number;
+  /**
+   * Zones holding bots on `day`.
+   *
+   * Counted here rather than by the panel because the worker is already walking
+   * every byte and the main thread was not: the panel's own pass read `pk` and
+   * `visible` through the slot indirection, which is a cache miss per zone and
+   * measured 10.8% of all CPU during playback. Sequential, off-thread, it is
+   * free. Only the unfiltered count - an area selection is the page's own mask
+   * and the worker knows nothing about it.
+   */
+  held: number;
   pk: Uint8Array;
   visible: Uint8Array;
   /**

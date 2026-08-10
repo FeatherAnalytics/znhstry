@@ -124,11 +124,16 @@ const RECURRENCE_REFERENCE = 30;
  * pixel.
  */
 export function marksFor(data: MazData, day: number, window: number): MazMarks {
-  if (day < data.dayMin || day > data.dayMax) return EMPTY;
+  if (day < data.dayMin) return EMPTY;
 
-  const from = Math.max(data.dayMin, day - window);
+  // Clamped rather than emptied past the newest report. Battle reports are
+  // scraped a day behind the changelog, so the map opens on a date MAZ does not
+  // reach and the mode would show nothing at all on entry - which reads as a
+  // failed load rather than as a one-day lag.
+  const until = Math.min(day, data.dayMax);
+  const from = Math.max(data.dayMin, until - window);
   const start = data.dayOffset[from - data.dayMin];
-  const end = data.dayOffset[day - data.dayMin + 1];
+  const end = data.dayOffset[until - data.dayMin + 1];
   if (end <= start) return EMPTY;
 
   // Zone index -> slot in the output arrays. A Map rather than an 11,723-wide
@@ -147,7 +152,7 @@ export function marksFor(data: MazData, day: number, window: number): MazMarks {
       slotOf.set(z, slot);
       zoneIdx[slot] = z;
     }
-    if (data.reportDay[r] === day) fresh[slot] = 1;
+    if (data.reportDay[r] === until) fresh[slot] = 1;
     appearances[slot] += 1;
   }
 

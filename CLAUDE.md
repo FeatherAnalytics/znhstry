@@ -67,32 +67,9 @@ every key. Both consumers read it — `next.config.ts` via `process.loadEnvFile`
 `upload.py` from the environment. CI passes the same names as repository variables and
 secrets and never writes a file.
 
-Three things that will cost you an hour if you do not know them:
-
-- **A `next dev` that cannot bind port 3000 moves silently.** It prints
-  `Port 3000 is in use … using available port 3003 instead` and carries on, so a browser
-  at :3000 keeps talking to the *old* server with the old config compiled in. If a change
-  seems not to take effect, check which port it actually bound to.
-  `Get-NetTCPConnection -State Listen -LocalPort 3000` names the holder.
-- **`Cache-Control: immutable` means the browser will not revalidate, ever** — a hard
-  reload does not override it. `tools/serve-data.mjs` therefore sends `no-cache` by
-  default, with `SERVE_IMMUTABLE=1` to test the production headers. Any entry cached under
-  the immutable header stays stale for a year; clear site data once to be rid of it.
-- **`npm run build` fails at `EBUSY … rmdir web/out` on this machine.** `next build`
-  clears `out/` before writing it and `OneDrive.Sync.Service` holds the directory open.
-  Everything before that step succeeds. Rename `web/out` aside first and the build has
-  nothing to delete — `Rename-Item web\out out.old` works where `rmdir` does not, so no need
-  to pause sync. Delete the leftover afterwards. CI on Linux never hits it.
-- **Measuring a production build locally needs the data origin overridden.** `.env` names the
-  bucket, and a production build inlines it, so `npm run build` on its own points the page at
-  R2 — where the prototype's payload deliberately does not exist. Build with
-  `NEXT_PUBLIC_DATA_ORIGIN=http://localhost:3002` to talk to `npm run data`, then serve
-  `web/out` with any static server.
-
-  Worth doing before optimising anything in the viewer: `next dev` runs React in StrictMode,
-  which double-invokes every render and effect. Day-by-day playback measures roughly **twice
-  the frame rate in a production build** as in dev, so dev numbers overstate how much work
-  there is to remove.
+Machine-specific traps and the workarounds for them live in `thoughts/HANDOFF.md`, which is
+gitignored. This file documents what the project *is*; that one documents what is currently
+sore about working on it.
 
 ## The viewer
 
@@ -894,8 +871,8 @@ differ on any run that picks up new events. Nothing else may.
 `con.register`. Passing a polars frame directly goes through Arrow and so needs pyarrow, a
 large dependency for one handoff; both sides speak Parquet natively.
 
-Still churning nightly and not yet addressed: `series/country.bin.br` and
-`series/region.bin.br` rewrite in full (4.1 MB). Shard them by year when it matters.
+`series/country.bin.br` and `series/region.bin.br` are written whole, so a nightly run
+re-sends 4.1 MB of them.
 
 ### Boundaries come from polygons, not the boundary-line layers
 

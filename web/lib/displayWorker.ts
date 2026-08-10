@@ -62,13 +62,33 @@ async function shardFor(year: number): Promise<Columns | null> {
   return loaded;
 }
 
+/** Grown as flips are found, then trimmed. A busy day is about a thousand. */
+interface FlipSink {
+  idx: number[];
+  from: number[];
+  to: number[];
+}
+
 /**
  * Fill `pk` with the world on `day`.
  *
  * Rows run `(idx, day)`, so a zone's own rows are chronological and writing
  * them in file order leaves the last one at or before the cutoff standing.
+ *
+ * `sink`, when present, also collects every zone whose leading faction changed
+ * on `day` itself. That is nearly free here and awkward anywhere else: at the
+ * moment a row for `day` is written, `pk[idx]` still holds the state built from
+ * every earlier row, so the comparison needs no second snapshot and no second
+ * pass. Doing it outside would mean rebuilding the previous day as well and
+ * diffing 2.68M bytes.
  */
-function replay(pk: Uint8Array, anchor: Columns | null, shard: Columns | null, day: number): void {
+function replay(
+  pk: Uint8Array,
+  anchor: Columns | null,
+  shard: Columns | null,
+  day: number,
+  sink: FlipSink | null,
+): void {
   pk.fill(0);
 
   if (anchor) {
@@ -78,7 +98,20 @@ function replay(pk: Uint8Array, anchor: Columns | null, shard: Columns | null, d
   if (shard) {
     const { idx, day: rowDay, pk: value } = shard;
     for (let i = 0; i < idx.length; i++) {
-      if (rowDay[i] <= day) pk[idx[i]] = value[i];
+      if (rowDay[i] > day) continue;
+      const zone = idx[i];
+      if (sink && rowDay[i] === day) {
+        // Faction is the top two bits. Compare those alone: a zone that merely
+        // grew or shrank changed its magnitude bits and did not change hands.
+        const before = pk[zone] >> 6;
+        const after = value[i] >> 6;
+        if (before !== after) {
+          sink.idx.push(zone);
+          sink.from.push(before);
+          sink.to.push(after);
+        }
+      }
+      pk[zone] = value[i];
     }
   }
 }
@@ -107,6 +140,72 @@ function markMoved(visible: Uint8Array, spans: Columns[], from: number, to: numb
   return shown;
 }
 
+/**
+ * Carry the standing state forward from `from` to `day`, within one year.
+ *
+ * Rows for a given day are scattered through the shard, which is ordered
+ * `(idx, day)` for compression, so this reads the year once - and because it
+ * reads the whole year anyway, **advancing ten days costs the same as advancing
+ * one**. That is what makes it usable during playback, where the backdrop is
+ * always a little behind the playhead and the days it is asked for arrive in
+ * jumps rather than one at a time.
+ *
+ * Against a rebuild, which clears 2.68M bytes and then scatters ~1.5M anchor
+ * writes across the array in idx order, this is a sequential pass writing the
+ * few thousand rows that fall in the span. Sequential beats random by more than
+ * the row counts suggest.
+ *
+ * Deliberately no by-day index: it would turn this into ~3,000 reads instead of
+ * 1.4M, but costs 5.6 MB per year and a counting sort, for a pass that is
+ * already off the critical path once the rebuild is gone. Measure before adding
+ * one.
+ */
+function step(
+  state: Uint8Array,
+  shard: Columns,
+  from: number,
+  day: number,
+  sink: FlipSink | null,
+): void {
+  const { idx, day: rowDay, pk: value } = shard;
+  for (let i = 0; i < idx.length; i++) {
+    if (rowDay[i] <= from || rowDay[i] > day) continue;
+    const zone = idx[i];
+    if (sink) {
+      const before = state[zone] >> 6;
+      const after = value[i] >> 6;
+      if (before !== after) {
+        sink.idx.push(zone);
+        sink.from.push(before);
+        sink.to.push(after);
+      }
+    }
+    state[zone] = value[i];
+  }
+}
+
+/**
+ * The world as of `stateDay`, held across requests.
+ *
+ * The worker's own copy rather than whichever buffer the page lent back: a
+ * request may be superseded and its buffers returned unused, and an incremental
+ * step has to build on the last day *processed*, not the last day drawn.
+ */
+let state: Uint8Array | null = null;
+let stateDay: number | null = null;
+let stateYear: number | null = null;
+
+/**
+ * Steps between incremental-vs-rebuild checks. 0 disables.
+ *
+ * Left in, switched off. It reported "incremental matches rebuild" at five
+ * checkpoints across a run, which is the only reason the fast path is trusted;
+ * anyone changing `step` or `replay` should turn it back on and watch it cross a
+ * year boundary before believing the result.
+ */
+const VERIFY_EVERY = 0;
+let sinceVerify = 0;
+
 async function show(message: ShowMessage): Promise<void> {
   const { zoneCount, epoch } = config!;
   const { token, day, windowStart } = message;
@@ -128,13 +227,58 @@ async function show(message: ShowMessage): Promise<void> {
   const pk = message.pk ?? new Uint8Array(zoneCount);
   const visible = message.visible ?? new Uint8Array(zoneCount);
 
-  replay(pk, anchor, shard, day);
+  const sink: FlipSink | null = message.flips ? { idx: [], from: [], to: [] } : null;
+
+  if (!state || state.length !== zoneCount) {
+    state = new Uint8Array(zoneCount);
+    stateDay = null;
+  }
+
+  // Any forward move inside the year the state already sits in. A rebuild per
+  // day was the whole cost of following the playhead - 42 ms of a 71 ms frame.
+  // Going backwards, or crossing into another year, still rebuilds: backwards
+  // has nothing to carry forward, and a new year needs its anchor.
+  const canStep = stateDay !== null && stateYear === year && day > stateDay && shard !== null;
+
+  if (canStep) step(state, shard!, stateDay!, day, sink);
+  else replay(state, anchor, shard, day, sink);
+
+  // Temporary: an incremental step is only worth having if it is identical to
+  // the rebuild it replaces. Every Nth step, rebuild into a scratch buffer and
+  // compare. Set to 0 once this has been watched across a year boundary.
+  if (canStep && VERIFY_EVERY > 0 && ++sinceVerify >= VERIFY_EVERY) {
+    sinceVerify = 0;
+    const check = new Uint8Array(zoneCount);
+    replay(check, anchor, shard, day, null);
+    let differing = 0;
+    for (let i = 0; i < zoneCount; i++) if (check[i] !== state[i]) differing++;
+    console[differing ? "error" : "info"](
+      `display verify day ${day}: ${differing ? `${differing} zones DRIFTED` : "incremental matches rebuild"}`,
+    );
+  }
+
+  stateDay = day;
+  stateYear = year;
+  pk.set(state);
+
   const shown =
     windowStart === null
       ? (visible.fill(1), zoneCount)
       : markMoved(visible, spans, windowStart, day);
 
-  post({ type: "state", token, day, shown, pk, visible }, [pk.buffer, visible.buffer]);
+  const flips = sink
+    ? {
+        idx: Uint32Array.from(sink.idx),
+        from: Uint8Array.from(sink.from),
+        to: Uint8Array.from(sink.to),
+      }
+    : null;
+
+  post({ type: "state", token, day, shown, pk, visible, flips }, [
+    pk.buffer,
+    visible.buffer,
+    ...(flips ? [flips.idx.buffer, flips.from.buffer, flips.to.buffer] : []),
+  ]);
 }
 
 scope.onmessage = (event: MessageEvent<WorkerRequest>) => {

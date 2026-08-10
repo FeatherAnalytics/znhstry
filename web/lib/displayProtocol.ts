@@ -45,6 +45,15 @@ export interface ShowMessage {
   windowStart: number | null;
   pk: Uint8Array | null;
   visible: Uint8Array | null;
+  /**
+   * Also report which zones changed faction *on* `day`.
+   *
+   * Off unless asked for, so the ordinary path pays nothing. The answer comes
+   * back as a short list rather than a 2.68M-wide mask: a busy day is about
+   * 1,000 zones and the worst in the record is 10,449, so scanning a dense array
+   * on the main thread would cost more than the whole rest of the frame.
+   */
+  flips?: boolean;
 }
 
 export type WorkerRequest = InitMessage | ShowMessage;
@@ -57,6 +66,16 @@ export interface StateMessage {
   shown: number;
   pk: Uint8Array;
   visible: Uint8Array;
+  /**
+   * Zones whose leading faction changed on `day`, or null if none were asked
+   * for. `from`/`to` are faction ids, 0 meaning empty - so a capture off an
+   * empty zone and a zone fought down to nothing are both in here and the
+   * reader decides whether they count.
+   *
+   * Derived from the same bytes the map is coloured with, in the same pass, so
+   * a mark can never appear on a dot that did not change colour.
+   */
+  flips: { idx: Uint32Array; from: Uint8Array; to: Uint8Array } | null;
 }
 
 export interface ErrorMessage {

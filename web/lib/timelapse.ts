@@ -184,8 +184,6 @@ export interface MazOverlays {
 
 export interface OverlayInput {
   maz: MazData | null;
-  /** Zone id -> export idx, for testing a MAZ mark against the focus mask. */
-  mazIdx: Int32Array | null;
   geometry: ZoneGeometry | null;
   display: ZoneDisplay | null;
   /** Bumped when `display` is refilled in place. */
@@ -199,7 +197,6 @@ export interface OverlayInput {
 
 export function useMazOverlays({
   maz,
-  mazIdx,
   geometry,
   display,
   version,
@@ -208,23 +205,13 @@ export function useMazOverlays({
   focus,
   stream,
 }: OverlayInput): MazOverlays {
-  const inFocus = useCallback(
-    (mazZone: number): boolean => {
-      if (!focus) return true;
-      if (!mazIdx) return false;
-      const idx = mazIdx[mazZone];
-      return idx >= 0 && focus[idx] === 1;
-    },
-    [focus, mazIdx],
-  );
-
   const marks = useMemo(
     () => (maz && day !== null ? marksFor(maz, day, MAZ_WINDOW_DAYS) : null),
     [maz, day],
   );
 
   const mazLayers = useMemo(() => {
-    if (!marks || marks.count === 0) return { layers: [] as ScatterplotLayer[], count: 0 };
+    if (!marks || marks.count === 0 || !geometry) return { layers: [] as ScatterplotLayer[], count: 0 };
     const { intensity, weight, fresh, count } = marks;
 
     const positions = new Float32Array(count * 2);
@@ -233,12 +220,14 @@ export function useMazOverlays({
     let kept = 0;
 
     for (let i = 0; i < count; i++) {
-      if (!inFocus(marks.zone[i])) continue;
+      const idx = marks.idx[i];
+      if (geometry.idxToSlot[idx] < 0) continue;
+      if (focus && focus[idx] === 0) continue;
       const rgb = fresh[i] === 1 ? MAZ_FRESH : MAZ_COLOR;
       const a = intensity[i];
       const o = kept * 4;
-      positions[kept * 2] = marks.positions[i * 2];
-      positions[kept * 2 + 1] = marks.positions[i * 2 + 1];
+      positions[kept * 2] = geometry.longitude[idx];
+      positions[kept * 2 + 1] = geometry.latitude[idx];
       line[o] = rgb[0];
       line[o + 1] = rgb[1];
       line[o + 2] = rgb[2];
@@ -275,7 +264,7 @@ export function useMazOverlays({
         }),
       ],
     };
-  }, [marks, inFocus]);
+  }, [marks, geometry, focus]);
 
   const flipArrays = useMemo(() => {
     const nothing = { positions: new Float32Array(0), fill: new Uint8Array(0), backing: new Uint8Array(0), count: 0 };
@@ -381,23 +370,3 @@ export function useMazOverlays({
   return { layers, marks: mazLayers.count, flips: flipArrays.count };
 }
 
-/**
- * MAZ zone -> export idx.
- *
- * One scan of `zone_ids` rather than a binary search per zone: idx order is
- * zone_id order today, but new zones are appended, and a search that silently
- * mismatches would drop marks rather than fail.
- */
-export function useMazIndex(maz: MazData | null, zoneIds: Int32Array | null): Int32Array | null {
-  return useMemo(() => {
-    if (!maz || !zoneIds) return null;
-    const wanted = new Map<number, number>();
-    for (let i = 0; i < maz.zoneId.length; i++) wanted.set(maz.zoneId[i], i);
-    const out = new Int32Array(maz.zoneId.length).fill(-1);
-    for (let idx = 0; idx < zoneIds.length; idx++) {
-      const slot = wanted.get(zoneIds[idx]);
-      if (slot !== undefined) out[slot] = idx;
-    }
-    return out;
-  }, [maz, zoneIds]);
-}

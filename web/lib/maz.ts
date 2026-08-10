@@ -1,107 +1,69 @@
 /**
- * MAZ — Most Active Zones — for the display prototype.
+ * MAZ — Most Active Zones.
  *
  * A MAZ is not "a battle happened here". QONQR publishes a fixed number of
  * reports a day from its Most Active Zones page, so a row means *this zone was
  * among the most active in the world that day*. Exactly ten on most days.
  *
- * Which is the whole design problem this module exists to explore: **ten dots a
- * day against 2.68M zones**. A one-day point flash is not a map, it is a rounding
- * error, so the encodings below all trade some immediacy for enough marks on
- * screen to read as a pattern.
+ * Which is the design problem the ring encoding exists to solve: **ten zones a
+ * day against 2.68M**. A one-day mark is not a map, it is a rounding error, so
+ * a ring counts appearances over a trailing window instead.
  *
- * Everything here is derived on the fly from one 0.69 MB payload. No second
- * fetch, no precomputed rolling windows in the export — a window is at most 90
- * days of ~10 reports, so recomputing it per frame is under a thousand
- * iterations and settling the encoding by export would be settling it before we
- * have looked at it.
+ * The payload is `(idx, day)` and nothing else. Positions come from the geometry
+ * the viewer already holds, names from `names/` on hover; shipping either again
+ * would be a second copy that can disagree with the first. The reports' launch,
+ * player and bot columns are not carried because nothing draws them.
  */
 
-import { dataUrl } from "./format";
+import { loadShard, type ShardEntry } from "./format";
+
+export interface MazEntry extends ShardEntry {
+  day_min: number;
+  day_max: number;
+}
 
 export interface MazData {
-  dayEpoch: string;
   dayMin: number;
   dayMax: number;
-  /** Per zone, in first-appearance order. */
-  zoneId: Int32Array;
-  name: string[];
-  lat: Float32Array;
-  lon: Float32Array;
-  /** Per report, sorted by day. */
-  reportZone: Int32Array;
-  reportDay: Int32Array;
-  players: Int32Array;
-  launches: Int32Array;
-  botsLaunched: Int32Array;
-  botsKilled: Int32Array;
-  botsLost: Int32Array;
+  /** Export idx per report, grouped by day. */
+  reportIdx: Uint32Array;
+  /** Day per report, ascending. */
+  reportDay: Uint16Array;
   /**
-   * `dayOffset[d - dayMin]` is the first report index on or after day `d`, so a
-   * window is two lookups and a contiguous scan. Length is the span plus one, so
+   * `dayOffset[d - dayMin]` is the first report on or after day `d`, so a
+   * window is two lookups and a contiguous scan. One longer than the span, so
    * the end of the last day is addressable.
    */
   dayOffset: Int32Array;
   reportCount: number;
-  zoneCount: number;
 }
 
-interface RawMaz {
-  day_epoch: string;
-  day_min: number;
-  day_max: number;
-  zones: { zone_id: number[]; name: string[]; lat: number[]; lon: number[] };
-  reports: {
-    zone: number[];
-    day: number[];
-    players: number[];
-    launches: number[];
-    bots_launched: number[];
-    bots_killed: number[];
-    bots_lost: number[];
-  };
-}
+export async function loadMaz(base: string, entry: MazEntry): Promise<MazData> {
+  const columns = await loadShard(base, entry);
+  const reportDay = columns.day as Uint16Array;
+  const reportIdx = columns.idx as Uint32Array;
+  const span = entry.day_max - entry.day_min + 1;
 
-export async function loadMaz(base: string): Promise<MazData> {
-  const response = await fetch(dataUrl(`${base}/maz_proto.json.br`));
-  if (!response.ok) throw new Error(`${response.status} for maz_proto.json.br`);
-  const raw: RawMaz = await response.json();
-
-  const day = Int32Array.from(raw.reports.day);
-  const span = raw.day_max - raw.day_min + 1;
-
-  // One pass, walking a cursor rather than searching: the reports are already
-  // sorted by day, which is the only reason this is linear.
+  // One pass walking a cursor rather than searching per day: the rows are
+  // already sorted by day, which is the only reason this is linear.
   const dayOffset = new Int32Array(span + 1);
   let cursor = 0;
   for (let d = 0; d < span; d++) {
-    while (cursor < day.length && day[cursor] < raw.day_min + d) cursor++;
+    while (cursor < reportDay.length && reportDay[cursor] < entry.day_min + d) cursor++;
     dayOffset[d] = cursor;
   }
-  dayOffset[span] = day.length;
+  dayOffset[span] = reportDay.length;
 
   return {
-    dayEpoch: raw.day_epoch,
-    dayMin: raw.day_min,
-    dayMax: raw.day_max,
-    zoneId: Int32Array.from(raw.zones.zone_id),
-    name: raw.zones.name,
-    lat: Float32Array.from(raw.zones.lat),
-    lon: Float32Array.from(raw.zones.lon),
-    reportZone: Int32Array.from(raw.reports.zone),
-    reportDay: day,
-    players: Int32Array.from(raw.reports.players),
-    launches: Int32Array.from(raw.reports.launches),
-    botsLaunched: Int32Array.from(raw.reports.bots_launched),
-    botsKilled: Int32Array.from(raw.reports.bots_killed),
-    botsLost: Int32Array.from(raw.reports.bots_lost),
+    dayMin: entry.day_min,
+    dayMax: entry.day_max,
+    reportIdx,
+    reportDay,
     dayOffset,
-    reportCount: day.length,
-    zoneCount: raw.zones.zone_id.length,
+    reportCount: reportDay.length,
   };
 }
 
-// --- the candidate encodings ---------------------------------------------
 
 /**
  * How a MAZ is drawn, and why this and not something else.
@@ -117,24 +79,21 @@ export async function loadMaz(base: string): Promise<MazData> {
  */
 export interface MazMarks {
   count: number;
-  /** lon, lat pairs. */
-  positions: Float32Array;
   /** 0..1. Drives alpha. */
   intensity: Float32Array;
   /** 0..1. Drives radius. */
   weight: Float32Array;
-  /** Zone index into `MazData`. */
-  zone: Int32Array;
+  /** Export idx of the zone the mark belongs to. */
+  idx: Uint32Array;
   /** Marks whose own day is the playhead - the genuinely new ones. */
   fresh: Uint8Array;
 }
 
 const EMPTY: MazMarks = {
   count: 0,
-  positions: new Float32Array(0),
   intensity: new Float32Array(0),
   weight: new Float32Array(0),
-  zone: new Int32Array(0),
+  idx: new Uint32Array(0),
   fresh: new Uint8Array(0),
 };
 
@@ -175,40 +134,36 @@ export function marksFor(data: MazData, day: number, window: number): MazMarks {
   // Zone index -> slot in the output arrays. A Map rather than an 11,723-wide
   // array so the cost is the window's size, not the zone table's.
   const slotOf = new Map<number, number>();
-  const zone = new Int32Array(end - start);
+  const zoneIdx = new Uint32Array(end - start);
   const appearances = new Float64Array(end - start);
   const fresh = new Uint8Array(end - start);
   let count = 0;
 
   for (let r = start; r < end; r++) {
-    const z = data.reportZone[r];
+    const z = data.reportIdx[r];
     let slot = slotOf.get(z);
     if (slot === undefined) {
       slot = count++;
       slotOf.set(z, slot);
-      zone[slot] = z;
+      zoneIdx[slot] = z;
     }
     if (data.reportDay[r] === day) fresh[slot] = 1;
     appearances[slot] += 1;
   }
 
   const scale = 1 / Math.log1p(RECURRENCE_REFERENCE);
-  const positions = new Float32Array(count * 2);
   const intensity = new Float32Array(count);
   const weight = new Float32Array(count);
-  const outZone = new Int32Array(count);
+  const outIdx = new Uint32Array(count);
   const outFresh = new Uint8Array(count);
 
   for (let s = 0; s < count; s++) {
     const value = Math.min(1, Math.log1p(appearances[s]) * scale);
-    const z = zone[s];
-    positions[s * 2] = data.lon[z];
-    positions[s * 2 + 1] = data.lat[z];
     intensity[s] = value;
     weight[s] = value;
-    outZone[s] = z;
+    outIdx[s] = zoneIdx[s];
     outFresh[s] = fresh[s];
   }
 
-  return { count, positions, intensity, weight, zone: outZone, fresh: outFresh };
+  return { count, intensity, weight, idx: outIdx, fresh: outFresh };
 }

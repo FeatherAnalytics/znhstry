@@ -437,9 +437,28 @@ exceeded". For the same reason `useZoneData` delays its `scrubbing` flag by 200 
 exposes a `pending` ref for pacing: a date answered in tens of milliseconds must not touch
 React state at all.
 
-**The MAZ payload is not part of the export yet.** `dist/data/global/maz_proto.json.br` is
-written by a one-off script outside the package, is absent from `meta.json`, and `upload.py`
-would delete it from the bucket. Promoting it into `export.py` is required before this ships.
+**The MAZ payload carries no key it does not need, and nothing it can get elsewhere.**
+
+| | Columns | Size |
+|---|---|---|
+| `maz.bin.br` | `idx` (uint32), `day` (uint16 delta) | 268 KB -> **63 KB** |
+| `maz_stats.bin.br` | `players` (uint16), `launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 803 KB -> 425 KB |
+
+45,685 reports over 11,723 zones, sorted `(day, idx)` because every read is a contiguous
+range of days. That ordering is why `idx` is not delta-encoded: it restarts on every day
+boundary, and `_pack` only accepts ascending runs for an unsigned column.
+
+**`maz_stats` is row-aligned and has no key columns at all** - row *i* describes row *i* of
+`maz.bin.br*, and `idx` joins on to the geometry, names and history the viewer already
+holds. Both queries share a `group by` and `order by`; change one and you must change both.
+Coordinates and names are deliberately absent: `tiles/` and `names/` already hold them at
+the same `idx`, and a second copy is a second chance to disagree.
+
+The map fetches only `maz.bin.br`, and only on entering the mode. Nothing on screen depends
+on a launch count - a ring's brightness and size are both appearances in a window - so the
+stats exist to be collected automatically rather than to be drawn. A per-*player* breakdown
+is a separate job: the report pages carry a packed string of roughly 924,728 player rows
+that ingest does not unpack. See `thoughts/future-features.md`.
 
 ## Where the data comes from
 
@@ -827,17 +846,13 @@ is not a concern.
    it for the full year without asking again — a hard reload does not override it. Marking a
    shard that churns as immutable means a returning reader keeps yesterday's map.
 
-   `upload.py`'s `_cache_control` sets it per object:
+   **`upload.py`'s `_cache_control` gives one answer for every object: revalidate.** The
+   only exception is the `raw/` archive, which no browser fetches.
 
-   | | Cache-Control | Why |
-   |---|---|---|
-   | `tiles/`, `names/`, `zone_ids`, `lookups`, `boundaries*` | immutable, 1 year | positions and labels. Honest only because the URL carries a content hash — see the geometry section |
-   | `display/YYYY` and `anchor_YYYY` for a **past** year | immutable, 1 year | finished history |
-   | `paint/`, `display/<current year>`, `zone_history/`, `series/` | `max-age=300, must-revalidate` | rewritten nightly under the same name |
-   | `meta.json` | `max-age=60` | how a client discovers everything else |
-
-   A 304 carries no body, so the cost of revalidating is a header exchange, not a
-   re-download.
+   That is deliberate, and it replaced a per-tree table that marked positions and finished
+   years immutable. Deciding which files "really never change" is exactly the judgement that
+   broke the map, and a new shard is added by someone who has not read the table. A 304
+   carries no body, so being right costs a header exchange rather than a re-download.
 
    The ETag skip compares *bodies*, not headers, so changing this policy does not restamp
    objects whose bytes are unchanged. `ZNHSTRY_UPLOAD_FORCE=1` re-sends everything; it is

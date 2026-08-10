@@ -43,7 +43,6 @@ import { TimelapseBar, PERIODS, type Period } from "@/components/TimelapseBar";
 import { loadMaz, type MazData } from "@/lib/maz";
 import {
   useFlipStream,
-  useMazIndex,
   useMazOverlays,
   PLAY_DAYS_PER_SECOND as LAPSE_DAYS_PER_SECOND,
   type Backdrop,
@@ -159,13 +158,11 @@ export default function Page() {
 
   // MAZ is only ever needed by the timelapse, so it is not on the load path.
   useEffect(() => {
-    if (!timelapse || maz) return;
-    loadMaz(BASE)
+    if (!timelapse || maz || !meta?.maz) return;
+    loadMaz(BASE, meta.maz)
       .then(setMaz)
       .catch(() => undefined);
-  }, [timelapse, maz]);
-
-  const mazIdx = useMazIndex(maz, zoneIds);
+  }, [timelapse, maz, meta]);
 
   /** The furthest the period controls may reach: the whole display record. */
   const outer = useMemo(
@@ -336,7 +333,6 @@ export default function Page() {
   // zone to read about it does not empty the map of marks.
   const overlays = useMazOverlays({
     maz,
-    mazIdx,
     geometry,
     display,
     version: data.version,

@@ -1,7 +1,8 @@
 # Future features
 
-Ideas with enough substance to be worth keeping, none of them started. Nothing here is a
-commitment or a plan — it is a place to put things so they stop occupying a conversation.
+Ideas with enough substance to be worth keeping. Nothing here is a commitment or a plan —
+it is a place to put things so they stop occupying a conversation. Entries marked **built**
+stay, for the reasoning rather than the idea.
 
 **Terminology: these are MAZ — Most Active Zones.** That is the in-game name and the
 right one to use in the UI, in models, and in prose. "Battle reports" is what the pages
@@ -19,6 +20,7 @@ Everything below reads data that is already collected. No new source is needed.
 | Mapped MAZ | `fct_zone_battles` | 45,675 over 11,721 zones |
 | Tournament MAZ | `stg_battlestats where is_tournament` | 15,837 over 2,812 zones, from 2014-06-06 |
 | Player rows | `players` column, one packed string per report | ~924,728 when unpacked |
+| Per-report metrics | `maz_stats.bin.br`, exported nightly | 45,685 rows, row-aligned with `maz.bin.br` |
 
 **The tournament record does not need starting — it goes back to 2014-06-06** and runs
 steady at roughly 1,150–1,700 reports a year. What does *not* exist anywhere, in any
@@ -63,28 +65,23 @@ surrounding zones is only visible through `fct_zone_events`, which measures bot 
 changes rather than launches. Those are different quantities and comparing them naively
 would overstate the MAZ.
 
-## 3. MAZ timelapse
+## 3. MAZ timelapse — **built**
 
-Flash MAZ on the map over time. Two open questions, and the second should be settled by
-the data rather than by preference:
+Shipped as the `Timelapse` view mode. Both open questions were settled by building all the
+candidates and comparing them on the real map:
 
-- Does a MAZ flash as a point event, or persist and decay?
-- What drives its size — velocity, current streak, or a rolling N-day appearance count?
+- **A MAZ does not flash.** Ten zones a day on a world map reads as nothing.
+- **Size and brightness are both a rolling 30-day appearance count** — "chronic hotspot".
+  Streak flickers; a decay makes "now" fuzzy for no gain.
 
-Three candidate encodings, and they say different things: velocity is "this is escalating
-now", streak is "this has been contested for a while", rolling count is "this is a
-chronic hotspot". Pick with the distribution work from §2 in hand.
+See `CLAUDE.md`, "Timelapse is a mode, not another window".
 
-## 4. Highlight MAZ in the existing views
+## 4. Highlight MAZ in the existing views — **not needed**
 
-Smaller and more immediate than the timelapse.
-
-- On the Day view, mark the zones that were MAZ that day.
-- On Week and longer, some aggregate treatment — count of appearances in the window is the
-  obvious candidate, but see §3.
-
-Constraint from the viewer's own rules: whatever this looks like, **picking must apply the
-same tests as drawing**, or a hover confidently describes something the reader cannot see.
+Folded into §3 rather than built separately. A MAZ ring only ever draws in Timelapse, and
+the aggregate treatment this section wanted for Week and longer turned out to be the same
+rolling window the timelapse already uses. Adding it to the windows as well would put a
+second time model in front of the same marks.
 
 ## 5. Tournament (Atlantis) map layer
 
@@ -111,6 +108,11 @@ probably the organising key for whatever that layer looks like.
 Weapon launches break down by type and faction — 15 weapons × 4 factions on every report,
 already landed and currently unread by any model. Combined with the unpacked player rows
 there is enough for a real analytical surface.
+
+Per-report totals are already exported and kept current: `maz_stats.bin.br` carries active
+players, launches and bots launched/killed/lost, row-aligned with `maz.bin.br` so `idx`
+joins on to names, coordinates and history. Nothing draws them yet. The per-*player*
+breakdown still needs §1.
 
 Identify which relationships are statistically meaningful before designing anything. The
 temptation with 77 columns is to plot all of them.

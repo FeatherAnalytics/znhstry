@@ -315,8 +315,12 @@ export function useZoneData(
       // The buffers on loan are gone with the worker; the next one allocates.
       spare.current = null;
       answered.current = -1;
+      // No answer is coming for whatever was outstanding, so the delayed
+      // loading state must be cancelled with it or it fires into a torn-down
+      // worker and leaves "Reading…" on for good.
+      settle();
     };
-  }, [base, meta]);
+  }, [base, meta, settle]);
 
   // --- ask for a date -----------------------------------------------------
 

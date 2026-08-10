@@ -36,3 +36,7 @@ web/node_modules/
 
 # Export payloads (~100MB, rebuildable, uploaded to object storage not git)
 dist/
+
+# Working notes: handoffs, ledgers, feature ideas. Local to whoever is working,
+# never part of the repo.
+thoughts/

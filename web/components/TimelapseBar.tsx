@@ -143,7 +143,15 @@ export function TimelapseBar({
           {playing ? "❙❙ Pause" : "▶ Play"}
         </button>
 
-        <span className="display tabular" style={{ fontSize: 17, whiteSpace: "nowrap" }}>
+        {/* Fixed width, not just tabular numerals. The digits are equal-width
+            already; the month is not - "MAY" and "AUG" differ by a few pixels
+            in the display face, which was enough to resize the scrubber on the
+            frames that crossed a month boundary. Reserving the space is the only
+            thing that holds the track still. */}
+        <span
+          className="display tabular"
+          style={{ fontSize: 17, whiteSpace: "nowrap", width: 152, flexShrink: 0 }}
+        >
           {day !== null
             ? dayToDate(epoch, day).toLocaleDateString("en-US", {
                 day: "2-digit",
@@ -153,6 +161,10 @@ export function TimelapseBar({
             : "—"}
         </span>
 
+        {/* Nothing that changes width may sit after this. The counts used to,
+            and every extra digit resized the scrubber mid-playback - the track
+            visibly breathing while the numbers climbed. They live on the row
+            below now, last, where nothing follows them. */}
         <input
           type="range"
           min={bounds?.min ?? 0}
@@ -162,11 +174,6 @@ export function TimelapseBar({
           aria-label="Date"
           style={{ flex: 1, minWidth: 120 }}
         />
-
-        <span className="eyebrow" style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}>
-          {marks.toLocaleString()} MAZ · {flips.toLocaleString()} flips
-          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString()} claimed` : ""}
-        </span>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -214,11 +221,14 @@ export function TimelapseBar({
           </button>
         ))}
 
-        {bounds ? (
-          <span className="eyebrow" style={{ fontSize: 11, color: "var(--text-dim)" }}>
-            {(bounds.max - bounds.min).toLocaleString()} days
-          </span>
-        ) : null}
+        <span
+          className="eyebrow tabular"
+          style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}
+        >
+          {bounds ? `${(bounds.max - bounds.min).toLocaleString()} days · ` : ""}
+          {marks.toLocaleString()} MAZ · {flips.toLocaleString()} flips
+          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString()} claimed` : ""}
+        </span>
       </div>
 
       {caveat ? (

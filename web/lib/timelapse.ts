@@ -287,9 +287,11 @@ export function useMazOverlays({
       for (let i = 0; i < frame.idx.length; i++) {
         const idx = frame.idx[i];
         // A zone whose tile has not landed has no coordinates.
-        if (geometry.idxToSlot[idx] < 0) continue;
-        // A mark must not describe a zone the map is hiding.
-        if (display && display.visible[idx] === 0) continue;
+        const slot = geometry.idxToSlot[idx];
+        if (slot < 0) continue;
+        // A mark must not describe a zone the map is hiding. `visible` is held
+        // by slot, so this goes through the slot we already have.
+        if (display && display.visible[slot] === 0) continue;
         if (focus && focus[idx] === 0) continue;
 
         const rgb = palette[frame.to[i]] ?? palette[0];

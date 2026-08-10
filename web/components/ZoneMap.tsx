@@ -24,16 +24,23 @@ function graticule(step = 15) {
 
 const FACTION_VARS = ["--dormant", "--legion", "--swarm", "--faceless"] as const;
 
-function readFactionColors(): number[][] {
+/**
+ * Four RGB triples, flat: faction `f` is bytes `f * 3` onwards.
+ *
+ * Flat and typed rather than `number[][]` because the fill loop below reads it
+ * up to 1.6M times a frame, and every element of an array-of-arrays is a boxed
+ * pointer chase where a Uint8Array is a byte load.
+ */
+function readFactionColors(): Uint8Array {
   const styles = getComputedStyle(document.documentElement);
-  return FACTION_VARS.map((name) => {
+  const out = new Uint8Array(FACTION_VARS.length * 3);
+  FACTION_VARS.forEach((name, f) => {
     const hex = styles.getPropertyValue(name).trim();
-    return [
-      parseInt(hex.slice(1, 3), 16),
-      parseInt(hex.slice(3, 5), 16),
-      parseInt(hex.slice(5, 7), 16),
-    ];
+    out[f * 3] = parseInt(hex.slice(1, 3), 16);
+    out[f * 3 + 1] = parseInt(hex.slice(3, 5), 16);
+    out[f * 3 + 2] = parseInt(hex.slice(5, 7), 16);
   });
+  return out;
 }
 
 /** A ring of `steps` points at `radiusKm` around a point, for the range overlay. */
@@ -135,11 +142,6 @@ export function ZoneMap({
 }: ZoneMapProps) {
   const colors = useRef(new Uint8Array(geometry.size * 4));
   const radii = useRef(new Float32Array(geometry.size));
-  // Positions are copied rather than referenced because the draw list is
-  // compacted -- see below. Sized for the worst case, used up to `drawn`.
-  const points = useRef(new Float32Array(geometry.size * 2));
-  /** Draw row -> slot, so a pick can be turned back into a zone. */
-  const drawnToSlot = useRef(new Int32Array(geometry.size));
   const drawn = useRef(0);
 
   // The 1,087,356 zones never played in fourteen years. Their colour and radius
@@ -151,6 +153,62 @@ export function ZoneMap({
   const terrainToSlot = useRef(new Int32Array(geometry.size));
   const terrain = useRef(0);
 
+  /**
+   * Radius for every magnitude bucket, so the loop below reads a byte-indexed
+   * table instead of calling a method 1.6M times a frame.
+   *
+   * `pk` carries six bits of magnitude, so 64 entries is the whole domain and
+   * the table is exact rather than an approximation of the function it replaces.
+   * The call was 3.7% of all CPU during playback on its own.
+   */
+  const radiusFor = useMemo(() => {
+    const table = new Float32Array(64);
+    for (let m = 1; m < 64; m++) table[m] = display.radius(m);
+    return table;
+  }, [display]);
+
+  const terrainCount = geometry.count;
+
+  /**
+   * The draw list's membership: every played slot, in slot order.
+   *
+   * **Membership is the played world, not what the view is showing**, and that
+   * is the whole point. A list compacted to what is currently drawn has to be
+   * rebuilt whenever a single zone appears or disappears, which is every day of
+   * a timelapse - 1,595,089 rows written to answer a change of 3,251. Fixing
+   * membership to something the date cannot alter makes a date a patch of the
+   * rows that actually moved.
+   *
+   * Zones the view is not showing keep their row at radius 0 and alpha 0. That
+   * is not free - it is what compacting was introduced to avoid - so see
+   * `drawnRow` for how a pick is kept honest, and the terrain layer below for
+   * the 1,087,356 zones that stay out of here entirely.
+   */
+  const membership = useMemo(() => {
+    const { everActiveBySlot, count } = geometry;
+    const slots = new Int32Array(count);
+    let n = 0;
+    for (let slot = 0; slot < count; slot++) if (everActiveBySlot[slot] !== 0) slots[n++] = slot;
+    return { slots, length: n };
+  }, [geometry, terrainCount]);
+
+  /**
+   * Positions, written once per membership change and never per date.
+   *
+   * A zone does not move. Copying two floats per row per frame was 12 MB of
+   * writes to say so.
+   */
+  const positionsFor = useMemo(() => {
+    const { positions } = geometry;
+    const { slots, length } = membership;
+    const out = new Float32Array(length * 2);
+    for (let r = 0; r < length; r++) {
+      out[r * 2] = positions[slots[r] * 2];
+      out[r * 2 + 1] = positions[slots[r] * 2 + 1];
+    }
+    return out;
+  }, [geometry, membership]);
+
   // Binary attributes rather than accessor functions. deck.gl calls an
   // accessor once per object per update, which is fine for 144k zones and far
   // too slow at 2.7M -- filling typed arrays directly keeps a global scrub
@@ -160,76 +218,105 @@ export function ZoneMap({
   // from these same arrays, so an effect would populate them one frame after
   // deck.gl had already read them as zeroes.
   //
-  // Indexed by *slot*, the render order tiles arrive in, while game state is
-  // indexed by *idx*. slotToIdx is the bridge and the reason this loop looks
-  // indirect.
+  // Everything read per zone is in *slot* order - `pk` and `visible` are
+  // permuted by the worker, `everActiveBySlot` is written when the tile lands -
+  // so the scan is sequential. The two masks are the exception and stay in idx
+  // order, because they are built from idx-keyed geometry and read that way by
+  // everything else; `slotToIdx` is consulted only when a mask exists.
+  //
+  // **A date only patches the rows whose bytes changed.** Everything else
+  // depends on the view, not the day, so anything but a new date rewrites the
+  // lot. Measured over a timelapse: 3,251 rows move per day against 1,595,089.
+  const shadowPk = useRef(new Uint8Array(0));
+  const shadowVisible = useRef(new Uint8Array(0));
+  const shadowKey = useRef("");
+
+  // Only a mask in use makes its version meaningful; see the note in the loop.
+  const maskVersion = only ? (onlyVersion ?? 0) : 0;
+
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = colors.current;
     const radiusArray = radii.current;
-    const pointArray = points.current;
-    const backToSlot = drawnToSlot.current;
-    const { slotToIdx, everActive, count, positions } = geometry;
-    let n = 0;
+    const { slotToIdx } = geometry;
+    const { slots, length } = membership;
+    const mask = only ?? null;
+    const masked = filter !== null || mask !== null;
 
-    for (let slot = 0; slot < count; slot++) {
-      const idx = slotToIdx[slot];
-      // One byte carries both facts, so this is one memory read per zone
-      // rather than two - which matters when the loop runs 2.68M times on
-      // every scrub.
-      // Never-played zones live in the terrain layer below and are skipped here.
-      if (everActive[idx] === 0) continue;
+    // Anything that is not the date invalidates every row, because it changes
+    // how a row is drawn rather than what the zone holds.
+    //
+    // `onlyVersion` counts only when there is a mask to version. It is the flip
+    // stream's counter and bumps on every frame of a timelapse whether or not
+    // the cumulative backdrop is the one asking, so keying on it unconditionally
+    // marked every frame a full rebuild and this stayed incremental in name only.
+    const maskKey = mask ? `m${onlyVersion ?? 0}` : "";
+    const key = `${length}|${draw}|${filter ? "f" : ""}|${maskKey}`;
+    const full = shadowKey.current !== key;
+    shadowKey.current = key;
 
-      const pk = display.pk[idx];
+    if (shadowPk.current.length !== length) {
+      shadowPk.current = new Uint8Array(length);
+      shadowVisible.current = new Uint8Array(length);
+    }
+    const wasPk = shadowPk.current;
+    const wasVisible = shadowVisible.current;
+
+    for (let r = 0; r < length; r++) {
+      const slot = slots[r];
+      const pk = display.pk[slot];
+      const visible = display.visible[slot];
+      if (!full && pk === wasPk[r] && visible === wasVisible[r]) continue;
+      wasPk[r] = pk;
+      wasVisible[r] = visible;
+
       const magnitude = pk & 63;
+      const o = r * 4;
 
       // Empty zones are always drawn; held zones answer to the change window,
       // or are dropped outright when the reader asked for empty ones only.
-      //
-      // Skipped rather than written at zero alpha. A hidden zone used to keep
-      // its row so the buffers could stay slot-aligned, which meant the GPU
-      // processed 2.68M instances and re-uploaded 43 MB whatever was on screen -
-      // and on the Day view about three thousand zones are visible. Compacting
-      // costs one indirection on pick and buys two orders of magnitude here.
-      if (magnitude !== 0 && (draw === "empty" || display.visible[idx] === 0)) continue;
-      if (magnitude !== 0 && only !== null && only !== undefined && only[idx] === 0) continue;
-
-      const o = n * 4;
-      pointArray[n * 2] = positions[slot * 2];
-      pointArray[n * 2 + 1] = positions[slot * 2 + 1];
-      backToSlot[n] = slot;
+      let hidden = magnitude !== 0 && (draw === "empty" || visible === 0);
 
       // Outside the filter a zone stays on the map but stops competing for
       // attention. It is context, not data: dimming to a quarter was not
       // enough, because there are two million of them and faint times two
-      // million still reads as a wash of colour.
-      const muted = filter !== null && filter[idx] === 0;
+      // million still reads as a wash of color.
+      let muted = false;
+      if (masked) {
+        const idx = slotToIdx[slot];
+        if (!hidden && magnitude !== 0 && mask !== null && mask[idx] === 0) hidden = true;
+        muted = filter !== null && filter[idx] === 0;
+      }
 
-      if (magnitude > 0) {
-        const rgb = palette[pk >> 6] ?? palette[0];
-        colorArray[o] = rgb[0];
-        colorArray[o + 1] = rgb[1];
-        colorArray[o + 2] = rgb[2];
+      if (hidden) {
+        // Radius *and* alpha, because `radiusMinPixels` would otherwise still
+        // put a 0.6 px dot on screen for a zone the view is hiding.
+        colorArray[o + 3] = 0;
+        radiusArray[r] = 0;
+      } else if (magnitude > 0) {
+        const rgb = (pk >> 6) * 3;
+        colorArray[o] = palette[rgb];
+        colorArray[o + 1] = palette[rgb + 1];
+        colorArray[o + 2] = palette[rgb + 2];
         colorArray[o + 3] = muted ? 26 : 215;
         // Counts span six orders of magnitude, so size is logarithmic and
-        // capped in pixels. Colour carries who holds a zone; size stays quiet.
-        radiusArray[n] = muted ? 300 : display.radius(magnitude);
+        // capped in pixels. Color carries who holds a zone; size stays quiet.
+        radiusArray[r] = muted ? 300 : radiusFor[magnitude];
       } else {
         // An empty zone is grey whoever nominally holds it: with no bots there
-        // is nothing to own, and colouring it by faction overstates control.
+        // is nothing to own, and coloring it by faction overstates control.
         // This branch is only ever a zone that has been played and fought down
         // to nothing - part of the story. One never touched in fourteen years
         // is terrain, and is drawn by the layer below.
-        colorArray[o] = palette[0][0];
-        colorArray[o + 1] = palette[0][1];
-        colorArray[o + 2] = palette[0][2];
+        colorArray[o] = palette[0];
+        colorArray[o + 1] = palette[1];
+        colorArray[o + 2] = palette[2];
         colorArray[o + 3] = muted ? 12 : 110;
-        radiusArray[n] = 400;
+        radiusArray[r] = 400;
       }
-      n++;
     }
-    drawn.current = n;
-  }, [geometry, display, version, filter, draw, only, onlyVersion]);
+    drawn.current = length;
+  }, [geometry, membership, display, radiusFor, version, filter, draw, only, maskVersion]);
 
   /**
    * Terrain: built as tiles land and when the filter moves, and never per date.
@@ -239,25 +326,24 @@ export function ZoneMap({
    * The count changes only while tiles are arriving, so during a timelapse these
    * buffers are uploaded zero times.
    */
-  const terrainCount = geometry.count;
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = terrainColors.current;
     const pointArray = terrainPoints.current;
     const backToSlot = terrainToSlot.current;
-    const { slotToIdx, everActive, positions } = geometry;
+    const { slotToIdx, everActiveBySlot, positions } = geometry;
     let n = 0;
 
     for (let slot = 0; slot < terrainCount; slot++) {
+      if (everActiveBySlot[slot] !== 0) continue;
       const idx = slotToIdx[slot];
-      if (everActive[idx] !== 0) continue;
       const o = n * 4;
       pointArray[n * 2] = positions[slot * 2];
       pointArray[n * 2 + 1] = positions[slot * 2 + 1];
       backToSlot[n] = slot;
-      colorArray[o] = palette[0][0];
-      colorArray[o + 1] = palette[0][1];
-      colorArray[o + 2] = palette[0][2];
+      colorArray[o] = palette[0];
+      colorArray[o + 1] = palette[1];
+      colorArray[o + 2] = palette[2];
       colorArray[o + 3] = filter !== null && filter[idx] === 0 ? 12 : 55;
       n++;
     }
@@ -294,18 +380,37 @@ export function ZoneMap({
    * `updateTriggers: version` is still what makes a repaint happen. This only
    * stops the uploads nobody asked for.
    */
+  /**
+   * Rebuilt whenever anything it draws changes, and that is not optional.
+   *
+   * **`updateTriggers` does not cover binary attributes.** deck.gl re-uploads
+   * these only when the `data` object itself is a new one; a changed trigger
+   * moves nothing. Pinning this across dates to stop the position buffer being
+   * re-sent was tried and froze the map outright - the panel read "3K of 2.7M
+   * occupied" on 15 Feb 2013 while the dots still showed 2019.
+   *
+   * The cost of that is real and unavoidable in this shape: a date re-uploads
+   * position as well as color and radius, and a zone does not move. Position is
+   * 8 of the 16 bytes a row. Buffer upload is 61.7% of the main thread and is
+   * now the binding constraint on playback - the fix has to be a smaller layer,
+   * not a cleverer trigger.
+   */
   const zoneData = useMemo(
     () => ({
-      length: drawn.current,
+      length: membership.length,
       attributes: {
-        getPosition: { value: points.current, size: 2 },
+        getPosition: { value: positionsFor, size: 2 },
+        // The whole arrays, not views of them. `length` is what deck.gl reads,
+        // and handing it a fresh `subarray` each frame made the upload five
+        // times more expensive than handing it the same backing array.
         getFillColor: { value: colors.current, size: 4 },
         getRadius: { value: radii.current, size: 1 },
       },
     }),
-    // Every input that can change how many rows are drawn, or what is in them.
-    // The arrays are mutated in place, so identity alone would never say so.
-    [geometry, display, version, filter, draw, only, onlyVersion],
+    // Every input that can change what is in the rows. The arrays are mutated
+    // in place, so identity alone would never say so. The row *count* no longer
+    // moves with the date - see `membership`.
+    [membership, positionsFor, display, version, filter, draw, only, maskVersion],
   );
 
   const graticuleData = useMemo(() => graticule(), []);
@@ -392,12 +497,9 @@ export function ZoneMap({
       radiusMaxPixels: 9,
       stroked: false,
       pickable: true,
-      // `filter` and `draw` belong here as much as `version` does. The loop
-      // above rewrites `colors.current` and `radii.current` in place, and deck.gl
-      // cannot see a mutation - only a changed trigger makes it re-upload. While
-      // the `data` object was rebuilt inline on every render that re-upload
-      // happened by accident on every render, which hid the omission; once it
-      // was memoised, dimming an area stopped repainting the map at all.
+      // Keyed on `zoneData` itself, because for binary attributes that object's
+      // identity is the only thing deck.gl actually watches - see the note on
+      // the memo above, and do not try to narrow these to a cheaper key.
       updateTriggers: {
         getFillColor: zoneData,
         getRadius: zoneData,
@@ -468,13 +570,17 @@ export function ZoneMap({
    */
   const picked = (info: PickingInfo): number | null => {
     if (info.index < 0) return null;
-    // Both draw lists are compacted, so a pick index is a row in one of them
-    // rather than a slot. Everything in either list passed its visibility test
-    // when it was written, which is what makes this agree with what is on
-    // screen by construction rather than by repeating the test and hoping the
-    // two stay in step.
-    if (info.layer?.id === "zones" && info.index < drawn.current) {
-      return geometry.slotToIdx[drawnToSlot.current[info.index]];
+    // A pick index is a row in one of the two lists, not a slot.
+    //
+    // The zones list holds every played zone whether the view is showing it or
+    // not, so unlike the terrain list its rows do *not* all pass the visibility
+    // test - that is the price of a membership the date cannot change. `radius`
+    // is the test, and it is the same array the frame was drawn from rather
+    // than a second opinion that could drift from it: a row at radius 0 covers
+    // no pixels the reader could have meant.
+    if (info.layer?.id === "zones" && info.index < membership.length) {
+      if (radii.current[info.index] === 0) return null;
+      return geometry.slotToIdx[membership.slots[info.index]];
     }
     if (info.layer?.id === "terrain" && info.index < terrain.current) {
       return geometry.slotToIdx[terrainToSlot.current[info.index]];

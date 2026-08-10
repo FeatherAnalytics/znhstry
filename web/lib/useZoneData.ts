@@ -80,6 +80,12 @@ export interface ZoneData {
   changeStart: number | null;
   /** Zones drawn after a change window has hidden the ones that stood still. */
   shown: number | null;
+  /**
+   * Zones holding bots on the answered date, or null before the worker has
+   * answered at all - during the first tile pass `paint/` fills `display.pk`
+   * directly and no worker answer has landed yet, so the panel counts its own.
+   */
+  held: number | null;
   /** Bumped whenever the map needs to redraw: new tiles, or a new date. */
   version: number;
   /** The latest answered day's changes of hands, or null unless asked for. */
@@ -134,6 +140,7 @@ export function useZoneData(
   const [series, setSeries] = useState<SparseSeries | null>(null);
   const [day, setDay] = useState<number | null>(null);
   const [shown, setShown] = useState<number | null>(null);
+  const [held, setHeld] = useState<number | null>(null);
   const [flips, setFlips] = useState<DayFlips | null>(null);
   const [version, setVersion] = useState(0);
   const [progress, setProgress] = useState<LoadProgress>({
@@ -148,17 +155,37 @@ export function useZoneData(
   const loaderRef = useRef<LoaderHandle | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const displayRef = useRef<ZoneDisplay | null>(null);
+  const geometryRef = useRef<ZoneGeometry | null>(null);
   // Buffers the worker fills are lent back to it rather than reallocated:
   // playback asks eight times a second and each pair is 5.4 MB.
   const spare = useRef<{ pk: Uint8Array; visible: Uint8Array } | null>(null);
   const requested = useRef(0);
   const answered = useRef(-1);
   const repaintAt = useRef(0);
+  /** Slots the worker has been told about. Only ever grows. */
+  const sentSlots = useRef(0);
   const pending = useRef(false);
   /** Delays the visible loading state; see `pending`. */
   const scrubTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onFlipsRef = useRef(onFlips);
   onFlipsRef.current = onFlips;
+
+  /**
+   * Hand the worker the slots assigned since the last time it was told.
+   *
+   * Called on every tile rather than on the repaint throttle, and before any
+   * date is asked for, so the worker's permutation is never behind the geometry
+   * the page is about to draw. Posting is cheap: one tile is about 64 KB and the
+   * buffer is transferred, not copied.
+   */
+  const sendPermutation = useCallback((geometry: ZoneGeometry) => {
+    const worker = workerRef.current;
+    if (!worker || geometry.count <= sentSlots.current) return;
+    const from = sentSlots.current;
+    const idx = geometry.slotToIdx.slice(from, geometry.count);
+    sentSlots.current = geometry.count;
+    worker.postMessage({ type: "permute", from, idx }, [idx.buffer]);
+  }, []);
 
   const settle = useCallback(() => {
     pending.current = false;
@@ -195,6 +222,7 @@ export function useZoneData(
       const geo = new ZoneGeometry(m.scope.zone_count);
       const disp = new ZoneDisplay(m.scope.zone_count, m.display.magnitude_steps);
       displayRef.current = disp;
+      geometryRef.current = geo;
       setMeta(m);
       setGeometry(geo);
       setDisplay(disp);
@@ -229,6 +257,9 @@ export function useZoneData(
         focus: { lat: 26, lon: 8 },
         onTile: (stage, remaining) => {
           if (cancelled) return;
+          // Unthrottled, unlike the repaint below: the worker must know about a
+          // slot before it is asked for a date that draws it.
+          sendPermutation(geo);
           const now = performance.now();
           const last = remaining === 0;
           if (last || now - repaintAt.current > REPAINT_INTERVAL_MS) {
@@ -253,7 +284,7 @@ export function useZoneData(
       cancelled = true;
       loaderRef.current?.cancel();
     };
-  }, [base]);
+  }, [base, sendPermutation]);
 
   // --- the display worker -------------------------------------------------
 
@@ -290,6 +321,7 @@ export function useZoneData(
 
       settle();
       setShown(state.shown);
+      setHeld(state.held);
       if (state.flips) {
         const answer = { day: state.day, ...state.flips };
         setFlips(answer);
@@ -309,6 +341,10 @@ export function useZoneData(
       display: meta.display,
     });
 
+    // A fresh worker knows no slots, however many tiles have already landed.
+    sentSlots.current = 0;
+    if (displayRef.current && geometryRef.current) sendPermutation(geometryRef.current);
+
     return () => {
       worker.terminate();
       workerRef.current = null;
@@ -320,7 +356,7 @@ export function useZoneData(
       // worker and leaves "Reading…" on for good.
       settle();
     };
-  }, [base, meta, settle]);
+  }, [base, meta, settle, sendPermutation]);
 
   // --- ask for a date -----------------------------------------------------
 
@@ -382,6 +418,7 @@ export function useZoneData(
     dayBounds,
     changeStart,
     shown: changeStart === null ? null : shown,
+    held,
     version,
     flips,
     pending,

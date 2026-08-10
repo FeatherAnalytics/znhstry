@@ -56,7 +56,27 @@ export interface ShowMessage {
   flips?: boolean;
 }
 
-export type WorkerRequest = InitMessage | ShowMessage;
+/**
+ * Tell the worker which zone sits in which render slot.
+ *
+ * Slots are handed out in tile arrival order and a tile is always one
+ * contiguous run of them, so this is only ever an append: `idx[k]` is the zone
+ * at slot `from + k`. Sent per tile - about 64 KB a message, transferred - and
+ * never as one 10.7 MB array, because early tiles must reach the worker before
+ * it answers anything.
+ *
+ * The worker needs it because `pk` and `visible` go back in slot order. Message
+ * delivery is ordered, so a `permute` posted before a `show` is applied before
+ * it, and the worker can never answer using a permutation older than the
+ * geometry the page is about to draw.
+ */
+export interface PermuteMessage {
+  type: "permute";
+  from: number;
+  idx: Int32Array;
+}
+
+export type WorkerRequest = InitMessage | ShowMessage | PermuteMessage;
 
 export interface StateMessage {
   type: "state";
@@ -64,6 +84,23 @@ export interface StateMessage {
   day: number;
   /** Zones drawn, after a change window has hidden the ones that stood still. */
   shown: number;
+  /**
+   * Zones holding bots on `day`.
+   *
+   * Counted here rather than by the panel because the worker is already walking
+   * every byte and the main thread was not: the panel's own pass read `pk` and
+   * `visible` through the slot indirection, which is a cache miss per zone and
+   * measured 10.8% of all CPU during playback. Sequential, off-thread, it is
+   * free. Only the unfiltered count - an area selection is the page's own mask
+   * and the worker knows nothing about it.
+   */
+  held: number;
+  /**
+   * Both **by slot**, not by idx - see `ZoneDisplay`.
+   *
+   * Only the slots the worker has been told about are written; the tail is left
+   * alone, and the page never reads past `geometry.count`.
+   */
   pk: Uint8Array;
   visible: Uint8Array;
   /**

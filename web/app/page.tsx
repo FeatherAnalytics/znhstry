@@ -151,6 +151,9 @@ export default function Page() {
   const data = useZoneData(BASE, span, readMode, timelapse, stream.absorb);
   const { meta, geometry, display, lookups, zoneIds, series, day, dayBounds, changeStart, progress } =
     data;
+  // Pulled out because the playback loops below own a timer each and must key
+  // on it rather than on `data`, whose identity changes on every frame.
+  const { setDay } = data;
 
   useEffect(() => {
     if (meta) setZoneCount(meta.scope.zone_count);
@@ -422,14 +425,40 @@ export default function Page() {
     //   held   zones with bots on the ground. Not the control flag, which keeps
     //          naming a faction long after its last bot has gone.
     //   drawn  zones the window is showing, which is what "moved" means.
-    let held = 0;
-    let drawn = 0;
+    //
+    // Without an area selection none of the three needs a pass over 2.68M zones
+    // on this thread: the worker counts `held` in the sequential pass it already
+    // makes, `drawn` is the `shown` it already reports, and `count` is only ever
+    // rendered when there is a selection to be a denominator of. Walking them
+    // here read `pk` and `visible` through the slot indirection - a cache miss
+    // per zone, on the frame path, and 10.8% of all CPU during playback.
+    //
+    // The selection case still counts, because the mask is the page's own and
+    // the worker has never seen it. The first-load case does too: `paint/` fills
+    // `display.pk` straight off the tiles before any worker answer has landed.
+    let held: number;
+    let drawn: number;
     let count = 0;
-    for (let i = 0; i < display.size; i++) {
-      if (filter && !filter[i]) continue;
-      count++;
-      if (display.pk[i] !== 0) held++;
-      if (display.visible[i] !== 0) drawn++;
+
+    if (!filter && data.held !== null) {
+      held = data.held;
+      drawn = data.shown ?? display.size;
+    } else {
+      // By slot, because that is the order `pk` and `visible` are held in. The
+      // mask is the page's own and stays in idx order, so it is the one thing
+      // reached through `slotToIdx` here. Bounded by the slots actually loaded,
+      // so a count taken mid-load describes the zones on the map rather than
+      // the whole world.
+      held = 0;
+      drawn = 0;
+      const slots = geometry?.count ?? 0;
+      const toIdx = geometry?.slotToIdx;
+      for (let slot = 0; slot < slots; slot++) {
+        if (filter && !filter[toIdx![slot]]) continue;
+        count++;
+        if (display.pk[slot] !== 0) held++;
+        if (display.visible[slot] !== 0) drawn++;
+      }
     }
 
     const at = (d: number) =>
@@ -466,7 +495,7 @@ export default function Page() {
     };
     // data.version so the counts follow the map as tiles land and dates change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, display, history, day, changing, changeStart, data.version]);
+  }, [filter, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
 
   /** A year earlier on the same series, for the growth figure. */
   const previous: Totals | null = useMemo(() => {
@@ -500,7 +529,9 @@ export default function Page() {
       hoveredIdx.current = idx;
       if (idx === null || !display || !geometry || !meta || day === null) return setHovered(null);
 
-      const pk = display.pk[idx];
+      // `pk` is held by slot; a hover arrives as an idx.
+      const slot = geometry.idxToSlot[idx];
+      const pk = slot < 0 ? 0 : display.pk[slot];
       const describe = (over: Partial<HoveredZone> = {}): HoveredZone => {
         const identity = zoneIdentity(geometry, lookups, zoneIds, idx);
         return {
@@ -570,13 +601,18 @@ export default function Page() {
    * the playhead never waits for the map; it leads and the map catches up.
    */
   useEffect(() => {
-    if (!playing || !dayBounds) return;
+    // Timelapse runs the loop below instead, and the two must never both be
+    // live: this one scales its step by real elapsed time at 260 days a second,
+    // so a single long frame turns into a two-month jump on a view that
+    // promises every day in order. `playing` is shared between the two modes,
+    // so the guard has to be here rather than in whoever sets it.
+    if (!playing || timelapse || !dayBounds) return;
     let last = performance.now();
     const id = setInterval(() => {
       const now = performance.now();
       const advance = Math.max(1, Math.round(((now - last) / 1000) * PLAY_DAYS_PER_SECOND));
       last = now;
-      data.setDay((current) => {
+      setDay((current) => {
         if (current === null) return current;
         if (current + advance >= dayBounds.max) {
           setPlaying(false);
@@ -586,7 +622,7 @@ export default function Page() {
       });
     }, 1000 / PLAY_HZ);
     return () => clearInterval(id);
-  }, [playing, timelapse, dayBounds, data]);
+  }, [playing, timelapse, dayBounds, setDay]);
 
   /**
    * Timelapse playback: one day per frame, never more.
@@ -617,12 +653,15 @@ export default function Page() {
       if (current === null) return;
       const next = current + 1 > lapseBounds.max ? lapseBounds.min : current + 1;
       dayRef.current = next;
-      data.setDay(next);
+      setDay(next);
     };
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, timelapse, lapseBounds, data]);
+    // `setDay` and not `data`: keyed on the whole object this effect tore down
+    // and rebuilt on every render, which reset `last` and `debt` each time and
+    // left the run advancing at a fraction of the rate asked for.
+  }, [playing, timelapse, lapseBounds, setDay]);
 
   const clearFocus = useCallback(() => {
     setSelectedZone(null);

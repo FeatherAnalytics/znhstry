@@ -169,6 +169,76 @@ def spread(points: Sequence[tuple[float, float]]) -> Spread:
     )
 
 
+def cluster(
+    points: Sequence[tuple[Any, float, float]],
+    *,
+    within_km: float = config.NEIGHBORHOOD_KM,
+) -> list[list[Any]]:
+    """Group `(key, lat, lon)` points into neighborhoods, biggest group first.
+
+    Single linkage: two points are in the same group when they are within
+    `within_km` of each other, and that relation is transitive. Returns the keys,
+    not the points, so a caller can look up whatever else it holds about them -
+    and can hand the same keys to `spread` to measure what came back.
+
+    **Single linkage chains, and that is a feature here rather than a flaw to
+    tune away.** A row of zones each 40 km from the next is one front, and a
+    grouping that split it at an arbitrary diameter would be answering a
+    different question. It does mean a group's diameter can exceed `within_km`
+    several times over, so **rank groups by `spread`, never by the cutoff** - the
+    cutoff says what counts as adjacent, not how big a neighborhood may be.
+
+    Ordered by size then by first appearance, so the caller sees the day's main
+    event first and the ordering does not depend on dictionary iteration.
+    Singletons come back as one-element groups rather than being dropped: a zone
+    fighting alone is a real answer to "how concentrated was this day", and
+    silently removing it would make the group count disagree with the input.
+
+    O(n^2) in the number of points, which is the right trade for the ten to
+    thirty a MAZ day carries. It is not the way to cluster 2.68M zones.
+    """
+    n = len(points)
+    if n == 0:
+        return []
+
+    lat = np.array([p[1] for p in points], dtype=np.float64)
+    lon = np.array([p[2] for p in points], dtype=np.float64)
+    matrix = haversine_km_array(lat[:, None], lon[:, None], lat[None, :], lon[None, :])
+
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if matrix[i, j] <= within_km:
+                a, b = find(i), find(j)
+                if a != b:
+                    parent[b] = a
+
+    groups: dict[int, list[Any]] = {}
+    first: dict[int, int] = {}
+    for i in range(n):
+        root = find(i)
+        groups.setdefault(root, []).append(points[i][0])
+        first.setdefault(root, i)
+
+    # Size first, then the position of the group's first member, so two groups of
+    # equal size come back in the order they were given rather than by root id -
+    # which is an implementation detail and would make the output unstable.
+    return [
+        group
+        for _, group in sorted(
+            ((root, group) for root, group in groups.items()),
+            key=lambda item: (-len(item[1]), first[item[0]]),
+        )
+    ]
+
+
 @dataclass(frozen=True)
 class Neighbor:
     key: Any

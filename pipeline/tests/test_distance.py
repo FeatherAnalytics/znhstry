@@ -234,3 +234,78 @@ def test_nearest_bbox_prefilter_keeps_points_just_inside_the_radius() -> None:
 def test_nearest_returns_nothing_rather_than_raising_on_an_empty_set() -> None:
     assert distance.nearest(51.0, 1.0, [], within_km=10) == []
     assert distance.nearest(51.0, 1.0, CANDIDATES, within_km=0.0001) == []
+
+
+# --- cluster ------------------------------------------------------------------
+
+# The 2019-06-11 Kent day, the only time six of the world's ten most active zones
+# sat in one region, plus a Dallas zone that has no business joining them.
+KENT = [
+    ("aylesham", 51.2287, 1.2044),
+    ("bekesbourne", 51.2668, 1.1358),
+    ("blean", 51.3, 1.05),
+    ("bridge", 51.2451, 1.1264),
+    ("tankerton", 51.3615, 1.04629),
+    ("whitstable", 51.3607, 1.0257),
+]
+
+
+def test_cluster_finds_the_kent_knot_and_leaves_dallas_out() -> None:
+    groups = distance.cluster([*KENT, ("dallas", 32.7767, -96.7970)])
+
+    assert len(groups) == 2
+    assert sorted(groups[0]) == sorted(k for k, _, _ in KENT)
+    assert groups[1] == ["dallas"]
+
+
+def test_cluster_orders_by_size_then_by_first_appearance() -> None:
+    """Two groups of equal size must come back in input order, not root order."""
+    points = [
+        ("a1", 0.0, 0.0),
+        ("b1", 40.0, 0.0),
+        ("a2", 0.0, 0.1),
+        ("b2", 40.0, 0.1),
+    ]
+    groups = distance.cluster(points, within_km=50)
+
+    assert groups == [["a1", "a2"], ["b1", "b2"]]
+
+
+def test_cluster_chains_through_intermediate_points() -> None:
+    """Single linkage joins A to C through B even when A and C are far apart.
+
+    Documented behaviour rather than an accident: a row of zones each within the
+    cutoff of the next is one front. It is also why a group's diameter has to be
+    measured with `spread` instead of assumed from the cutoff.
+    """
+    chain = [("a", 0.0, 0.0), ("b", 0.0, 0.3), ("c", 0.0, 0.6), ("d", 0.0, 0.9)]
+    groups = distance.cluster(chain, within_km=40)
+
+    assert groups == [["a", "b", "c", "d"]]
+    assert distance.spread([(0.0, 0.0), (0.0, 0.9)]).diameter_km > 40
+
+
+def test_cluster_splits_when_nothing_is_within_the_cutoff() -> None:
+    groups = distance.cluster(KENT, within_km=0.5)
+
+    assert len(groups) == len(KENT)
+    assert all(len(g) == 1 for g in groups)
+
+
+def test_cluster_keeps_every_input_exactly_once() -> None:
+    """A dropped singleton would make the group count disagree with the input."""
+    points = [*KENT, ("dallas", 32.7767, -96.7970), ("sydney", -33.86, 151.20)]
+    groups = distance.cluster(points)
+
+    flat = [key for group in groups for key in group]
+    assert sorted(flat) == sorted(k for k, _, _ in points)
+
+
+def test_cluster_of_nothing_is_nothing() -> None:
+    assert distance.cluster([]) == []
+    assert distance.cluster([("only", 51.0, 1.0)]) == [["only"]]
+
+
+def test_cluster_default_cutoff_is_the_shared_neighborhood_constant() -> None:
+    """The link cutoff and the map's framing margin are deliberately one value."""
+    assert distance.cluster(KENT) == distance.cluster(KENT, within_km=config.NEIGHBORHOOD_KM)

@@ -163,6 +163,21 @@ MISSILE_RANGE_INCREASED = date(2017, 4, 26)
 MISSILE_RANGE_KM_BEFORE = 643.7376  # 400 miles
 MISSILE_RANGE_KM_AFTER = 1609.344  # 1,000 miles
 
+# Thirty miles: the scale at which a group of zones is one neighborhood fight
+# rather than a region's population showing through.
+#
+# One constant with two jobs, deliberately. It is the link cutoff for clustering
+# a day's Most Active Zones by distance, and it is the margin a cluster is framed
+# at on a map - so the circle the statistic describes and the circle the reader
+# sees are the same circle. It is also the "zones within thirty miles" radius the
+# neighborhood questions ask about.
+#
+# Chosen against the record rather than for roundness: the tightest known cluster
+# is five zones inside 11 km, the widest single-neighborhood one about 19 km end
+# to end, and the California days that should *not* collapse into one place are
+# 160 km apart at their closest. 48 km sits clear of both edges.
+NEIGHBORHOOD_KM = 48.28032  # 30 miles
+
 
 def missile_range_km(on: date) -> float:
     """The nanomissile range in force on `on`."""

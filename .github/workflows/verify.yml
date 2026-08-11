@@ -1,0 +1,93 @@
+# Warehouse-side verification for PR #12, run where the R2 secrets live. Dispatch-only,
+# uploads nothing, and is meant to be deleted once the PR merges. It answers the three
+# questions the PR body says need the warehouse:
+#
+#   1. does `dbt build` pass against the real 9.88M events (three tests can genuinely
+#      fire - the checkpoint completeness test and the two warn-severity staging guards)
+#   2. do the packed columns carry any nulls (the export's tripwire would stop on them)
+#   3. is the export deterministic, and how long does the single-scan zone_history take
+#
+# Determinism here means run-to-run: two exports from the same warehouse must be
+# byte-identical. The diff against what production currently serves is expected to show
+# exactly the zone_history manifest (the rounding bug's empty block 0655 disappears) and
+# series/global_daily (pre-2012-07-30 points no longer emitted).
+
+name: Verify PR 12
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Restore extracted data (R2)
+        working-directory: pipeline
+        run: uv run python -m znhstry restore
+
+      - name: Pipeline tests
+        working-directory: pipeline
+        run: uv run pytest
+
+      - name: dbt build
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt build
+
+      - name: Null preflight on packed columns
+        working-directory: transform
+        run: |
+          uv run python - <<'EOF'
+          import duckdb, sys
+          con = duckdb.connect("../data/znhstry.duckdb", read_only=True)
+          events = con.execute("""
+              select count(*) from fct_zone_events
+               where control_state is null or legion_count is null
+                  or swarm_count is null or faceless_count is null
+          """).fetchone()[0]
+          zones = con.execute("""
+              select count(*) from dim_zone
+               where region_id is null or country_id is null
+          """).fetchone()[0]
+          print(f"fct_zone_events null counts: {events}")
+          print(f"dim_zone null region/country (excl. the 3 orphans): {zones}")
+          # The three orphan zones are absent from dim_zone by definition and do not
+          # count here; any other null would stop the export at the _pack tripwire.
+          if events or zones:
+              sys.exit("nulls found - the export will stop on these until the query decides what they mean")
+          EOF
+
+      - name: Export (first run, timed)
+        working-directory: pipeline
+        run: time uv run python -m znhstry export
+
+      - name: Fingerprint
+        run: find dist/data -name '*.br' -type f -exec md5sum {} + | sort > /tmp/first.md5
+
+      - name: Export (second run)
+        working-directory: pipeline
+        run: uv run python -m znhstry export
+
+      - name: Determinism check
+        run: |
+          find dist/data -name '*.br' -type f -exec md5sum {} + | sort > /tmp/second.md5
+          diff /tmp/first.md5 /tmp/second.md5
+          echo "byte-identical across two runs" >> "$GITHUB_STEP_SUMMARY"

@@ -78,7 +78,7 @@ PORTAL_MAX_PER_RUN = 40
 
 # Identify ourselves. QONQR's Dropbox is public, but a request with a name on it
 # is the least we can do for someone publishing data for free.
-USER_AGENT = "znhstry/0.1 (personal analytics project; github.com/mrbri/znhstry)"
+USER_AGENT = "znhstry/0.1 (personal analytics project; github.com/FeatherAnalytics/znhstry)"
 
 # Rows before this are the 2010-01-01 backfill sentinel: 1,449,170 of them, of
 # which only 29 carry any bots. Everything else is genuinely zero, so pre-first-
@@ -92,9 +92,10 @@ DUCKDB_PATH = DATA / "znhstry.duckdb"
 # The export is served from object storage, not from the site bundle, because
 # it needs response headers the site's host cannot set: `Content-Encoding: br`
 # (18% smaller than gzip, and the browser decompresses it, so the client needs
-# no decoding code at all) and a year-long immutable `Cache-Control` on the
-# shards that never change. It also keeps 105 MB of nightly-rewritten binaries
-# out of the site build entirely.
+# no decoding code at all) and a `Cache-Control` that makes every shard
+# revalidate against its ETag rather than be trusted blind - see `upload.py`.
+# It also keeps 105 MB of nightly-rewritten binaries out of the site build
+# entirely.
 WEB_DATA = ROOT / "dist" / "data"
 
 EARTH_RADIUS_KM = 6371.0088

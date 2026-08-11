@@ -18,9 +18,26 @@ from pathlib import Path
 import pytest
 
 from znhstry import config
-from znhstry.portal import ReportUnavailable, _targets, most_active_zones, parse_report
+from znhstry.portal import (
+    ReportUnavailable,
+    _targets,
+    checked_through,
+    most_active_zones,
+    parse_report,
+    record_checked,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# Enough of a report to get past every "there is no report here" check and then fail on
+# the page's own contents: six progress bars, one of which is not a number.
+BROKEN_REPORT = (
+    "<html><body>"
+    "<h1>Dover Heights<br/>New South Wales / Australia<br/>#12642</h1>"
+    "<strong>8/7/2026</strong>"
+    + '<div class="progress">not a number</div>' * 6
+    + "</body></html>"
+)
 
 
 @pytest.fixture(scope="module")
@@ -133,3 +150,40 @@ def test_targets_caps_a_catch_up():
     targets = _targets([100_000], {1})
     assert len(targets) == config.PORTAL_MAX_PER_RUN
     assert targets[0] == 2
+
+
+def test_the_walk_resumes_past_numbers_that_had_no_report():
+    """Half the range is empty, so a whole batch coming back dead is normal.
+
+    Nothing lands on disk when it does, so `max(have)` has not moved and the same
+    forty numbers are walked again the next night, and every night after - a stall
+    that looks exactly like a quiet day in the log.
+    """
+    first = _targets([100_000, 100_001], {10})
+    assert first[0] == 11
+    assert len(first) == config.PORTAL_MAX_PER_RUN
+
+    resumed = _targets([100_000, 100_001], {10}, checked=first[-1])
+    assert resumed[0] == first[-1] + 1
+
+
+def test_how_far_the_walk_got_only_ever_moves_forward(tmp_path, monkeypatch):
+    """Re-reading an old slot by hand must not roll the walk backwards."""
+    monkeypatch.setattr(config, "RAW", tmp_path)
+
+    assert checked_through() == 0
+    record_checked(120)
+    assert checked_through() == 120
+    record_checked(90)
+    assert checked_through() == 120
+
+
+def test_a_page_the_parser_cannot_read_is_a_parse_error():
+    """Which is what the scrape loop catches per report rather than per run.
+
+    A page whose shape has moved raises out of the parser, and left alone it discards
+    every other report the run has already fetched - forty pages of a stranger's
+    bandwidth, thrown away and asked for again tomorrow.
+    """
+    with pytest.raises(ValueError):
+        parse_report(131012, BROKEN_REPORT)

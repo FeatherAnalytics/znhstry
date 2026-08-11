@@ -25,7 +25,9 @@ rather than invited. Three rules follow, and none of them should be relaxed:
 
 A report number that returns nothing is normal, not an error. The BRN range is sparse -
 roughly 61,000 real reports across a span of 131,000 numbers - so misses are logged and
-stepped over rather than raised.
+stepped over rather than raised. Because roughly half the range is empty, how far the
+walk has got cannot be read off the reports on disk; `checked_through.txt` records it, or
+a batch of dead numbers is re-walked every night forever.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -159,16 +162,55 @@ def existing() -> pl.DataFrame | None:
     return pl.read_parquet(path) if path.exists() else None
 
 
-def _targets(listed: list[int], have: set[int]) -> list[int]:
+def _checked_path() -> Path:
+    return config.RAW / "battlestats" / "checked_through.txt"
+
+
+def checked_through() -> int:
+    """The highest report number this pipeline has actually asked the portal for.
+
+    Progress cannot be read off the reports on disk. Roughly half the numbers in the
+    range have no report behind them, so a catch-up whose whole batch comes back empty
+    adds nothing, leaves `max(have)` where it was, and walks the same dead numbers
+    again on the next run and every run after it - a stall that is indistinguishable
+    in the log from a night with nothing new.
+    """
+    path = _checked_path()
+    if not path.exists():
+        return 0
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        log.warning("%s is not a report number; starting the walk from what is on disk", path)
+        return 0
+
+
+def record_checked(highest: int) -> None:
+    """Remember how far the walk got. Only ever forward, and written atomically."""
+    if highest <= checked_through():
+        return
+    path = _checked_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(f"{highest}\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _targets(listed: list[int], have: set[int], checked: int = 0) -> list[int]:
     """Which report numbers to fetch: today's, plus any gap below them.
 
     The index page only ever names today's ten. A run that was missed leaves reports
     that appear on no index anywhere, so the span between what we hold and what is
     listed has to be walked by number - which is also why the cap exists.
+
+    The walk resumes from whichever is further along: the newest report on disk, or
+    the highest number already checked. Numbers below that were asked for and had
+    nothing behind them, which is the normal case rather than a fault.
     """
     wanted = set(listed)
-    if have:
-        wanted |= set(range(max(have) + 1, max(listed)))
+    floor = max(max(have, default=0), checked)
+    if floor:
+        wanted |= set(range(floor + 1, max(listed)))
     return sorted(wanted - have)[: config.PORTAL_MAX_PER_RUN]
 
 
@@ -181,7 +223,7 @@ def scrape_battlestats() -> int:
         listed = most_active_zones(client)
         log.info("most active zones lists %d reports, %s-%s", len(listed), listed[0], listed[-1])
 
-        targets = _targets(listed, have)
+        targets = _targets(listed, have, checked_through())
         if not targets:
             log.info("battlestats: already current at %s", max(have) if have else "nothing")
             return 0
@@ -189,23 +231,43 @@ def scrape_battlestats() -> int:
         log.info("battlestats: fetching %d report(s)", len(targets))
         rows: list[dict[str, Any]] = []
         missing = 0
+        unparsed = 0
+        reached = 0
         for brn in targets:
             time.sleep(config.PORTAL_MIN_INTERVAL)
             try:
                 response = client.get(REPORT_URL.format(brn=brn))
                 response.raise_for_status()
-                rows.append(parse_report(brn, response.text))
-            except ReportUnavailable as exc:
-                missing += 1
-                log.debug("skipped %s", exc)
             except httpx.HTTPError as exc:
                 # Stop rather than hammer a server that is already unhappy. Whatever was
                 # parsed so far is still worth keeping, and the rest resumes next run.
                 log.warning("portal request failed at %s (%s); stopping here", brn, exc)
                 break
 
+            reached = brn
+            try:
+                rows.append(parse_report(brn, response.text))
+            except ReportUnavailable as exc:
+                missing += 1
+                log.debug("skipped %s", exc)
+            except (ValueError, IndexError, KeyError) as exc:
+                # One page the parser cannot read must not throw away the other 39 this
+                # run already paid for - and since the step is continue-on-error, an
+                # escaping exception means the same pages are fetched again tomorrow and
+                # discarded again. Narrow on purpose: these are what the parser raises
+                # when the page's shape has moved, and each one is logged by number so a
+                # layout change is visible rather than merely survived.
+                unparsed += 1
+                log.warning("report %s did not parse (%s: %s)", brn, type(exc).__name__, exc)
+
     if missing:
         log.info("battlestats: %d report number(s) had no report, which is normal", missing)
+    if unparsed:
+        log.warning("battlestats: %d report(s) fetched but not parsed", unparsed)
+    # Before the merge: a run that fetched nothing usable still made progress through
+    # the range, and that is exactly the run whose progress is otherwise invisible.
+    if reached:
+        record_checked(reached)
     if not rows:
         return 0
 

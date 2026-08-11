@@ -24,7 +24,7 @@ import duckdb
 import numpy as np
 import polars as pl
 
-from . import config
+from . import boundaries, config
 
 log = logging.getLogger(__name__)
 
@@ -223,18 +223,37 @@ def _pack(
     payload = bytearray()
     spec: list[list[Any]] = []
     for name, dtype in columns.items():
-        column = np.asarray(data[name])
-        if rows and dtype in (COUNT, DAY):
+        source = data[name]
+        # DuckDB hands back a masked array for a column that carried nulls, and
+        # `np.asarray` drops the mask rather than the row: the null keeps
+        # whatever sat under it, which is a zero. A fixed-width dump has no
+        # encoding for "unknown", so a null country would ship as country 0 and
+        # a null count as an empty zone - both of which read as ordinary data
+        # everywhere downstream. It has to be resolved in the query instead.
+        if np.ma.is_masked(source):
+            nulls = int(np.ma.getmaskarray(source).sum())
+            raise ValueError(
+                f"{name} carries {nulls:,} null(s) and would pack them as 0. "
+                f"Decide what a null means in the query - coalesce it or drop the row."
+            )
+        column = np.asarray(source)
+        if rows and dtype.startswith(("int", "uint")):
             # Silent wraparound is the failure mode these dumps are most
-            # exposed to. A negative day would come from an event before
-            # DAY_EPOCH - the 2010 backfill rows - and underflow uint16
-            # into a plausible-looking date rather than an error.
-            low, high = int(column.min()), int(np.abs(column).max())
-            limit = np.iinfo(np.uint16 if dtype == DAY else np.int32).max
-            if high > limit:
+            # exposed to: a value one step past the width lands as a
+            # plausible-looking small number rather than an error. A negative
+            # day, say, would come from an event before DAY_EPOCH - the 2010
+            # backfill rows - and underflow uint16 into a real-looking date.
+            #
+            # Every integer column, not a chosen few: which ones "can" overflow
+            # is a judgement that goes stale the moment upstream widens a field,
+            # and `area_id` is a uint16 fed straight from a country id.
+            info = np.iinfo(dtype)
+            low, high = int(column.min()), int(column.max())
+            if high > info.max:
                 raise OverflowError(f"{name} max {high:,} does not fit {dtype}")
-            if dtype == DAY and low < 0:
-                raise ValueError(f"{name} has values before DAY_EPOCH (min {low})")
+            if low < info.min:
+                hint = " (an event before DAY_EPOCH)" if dtype == DAY else ""
+                raise ValueError(f"{name} min {low:,} does not fit {dtype}{hint}")
 
         encoding = None
         if name in delta and rows:
@@ -950,43 +969,53 @@ def _export_zone_history(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str,
     Ordered `(idx, observed_at)`, which is unique across every row and so a
     total order: the same tiebreak the display stream depends on, for the same
     reason.
-    """
-    blocks = con.execute(f"""
-        select cast(idx / {_HISTORY_BLOCK} as integer) as block, count(*) as events
-        from (
-            select s.idx from zone_events e join scope s on s.zone_id = e.zone_id
-        ) group by 1 order by 1
-    """).fetchall()
 
-    entries = []
-    for block, _ in blocks:
-        entry = _write_columnar(
-            out / "zone_history" / f"{block:04d}.bin.br",
-            f"""
-            select s.idx,
-                   cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)
-                       as day,
-                   e.control_state, e.legion_count, e.swarm_count, e.faceless_count
-            from zone_events e
-            join scope s on s.zone_id = e.zone_id
-            where s.idx >= {block * _HISTORY_BLOCK}
-              and s.idx <  {(block + 1) * _HISTORY_BLOCK}
-            order by s.idx, e.observed_at
-            """,
-            {
-                "idx": IDX,
-                "day": DAY,
-                "control_state": FACTION,
-                "legion_count": COUNT,
-                "swarm_count": COUNT,
-                "faceless_count": COUNT,
-            },
-            con,
-            delta=frozenset({"idx"}),
-            quality=BROTLI_QUALITY_BULK,
+    **One pass over the event stream, cut up in Python.** A query per block was
+    656 scans of all 9.88M rows to write 37 MB, because the block filter is a
+    range over `idx` and nothing in the warehouse is indexed by it. Sorting by
+    `(block, idx, observed_at)` is the same order block by block - `block` is
+    `idx // 4096`, so it is a function of the key already being sorted on - and
+    each block's rows land as one contiguous run. `idx` still delta-encodes from
+    zero inside each file, because `_pack` runs per block on its own slice.
+    """
+    rows = con.execute(f"""
+        select cast(s.idx // {_HISTORY_BLOCK} as integer) as block,
+               s.idx,
+               cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)
+                   as day,
+               e.control_state, e.legion_count, e.swarm_count, e.faceless_count
+        from zone_events e
+        join scope s on s.zone_id = e.zone_id
+        order by block, s.idx, e.observed_at
+    """).fetchnumpy()
+
+    columns = {
+        "idx": IDX,
+        "day": DAY,
+        "control_state": FACTION,
+        "legion_count": COUNT,
+        "swarm_count": COUNT,
+        "faceless_count": COUNT,
+    }
+
+    blocks, starts = np.unique(rows["block"], return_index=True)
+    ends = np.append(starts[1:], len(rows["block"]))
+
+    entries: list[dict[str, Any]] = []
+    for block, start, end in zip(blocks, starts, ends, strict=True):
+        payload, spec, count = _pack(
+            {name: rows[name][start:end] for name in columns},
+            columns,
+            frozenset({"idx"}),
         )
-        entry["block"] = int(block)
-        entries.append(entry)
+        path = out / "zone_history" / f"{int(block):04d}.bin.br"
+        entries.append({
+            "path": path.name,
+            "rows": count,
+            "columns": spec,
+            "bytes": _write(path, payload, BROTLI_QUALITY_BULK),
+            "block": int(block),
+        })
 
     total = sum(e["bytes"] for e in entries)
     log.info(
@@ -1017,16 +1046,27 @@ def _sparse_series(con: duckdb.DuckDBPyConnection, sql: str) -> dict[str, Any]:
 
 
 def _export_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
-    changed = """
-        where legion_delta != 0 or swarm_delta != 0 or faceless_delta != 0
-    """
     day = f"cast(date_diff('day', date '{config.DAY_EPOCH}', activity_date) as integer)"
 
+    # The one query that reads a mart directly rather than through `zone_events`,
+    # because the running totals are the mart's own and recomputing them here
+    # would be a second definition of the same number.
+    #
+    # So the release-date cut is applied to the rows that go out, not to the
+    # stream they are summed over. `fct_global_daily`'s spine starts at the 2010
+    # backfill, and the 29 sentinel rows plus the 11 pre-release events carry
+    # real bots: they are this record's opening balance, and dropping them from
+    # the sum would restart the world at zero on 2012-07-30. `legion_bots` is
+    # already a running total, so filtering the output alone keeps the first
+    # emitted point carrying everything that came before it.
     global_series = _sparse_series(
         con,
         f"""
         select {day}, legion_bots, swarm_bots, faceless_bots
-        from fct_global_daily {changed} order by activity_date
+        from fct_global_daily
+        where activity_date >= date '{config.RECORD_START}'
+          and (legion_delta != 0 or swarm_delta != 0 or faceless_delta != 0)
+        order by activity_date
         """,
     )
 
@@ -1222,6 +1262,14 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
     scope = config.SCOPES[scope_name or config.DEFAULT_SCOPE]
     out = out or (config.WEB_DATA / scope.name)
     out.mkdir(parents=True, exist_ok=True)
+
+    # The outlines sit beside the scope directory rather than inside it - they are the
+    # same world whichever slice is exported - and they are written here rather than
+    # left to the `boundaries` step because `upload` deletes every object the data
+    # directory does not contain. Anything a nightly run does not write is swept out of
+    # the bucket, and the map loses its coastlines without saying so. The Natural Earth
+    # source is cached under `data/raw`, so a re-run costs a brotli pass and no request.
+    boundaries.export_boundaries(out.parent)
 
     con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
     try:

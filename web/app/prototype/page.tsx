@@ -123,7 +123,9 @@ export default function PrototypePage() {
       shape,
       dominanceBins: linearBins(shape.dominance, 20),
       appearanceBins: logBins(appearanceValues, 8),
-      streakBins: linearBins(streakValues, 16, Math.max(...streakValues)),
+      // Log, not linear: streaks run 1 to 152 with almost everything at 1, so
+      // linear bins put 95% of zones in the first bar and draw nothing else.
+      streakBins: logBins(streakValues, 8),
       appearOnce: countEqual(appearanceValues, 1),
       longestStreak: Math.max(...streakValues),
       streakOverOne: streakValues.length - countEqual(streakValues, 1),
@@ -418,6 +420,8 @@ export default function PrototypePage() {
                 title="Leading faction's share of a report"
                 subtitle="Linear bins of 5 points. Mapped reports only, the 2019 window dropped."
                 xLabel="share held by the top faction"
+                scale="linear"
+                format={(v) => `${Math.round(v * 100)}%`}
                 markers={[{ at: 1 / 3, label: "even three-way" }]}
               />
               <Note>
@@ -458,7 +462,7 @@ export default function PrototypePage() {
               <Histogram
                 bins={derived.streakBins}
                 title="Longest consecutive run per zone"
-                subtitle="Consecutive days on the board. The stricter cousin of the map's rolling appearance count."
+                subtitle="Consecutive days on the board, log bins. The stricter cousin of the map's rolling appearance count."
                 xLabel="consecutive days"
               />
               <Note>

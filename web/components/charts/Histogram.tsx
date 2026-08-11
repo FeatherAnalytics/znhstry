@@ -27,6 +27,22 @@ interface Props {
   /** Drawn as a dashed rule with a label. The median is worth more than a mean here. */
   markers?: { at: number; label: string }[];
   height?: number;
+  /**
+   * How the bins were built, which decides where the axis gets a tick.
+   *
+   * Not inferrable from the bins, and guessing it is a real bug rather than a
+   * cosmetic one: decade ticks over bins that span 0 to 1 put every edge in the
+   * same decade, so they all draw the same label on top of itself.
+   */
+  scale?: "log" | "linear";
+  /**
+   * Formats a bin edge for the axis and the readout.
+   *
+   * The default rounds to whole numbers, which is right for counts and wrong for
+   * anything bounded below 1 - a share of 0.05 renders as "0". Pass a formatter
+   * whenever the quantity is not a count.
+   */
+  format?: (value: number) => string;
 }
 
 const PAD = { top: 8, right: 12, bottom: 34, left: 46 };
@@ -38,7 +54,19 @@ const compact = (n: number): string =>
       ? `${(n / 1_000).toFixed(n < 10_000 ? 1 : 0)}k`
       : `${Math.round(n)}`;
 
-export function Histogram({ bins, title, subtitle, xLabel, markers = [], height = 200 }: Props) {
+/** Roughly this many x ticks on a linear axis - enough to read, few enough to fit. */
+const LINEAR_TICKS = 5;
+
+export function Histogram({
+  bins,
+  title,
+  subtitle,
+  xLabel,
+  markers = [],
+  height = 200,
+  scale = "log",
+  format = compact,
+}: Props) {
   const [hover, setHover] = useState<number | null>(null);
 
   const width = 640;
@@ -60,6 +88,24 @@ export function Histogram({ bins, title, subtitle, xLabel, markers = [], height 
   };
 
   const ticks = [0, 0.5, 1].map((f) => Math.round(tallest * f));
+
+  // `at` is a position in bin widths, so the final upper edge sits at
+  // `bins.length` - one step past the last bar's left side, which is exactly the
+  // right-hand end of the plot.
+  const xTicks: { at: number; value: number }[] =
+    scale === "linear"
+      ? Array.from({ length: LINEAR_TICKS + 1 }, (_, k) => {
+          const at = Math.round((k * bins.length) / LINEAR_TICKS);
+          return {
+            at,
+            value: at >= bins.length ? bins[bins.length - 1].hi : bins[at].lo,
+          };
+        })
+      : bins.flatMap((bin, i) => {
+          const decade = Math.log10(Math.max(1, bin.lo));
+          if (bin.lo !== 0 && Math.abs(decade - Math.round(decade)) > 1e-6) return [];
+          return [{ at: i, value: bin.lo }];
+        });
 
   return (
     <figure style={{ margin: 0 }}>
@@ -145,25 +191,23 @@ export function Histogram({ bins, title, subtitle, xLabel, markers = [], height 
           );
         })}
 
-        {/* Decade ticks only. A label per bin is unreadable and says nothing a
-            reader of a log axis does not already assume. */}
-        {bins.map((bin, i) => {
-          const decade = Math.log10(Math.max(1, bin.lo));
-          if (bin.lo !== 0 && Math.abs(decade - Math.round(decade)) > 1e-6) return null;
-          return (
-            <text
-              key={`tick-${i}`}
-              x={PAD.left + i * step}
-              y={height - PAD.bottom + 14}
-              fontSize={9}
-              fill="var(--text-dim)"
-              textAnchor="middle"
-              className="tabular"
-            >
-              {bin.lo === 0 ? "0" : compact(bin.lo)}
-            </text>
-          );
-        })}
+        {/* A label per bin is unreadable, so only some edges get one - decades on
+            a log axis, evenly spaced edges on a linear one. The linear case
+            includes the final upper edge, which is the only tick that says what
+            the axis actually reaches. */}
+        {xTicks.map((tick) => (
+          <text
+            key={`tick-${tick.at}`}
+            x={PAD.left + tick.at * step}
+            y={height - PAD.bottom + 14}
+            fontSize={9}
+            fill="var(--text-dim)"
+            textAnchor="middle"
+            className="tabular"
+          >
+            {format(tick.value)}
+          </text>
+        ))}
 
         <text
           x={PAD.left + plotWidth / 2}
@@ -184,7 +228,7 @@ export function Histogram({ bins, title, subtitle, xLabel, markers = [], height 
           `${compact(total)} observations`
         ) : (
           <span style={{ color: "var(--text)" }}>
-            {compact(bins[hover].lo)}–{compact(bins[hover].hi)} {xLabel}:{" "}
+            {format(bins[hover].lo)}–{format(bins[hover].hi)} {xLabel}:{" "}
             {bins[hover].count.toLocaleString()} (
             {((bins[hover].count / total) * 100).toFixed(1)}%)
           </span>

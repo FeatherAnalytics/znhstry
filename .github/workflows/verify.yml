@@ -14,7 +14,12 @@
 
 name: Verify PR 12
 
+# Push-triggered on this branch only, because a workflow_dispatch-only file is not
+# dispatchable until it exists on the default branch - which is exactly where a
+# temporary verification job must never land.
 on:
+  push:
+    branches: [fix/repo-review-findings]
   workflow_dispatch:
 
 permissions:

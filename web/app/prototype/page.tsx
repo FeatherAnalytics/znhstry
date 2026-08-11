@@ -20,7 +20,7 @@
  * both is what would make this hard to throw away.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BASE } from "@/lib/dataOrigin";
 import { dateToDay, loadJson } from "@/lib/format";
@@ -46,10 +46,19 @@ import {
   type MazStats,
 } from "@/lib/mazStats";
 
+import {
+  clusterRecord,
+  loadZoneCoords,
+  NEIGHBORHOOD_KM,
+  type Coord,
+  type DayCluster,
+} from "@/lib/mazClusters";
+
 import { FACTIONS, MAZ_AMBER } from "@/components/charts/palette";
 import { Histogram } from "@/components/charts/Histogram";
 import { TimeSeries } from "@/components/charts/TimeSeries";
 import { StackedShare } from "@/components/charts/StackedShare";
+import { Scatter } from "@/components/charts/Scatter";
 
 type Status = "open" | "keep" | "promote" | "cut";
 
@@ -148,6 +157,51 @@ export default function PrototypePage() {
     };
   }, [stats, meta]);
 
+  // Coordinates, and the clusters built from them.
+  //
+  // Behind a button on purpose. This is the 9.27 MB of geometry the map loads,
+  // and it is the only place coordinates live - `CLAUDE.md` keeps them out of the
+  // MAZ payload precisely so there is one copy. Every other card on this page
+  // costs half a megabyte, so making the whole bench pay for one section would
+  // be the wrong default.
+  const [coords, setCoords] = useState<Map<number, Coord> | null>(null);
+  const [tileProgress, setTileProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const loadGeometry = useCallback(() => {
+    if (!meta || !stats || tileProgress) return;
+    const wanted = new Set<number>();
+    for (let r = 0; r < stats.reports.reportCount; r++) wanted.add(stats.reports.reportIdx[r]);
+
+    setTileProgress({ done: 0, total: meta.geometry.tiles.length });
+    loadZoneCoords(BASE, meta.geometry, wanted, (done, total) =>
+      setTileProgress({ done, total }),
+    )
+      .then(setCoords)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, [meta, stats, tileProgress]);
+
+  const clusters = useMemo(() => {
+    if (!stats || !coords) return null;
+    const { reportIdx, reportDay, dayMin, dayMax, dayOffset } = stats.reports;
+    return clusterRecord(
+      reportIdx,
+      reportDay,
+      stats.launches,
+      dayMin,
+      dayMax,
+      dayOffset,
+      coords,
+    );
+  }, [stats, coords]);
+
+  /** The clusters worth naming: four or more zones, biggest then tightest. */
+  const topClusters: DayCluster[] | null = useMemo(() => {
+    if (!clusters) return null;
+    return clusters.clusters
+      .filter((c) => c.spread.count >= 4)
+      .sort((a, b) => b.spread.count - a.spread.count || a.spread.diameterKm - b.spread.diameterKm);
+  }, [clusters]);
+
   // Names are off the load path everywhere else and stay off it here: one ~19 KB
   // block per outlier, fetched only once the reports are in hand. `names` is
   // keyed by idx, so a block landing late fills its rows in place and the state
@@ -157,8 +211,13 @@ export default function PrototypePage() {
     if (!meta || !derived) return;
     let cancelled = false;
     const into: string[] = [];
-    const blocks = derived.bigReports.map((r) => loadNames(BASE, meta.names, r.idx, into));
-    Promise.all(blocks)
+    const wanted = [
+      ...derived.bigReports.map((r) => r.idx),
+      // The named clusters, once they exist. Same blocks in many cases, and
+      // `loadNames` dedupes by block, so asking twice costs nothing.
+      ...(topClusters ?? []).flatMap((c) => c.members.map((m) => m.idx)),
+    ];
+    Promise.all(wanted.map((idx) => loadNames(BASE, meta.names, idx, into)))
       .then(() => {
         if (!cancelled) setNames([...into]);
       })
@@ -166,7 +225,7 @@ export default function PrototypePage() {
     return () => {
       cancelled = true;
     };
-  }, [meta, derived]);
+  }, [meta, derived, topClusters]);
 
   return (
     <main
@@ -385,6 +444,106 @@ export default function PrototypePage() {
             </Card>
 
             <Card
+              title="When the top ten collapsed onto one place"
+              status="open"
+              note="§7.1 — the day's zones grouped by distance rather than by region name, single linkage at thirty miles. The deliverable of the section."
+            >
+              {!coords ? (
+                <div>
+                  <p
+                    className="prose"
+                    style={{ color: "var(--text-dim)", lineHeight: 1.6, fontSize: 13, margin: 0 }}
+                  >
+                    This one needs coordinates, and coordinates mean the 9.27 MB of geometry
+                    tiles the map loads — the only place they live, kept out of the MAZ payload
+                    on purpose so there is one copy. Every other card here costs half a
+                    megabyte, so it is a button rather than the default.
+                  </p>
+                  <button
+                    onClick={loadGeometry}
+                    disabled={tileProgress !== null}
+                    style={{
+                      marginTop: 12,
+                      border: "1px solid var(--hairline-bright)",
+                      background: "transparent",
+                      color: "var(--text)",
+                      padding: "8px 14px",
+                      fontSize: 12,
+                      cursor: tileProgress ? "default" : "pointer",
+                    }}
+                  >
+                    {tileProgress
+                      ? `Loading tiles… ${tileProgress.done} / ${tileProgress.total}`
+                      : "Load geometry and cluster the record"}
+                  </button>
+                </div>
+              ) : clusters && topClusters ? (
+                <>
+                  <Scatter
+                    points={clusters.largestByDay
+                      .filter((c) => c.spread.diameterKm > 0)
+                      .map((c) => ({
+                        day: c.day,
+                        km: c.spread.diameterKm,
+                        count: c.spread.count,
+                        label: c.spread.count >= 5 ? labelOf(c.day).slice(0, 7) : "",
+                      }))}
+                    title="How tight the day's tightest group was"
+                    subtitle={`One dot per day that had two zones within ${Math.round(NEIGHBORHOOD_KM)} km of each other. Dot area is the zone count; the axis is logarithmic.`}
+                    labelOf={labelOf}
+                  />
+                  <Note>
+                    <strong>
+                      {(
+                        100 *
+                        (1 - clusters.largestByDay.length / derived.days)
+                      ).toFixed(1)}
+                      % of days have no two of the world&rsquo;s most active zones within thirty
+                      miles of each other
+                    </strong>{" "}
+                    — {(derived.days - clusters.largestByDay.length).toLocaleString()} of{" "}
+                    {derived.days.toLocaleString()}. Concentration is the exception, and that is
+                    the honest headline for this section: a MAZ day is normally ten unrelated
+                    fights.
+                  </Note>
+
+                  <div style={{ height: 22 }} />
+
+                  <Table
+                    caption={`Every cluster of four or more zones (${topClusters.length})`}
+                    head={["date", "zones", "across", "mean pair", "regions", ""]}
+                    align={["left", "right", "right", "right", "right"]}
+                    subject={0}
+                    rows={topClusters.slice(0, 14).map((c) => [
+                      labelOf(c.day),
+                      String(c.spread.count),
+                      `${c.spread.diameterKm.toFixed(1)} km`,
+                      `${c.spread.meanPairKm.toFixed(1)} km`,
+                      c.regions.length > 1 ? `${c.regions.length} ⚑` : "1",
+                      c.members
+                        .map((m) => names[m.idx])
+                        .filter(Boolean)
+                        .slice(0, 3)
+                        .join(", ") || "…",
+                    ])}
+                  />
+                  <Note>
+                    Ranked by zone count, then by tightness within a count — both matter and they
+                    matter differently: the count is how much of the world&rsquo;s daily top ten
+                    one place captured, and the spread is whether that place is a neighborhood or
+                    a state. A ⚑ marks a cluster spanning more than one region, which the old
+                    grouping-by-region-name could only ever have seen as two smaller ones.
+                    {clusters.missing > 0
+                      ? ` ${clusters.missing.toLocaleString()} reports had no coordinate loaded and were skipped.`
+                      : ""}
+                  </Note>
+                </>
+              ) : (
+                <p style={{ color: "var(--text-dim)" }}>Clustering…</p>
+              )}
+            </Card>
+
+            <Card
               title="Who was doing the launching"
               status="open"
               note="§7.3 — faction share of every launch on the day's most active zones. The one chart on this page that wears the faction colors, because it is the one subject that is a faction fact."
@@ -480,12 +639,12 @@ export default function PrototypePage() {
                 style={{ color: "var(--text-dim)", lineHeight: 1.7, paddingLeft: 18, margin: 0 }}
               >
                 <li>
-                  <strong>§7.1&rsquo;s cluster charts.</strong> The clustering itself is built and
-                  measured — <code>distance.cluster</code>, run over the record, finds 36 days
-                  where four or more of the world&rsquo;s most active zones sat within thirty
-                  miles. Drawing it here needs coordinates, and coordinates mean loading the
-                  9.27 MB of geometry tiles the map loads. That is the next real decision on this
-                  page.
+                  <strong>The zoomed map per cluster (§7.1).</strong> The scatter and the table
+                  above are the overview; the thing worth actually looking at is each cluster on
+                  a basemap, framed at its own bounding box plus thirty miles, so the reader sees
+                  the fight sits on Canterbury rather than on an unlabeled patch of coast. That
+                  needs deck.gl and the CARTO tiles, which is the map&rsquo;s machinery rather
+                  than a chart.
                 </li>
                 <li>
                   Which of the eleven biggest reports land near the 2017-04-26 range change, now

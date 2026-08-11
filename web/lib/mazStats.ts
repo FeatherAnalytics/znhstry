@@ -24,12 +24,50 @@ import { loadMaz, type MazData, type MazEntry } from "./maz";
 /** Row `i` describes report `i` of the accompanying `MazData`. */
 export interface MazStats {
   reports: MazData;
+  /** QONQR's own battle report number - see `portalReportUrl`. */
+  report: Uint32Array;
   players: Uint16Array;
   launches: Int32Array;
+  /**
+   * The per-faction split of `launches`.
+   *
+   * **They do not sum to `launches` everywhere.** 861 reports fall short, all of
+   * them between 2019-07-01 and 2019-09-11, always with the total higher. The
+   * faction *player* columns fail on the same rows, which is what shows it to be
+   * the whole per-faction block arriving partial rather than anything about
+   * launches. Outside the window both splits are exact on all 60,496 reports.
+   *
+   * It is not a top-N player cap and not a zeroed faction - see
+   * `stg_battlestats` for what was measured and ruled out. Anything computing a
+   * share has to drop that window or say so, since a share of an incomplete
+   * denominator reads as a faction going quiet.
+   */
+  legionLaunches: Int32Array;
+  swarmLaunches: Int32Array;
+  facelessLaunches: Int32Array;
   botsLaunched: Int32Array;
   botsKilled: Int32Array;
   botsLost: Int32Array;
 }
+
+/** Where a report came from. The portal renders one page per report number. */
+export const PORTAL_REPORT = "https://portal.qonqr.com/Home/BattleStatistics";
+
+export function portalReportUrl(report: number): string {
+  return `${PORTAL_REPORT}/${report}`;
+}
+
+const REQUIRED = [
+  "report",
+  "players",
+  "launches",
+  "legion_launches",
+  "swarm_launches",
+  "faceless_launches",
+  "bots_launched",
+  "bots_killed",
+  "bots_lost",
+] as const;
 
 export async function loadMazStats(base: string, entry: MazEntry): Promise<MazStats> {
   if (!entry.stats) throw new Error("meta.maz carries no stats shard");
@@ -48,10 +86,23 @@ export async function loadMazStats(base: string, entry: MazEntry): Promise<MazSt
     );
   }
 
+  // An export written before a column existed still parses: `loadShard` reads
+  // whatever `meta.json` lists, so a missing column is simply absent and the
+  // first symptom is `undefined[i]` somewhere far away. Name them here, where
+  // the message can say which shard is stale.
+  const missing = REQUIRED.filter((name) => !columns[name]);
+  if (missing.length) {
+    throw new Error(`maz_stats is missing ${missing.join(", ")} - re-run the export`);
+  }
+
   return {
     reports,
+    report: columns.report as Uint32Array,
     players: columns.players as Uint16Array,
     launches: columns.launches as Int32Array,
+    legionLaunches: columns.legion_launches as Int32Array,
+    swarmLaunches: columns.swarm_launches as Int32Array,
+    facelessLaunches: columns.faceless_launches as Int32Array,
     botsLaunched: columns.bots_launched as Int32Array,
     botsKilled: columns.bots_killed as Int32Array,
     botsLost: columns.bots_lost as Int32Array,
@@ -230,6 +281,8 @@ export interface ReportOutlier {
   day: number;
   launches: number;
   players: number;
+  /** QONQR's report number, for `portalReportUrl`. */
+  report: number;
 }
 
 /** Single reports at or above `threshold` launches, biggest first. */
@@ -244,6 +297,7 @@ export function biggestReports(stats: MazStats, threshold: number): ReportOutlie
       day: reportDay[r],
       launches: stats.launches[r],
       players: stats.players[r],
+      report: stats.report[r],
     });
   }
   return out.sort((a, b) => b.launches - a.launches);

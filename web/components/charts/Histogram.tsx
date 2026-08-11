@@ -16,7 +16,7 @@
 import { useState } from "react";
 import type { Bin } from "@/lib/mazStats";
 
-const MAZ_AMBER = "#ffc857";
+import { MAZ_AMBER } from "./palette";
 
 interface Props {
   bins: Bin[];

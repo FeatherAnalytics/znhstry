@@ -36,9 +36,12 @@ import {
   loadMazStats,
   logBins,
   perReport,
+  portalReportUrl,
   summarize,
   type MazStats,
 } from "@/lib/mazStats";
+
+import { MAZ_AMBER } from "@/components/charts/palette";
 import { Histogram } from "@/components/charts/Histogram";
 import { TimeSeries } from "@/components/charts/TimeSeries";
 
@@ -307,13 +310,15 @@ export default function PrototypePage() {
             >
               <Table
                 caption={`Single reports at ${BIG_REPORT.toLocaleString()}+ launches`}
-                head={["date", "zone", "launches", "players", "per player"]}
+                head={["date", "zone", "launches", "players", "per player", ""]}
+                align={["left", "left"]}
                 rows={derived.bigReports.map((r) => [
                   labelOf(r.day),
                   names[r.idx] || `zone ${r.idx}`,
                   r.launches.toLocaleString(),
                   r.players.toLocaleString(),
                   r.players ? Math.round(r.launches / r.players).toLocaleString() : "—",
+                  <PortalLink key="link" report={r.report} />,
                 ])}
               />
               <Note>
@@ -331,6 +336,8 @@ export default function PrototypePage() {
               <Table
                 caption={`Whole MAZ days at ${BIG_DAY.toLocaleString()}+ total launches`}
                 head={["date", "launches", "reports", "players"]}
+                align={["left"]}
+                subject={0}
                 rows={derived.bigDays.map((d) => [
                   labelOf(d.day),
                   d.launches.toLocaleString(),
@@ -342,7 +349,9 @@ export default function PrototypePage() {
                 {derived.bigDays.length} days out of {derived.days.toLocaleString()}, against a
                 median day of {Math.round(derived.dailySummary.median).toLocaleString()}. Players
                 are summed across the day&rsquo;s reports — there is no player key in this
-                payload, so somebody fighting two zones counts twice.
+                payload, so somebody fighting two zones counts twice. No link column here: the
+                portal has a page per report and none for a day, and pointing at the day&rsquo;s
+                biggest report would put one zone behind a link that claims to be all ten.
               </Note>
             </Card>
 
@@ -360,10 +369,10 @@ export default function PrototypePage() {
                   that <code>config.MISSILE_RANGE_INCREASED</code> pins the date.
                 </li>
                 <li>
-                  Faction launch share (§7.3). <strong>Blocked:</strong> the export carries only
-                  the totals. Per-faction launch columns exist upstream in{" "}
-                  <code>stg_battlestats</code> and would need adding to{" "}
-                  <code>maz_stats.bin.br</code>.
+                  Faction launch share (§7.3). <strong>Unblocked:</strong>{" "}
+                  <code>maz_stats.bin.br</code> now carries the three per-faction launch columns.
+                  Drop 2019-07-01 to 2019-09-11 before computing any share — the split falls
+                  short of its own total across that window.
                 </li>
                 <li>Appearance and streak distributions (§7.4).</li>
               </ul>
@@ -455,6 +464,32 @@ function Tiles({ items }: { items: { label: string; value: string }[] }) {
 }
 
 /**
+ * A link out to the report page this row was read from.
+ *
+ * `rel="noreferrer"` and a new tab: the portal is the game's own live web server
+ * rendering one page per report, not an API, and the bench is a scrolling column
+ * somebody is working through - taking the tab away loses their place.
+ *
+ * Only reports get one. A MAZ *day* has no page: the Most Active Zones index
+ * names today's ten and nothing else, so there is no URL that means "the whole
+ * of 2017-05-22" and inventing one out of that day's biggest report would put a
+ * single zone behind a link that claims to be the day.
+ */
+function PortalLink({ report }: { report: number }) {
+  return (
+    <a
+      href={portalReportUrl(report)}
+      target="_blank"
+      rel="noreferrer"
+      title={`Battle report ${report.toLocaleString()} on portal.qonqr.com`}
+      style={{ color: MAZ_AMBER, textDecoration: "none", whiteSpace: "nowrap" }}
+    >
+      report ↗
+    </a>
+  );
+}
+
+/**
  * A short list of named rows.
  *
  * Deliberately a table and not a chart. These lists are eleven and three rows
@@ -469,11 +504,19 @@ function Table({
   caption,
   head,
   rows,
+  /** Per-column alignment. Anything past the end falls back to right. */
+  align = [],
+  /** Which column carries the row's subject, and so gets full-strength text. */
+  subject = 1,
 }: {
   caption: string;
   head: string[];
-  rows: string[][];
+  rows: React.ReactNode[][];
+  align?: ("left" | "right")[];
+  subject?: number;
 }) {
+  const alignOf = (i: number) => align[i] ?? "right";
+
   return (
     <figure style={{ margin: 0 }}>
       <figcaption className="display" style={{ fontSize: 13, marginBottom: 6 }}>
@@ -491,7 +534,7 @@ function Table({
                   key={cell}
                   className="eyebrow"
                   style={{
-                    textAlign: i === 0 || i === 1 ? "left" : "right",
+                    textAlign: alignOf(i),
                     padding: "4px 8px 6px",
                     borderBottom: "1px solid var(--hairline-bright)",
                     whiteSpace: "nowrap",
@@ -503,16 +546,16 @@ function Table({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.join("|")}>
+            {rows.map((row, r) => (
+              <tr key={r}>
                 {row.map((cell, i) => (
                   <td
                     key={i}
                     style={{
-                      textAlign: i === 0 || i === 1 ? "left" : "right",
+                      textAlign: alignOf(i),
                       padding: "5px 8px",
                       borderBottom: "1px solid var(--hairline)",
-                      color: i === 1 ? "var(--text)" : "var(--text-dim)",
+                      color: i === subject ? "var(--text)" : "var(--text-dim)",
                       whiteSpace: "nowrap",
                     }}
                   >

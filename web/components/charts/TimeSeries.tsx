@@ -16,7 +16,7 @@
 
 import { useMemo, useRef, useState } from "react";
 
-const MAZ_AMBER = "#ffc857";
+import { MAZ_AMBER } from "./palette";
 
 interface Props {
   day: ArrayLike<number>;

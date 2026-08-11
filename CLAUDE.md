@@ -419,7 +419,28 @@ React state at all.
 | | Columns | Size |
 |---|---|---|
 | `maz.bin.br` | `idx` (uint32), `day` (uint16 delta) | 268 KB -> **63 KB** |
-| `maz_stats.bin.br` | `players` (uint16), `launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 803 KB -> 425 KB |
+| `maz_stats.bin.br` | `report` (uint32), `players` (uint16), `launches`, `legion_launches`, `swarm_launches`, `faceless_launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 1.55 MB -> 624 KB |
+
+**`report` is the one column here that is a reference rather than a measurement.** It is
+QONQR's own battle report number, and it exists so a row can point at the page it came
+from — `portal.qonqr.com/Home/BattleStatistics/<report>`. Nothing else in the payload can
+be turned into that link. Not delta-encoded: reports are numbered in the order QONQR wrote
+them while these rows are ordered `(day, idx)`, so the sequence climbs across days and
+scrambles within one.
+
+**The three faction launch columns do not always sum to `launches`, and the exception is
+dated.** 861 reports fall short, all between 2019-07-01 and 2019-09-11, report numbers
+55800–57858, with the total higher on every one. The faction *player* columns fail on
+exactly the same rows, which is what shows it to be the whole per-faction block arriving
+partial rather than anything about launches — outside that window both splits are exact on
+all 60,496 reports. It is not a top-N player cap (the largest faction-player sum is 939,
+and 5,537 reports with over 50 players outside the window reconcile), not a zeroed faction,
+and not the big collection days. Only the date predicts it, and geography does not: every
+country with 10+ reports in the window is 72–97% short, and Atlantis — which has no
+geography at all — sits at 83.1%, on the window's average. Forty of the seventy-two days
+are 100% short. Anything computing faction share drops that window or states it.
+`stg_battlestats` carries the full working, and
+`tests/test_export_maz.py` asserts the *containment* rather than the count.
 
 45,685 reports over 11,723 zones, sorted `(day, idx)` because every read is a contiguous
 range of days. That ordering is why `idx` is not delta-encoded: it restarts on every day
@@ -705,7 +726,7 @@ against a threshold, because thresholds on upstream drift are brittle.
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
 uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **~1,850 files,
-94.6 MB**, ~9 minutes on a GitHub runner.
+94.5 MB**, ~9 minutes on a GitHub runner (19 minutes on the dev machine that wrote this).
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:

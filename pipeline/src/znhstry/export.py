@@ -437,17 +437,36 @@ def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, An
     carry a packed string of roughly 924,728 player rows that ingest does not
     unpack yet.
 
+    `report` is QONQR's own battle report number, and it is here for one reason:
+    it is the only thing that can point at the page a row came from,
+    `portal.qonqr.com/Home/BattleStatistics/<report>`. Everything else in this
+    payload is a measurement, so it is the one column that is a *reference*
+    rather than a fact, and it cannot be derived from anything the client holds.
+    Not delta-encoded: reports are numbered in the order QONQR wrote them and
+    these rows are ordered `(day, idx)`, so the sequence climbs across days and
+    scrambles within one.
+
+    The three faction launch columns are a genuine split of `launches` and not
+    the per-weapon breakdown. Read `stg_battlestats` before using them - the sum
+    is short of the total for a ten-week window in 2019, which is collection
+    rather than play, and a share taken across it will read as a faction going
+    quiet.
+
     The same `group by` and `order by` as `_export_maz`, which is what keeps the
     rows aligned. Change one and you must change both.
     """
     entry = _write_columnar(
         out / "maz_stats.bin.br",
         f"""
-        select max(b.total_active_players) as players,
-               max(b.total_launches)       as launches,
-               max(b.bots_launched)        as bots_launched,
-               max(b.bots_killed)          as bots_killed,
-               max(b.bots_lost)            as bots_lost
+        select max(b.battle_report_number)   as report,
+               max(b.total_active_players)   as players,
+               max(b.total_launches)         as launches,
+               max(b.legion_total_launches)  as legion_launches,
+               max(b.swarm_total_launches)   as swarm_launches,
+               max(b.faceless_total_launches) as faceless_launches,
+               max(b.bots_launched)          as bots_launched,
+               max(b.bots_killed)            as bots_killed,
+               max(b.bots_lost)              as bots_lost
         from fct_zone_battles b
         join scope s on s.zone_id = b.zone_id
         where b.battle_date >= date '{config.RECORD_START}'
@@ -456,8 +475,12 @@ def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, An
                  s.idx
         """,
         {
+            "report": IDX,
             "players": "uint16",
             "launches": COUNT,
+            "legion_launches": COUNT,
+            "swarm_launches": COUNT,
+            "faceless_launches": COUNT,
             "bots_launched": COUNT,
             "bots_killed": COUNT,
             "bots_lost": COUNT,

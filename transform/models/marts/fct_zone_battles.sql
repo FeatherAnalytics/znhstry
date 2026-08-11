@@ -47,6 +47,9 @@ select
 
     b.total_active_players,
     b.total_launches,
+    b.legion_total_launches,
+    b.swarm_total_launches,
+    b.faceless_total_launches,
     b.bots_launched,
     b.bots_killed,
     b.bots_lost

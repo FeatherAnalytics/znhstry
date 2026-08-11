@@ -335,6 +335,195 @@ export function biggestDays(stats: MazStats, threshold: number): DayOutlier[] {
   return out.sort((a, b) => b.launches - a.launches);
 }
 
+// --- faction share (§7.3) -----------------------------------------------------
+
+/**
+ * The dates where the per-faction split is partially populated, as day numbers.
+ *
+ * Not a preference. Inside this window the three faction columns are short of
+ * their own total on 861 reports, so a share taken across it divides by an
+ * incomplete denominator and reads as a faction going quiet. Every function
+ * below drops it by default and reports how many days it dropped, because a
+ * silently narrowed range is how a chart starts lying about its own extent.
+ */
+export const FACTION_SPLIT_BROKEN = { from: "2019-07-01", to: "2019-09-11" };
+
+export interface FactionDaily {
+  day: Int32Array;
+  legion: Float64Array;
+  swarm: Float64Array;
+  faceless: Float64Array;
+  /** Days dropped because the split is known-partial there. */
+  dropped: number;
+}
+
+/**
+ * Launches by faction, one point per MAZ day, as a share of that day's total.
+ *
+ * Shares rather than counts, because the game's overall activity moves by orders
+ * of magnitude across the record and a stacked count chart would show that and
+ * nothing else. The question §7.3 asks is whether one faction was the aggressor,
+ * which is a proportion.
+ *
+ * A day whose faction columns sum to zero is dropped rather than plotted at
+ * zero: there is no share to report, and a run of zeros draws a confident flat
+ * line through a hole.
+ */
+export function factionDaily(
+  stats: MazStats,
+  brokenFrom: number,
+  brokenTo: number,
+): FactionDaily {
+  const { dayMin, dayMax, dayOffset } = stats.reports;
+
+  const days: number[] = [];
+  const legion: number[] = [];
+  const swarm: number[] = [];
+  const faceless: number[] = [];
+  let dropped = 0;
+
+  for (let d = 0; d <= dayMax - dayMin; d++) {
+    const start = dayOffset[d];
+    const end = dayOffset[d + 1];
+    if (end <= start) continue;
+
+    const day = dayMin + d;
+    if (day >= brokenFrom && day <= brokenTo) {
+      dropped++;
+      continue;
+    }
+
+    let l = 0;
+    let s = 0;
+    let f = 0;
+    for (let r = start; r < end; r++) {
+      l += stats.legionLaunches[r];
+      s += stats.swarmLaunches[r];
+      f += stats.facelessLaunches[r];
+    }
+    const total = l + s + f;
+    if (total <= 0) continue;
+
+    days.push(day);
+    legion.push(l / total);
+    swarm.push(s / total);
+    faceless.push(f / total);
+  }
+
+  return {
+    day: Int32Array.from(days),
+    legion: Float64Array.from(legion),
+    swarm: Float64Array.from(swarm),
+    faceless: Float64Array.from(faceless),
+    dropped,
+  };
+}
+
+export interface FightShape {
+  /** The leading faction's share of the report, 0..1, one entry per report. */
+  dominance: Float64Array;
+  /** Reports where one faction launched everything. */
+  oneSided: number;
+  /** Reports with all three factions launching. */
+  threeWay: number;
+  total: number;
+}
+
+/**
+ * How lopsided each MAZ fight was, from the leading faction's share.
+ *
+ * A report at 100% is one faction launching into a zone nobody contested - a
+ * garrison being built rather than a battle - and §7.3 asks for those to be
+ * separable by name rather than averaged in. The measure is the *maximum*
+ * share and not an entropy, because the question is "did one side own this
+ * fight", which is about the leader and not about how the remainder split.
+ */
+export function fightShape(
+  stats: MazStats,
+  brokenFrom: number,
+  brokenTo: number,
+): FightShape {
+  const { reportDay, reportCount } = stats.reports;
+  const values: number[] = [];
+  let oneSided = 0;
+  let threeWay = 0;
+
+  for (let r = 0; r < reportCount; r++) {
+    const day = reportDay[r];
+    if (day >= brokenFrom && day <= brokenTo) continue;
+
+    const l = stats.legionLaunches[r];
+    const s = stats.swarmLaunches[r];
+    const f = stats.facelessLaunches[r];
+    const total = l + s + f;
+    if (total <= 0) continue;
+
+    const top = Math.max(l, s, f) / total;
+    values.push(top);
+    if (top >= 1) oneSided++;
+    if (l > 0 && s > 0 && f > 0) threeWay++;
+  }
+
+  return {
+    dominance: Float64Array.from(values),
+    oneSided,
+    threeWay,
+    total: values.length,
+  };
+}
+
+// --- appearances and streaks (§7.4) -------------------------------------------
+
+/**
+ * The longest run of consecutive days each zone spent on the board.
+ *
+ * A streak is the stricter cousin of the rolling appearance count the map's
+ * rings already use. It was rejected as a *visual* encoding for flickering,
+ * which says nothing about its value as a statistic.
+ *
+ * Relies on the shard's `(day, idx)` ordering: scanning rows in order yields
+ * each zone's days ascending, so one pass suffices and no sort is needed.
+ */
+export function longestStreaks(stats: MazStats): Map<number, number> {
+  const { reportIdx, reportDay, reportCount } = stats.reports;
+  const last = new Map<number, number>();
+  const run = new Map<number, number>();
+  const best = new Map<number, number>();
+
+  for (let r = 0; r < reportCount; r++) {
+    const idx = reportIdx[r];
+    const day = reportDay[r];
+    const previous = last.get(idx);
+    const current = previous !== undefined && day === previous + 1 ? (run.get(idx) ?? 1) + 1 : 1;
+
+    last.set(idx, day);
+    run.set(idx, current);
+    if (current > (best.get(idx) ?? 0)) best.set(idx, current);
+  }
+  return best;
+}
+
+/**
+ * Linear bins over `[0, max]`, for a quantity that is already a proportion.
+ *
+ * `logBins` is right for launches, which span five decades. A share spans one
+ * bounded range and its shape lives at the top end, so log bins would compress
+ * exactly the part worth seeing.
+ */
+export function linearBins(values: ArrayLike<number>, count: number, max = 1): Bin[] {
+  const bins: Bin[] = Array.from({ length: count }, (_, b) => ({
+    lo: (b / count) * max,
+    hi: ((b + 1) / count) * max,
+    count: 0,
+  }));
+
+  for (let i = 0; i < values.length; i++) {
+    const b = Math.min(count - 1, Math.floor((values[i] / max) * count));
+    if (b >= 0) bins[b].count++;
+  }
+  return bins;
+}
+
 /** How many times each zone appears, as `idx -> appearances`. */
 export function appearancesByZone(stats: MazStats): Map<number, number> {
   const counts = new Map<number, number>();

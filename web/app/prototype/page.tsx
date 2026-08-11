@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BASE } from "@/lib/dataOrigin";
-import { loadJson } from "@/lib/format";
+import { dateToDay, loadJson } from "@/lib/format";
 import { dayToDate } from "@/lib/data";
 import type { Meta } from "@/lib/data";
 import { loadNames } from "@/lib/names";
@@ -33,17 +33,23 @@ import {
   biggestReports,
   countEqual,
   dailyTotals,
+  factionDaily,
+  fightShape,
+  linearBins,
   loadMazStats,
   logBins,
+  longestStreaks,
   perReport,
   portalReportUrl,
   summarize,
+  FACTION_SPLIT_BROKEN,
   type MazStats,
 } from "@/lib/mazStats";
 
-import { MAZ_AMBER } from "@/components/charts/palette";
+import { FACTIONS, MAZ_AMBER } from "@/components/charts/palette";
 import { Histogram } from "@/components/charts/Histogram";
 import { TimeSeries } from "@/components/charts/TimeSeries";
+import { StackedShare } from "@/components/charts/StackedShare";
 
 type Status = "open" | "keep" | "promote" | "cut";
 
@@ -90,7 +96,13 @@ export default function PrototypePage() {
   );
 
   const derived = useMemo(() => {
-    if (!stats) return null;
+    if (!stats || !meta) return null;
+
+    // The window where the per-faction split is partial, in day numbers. Held
+    // here rather than inside the functions because only the page knows the
+    // epoch the shard was written against.
+    const brokenFrom = dateToDay(meta.day_epoch, new Date(`${FACTION_SPLIT_BROKEN.from}T00:00:00Z`));
+    const brokenTo = dateToDay(meta.day_epoch, new Date(`${FACTION_SPLIT_BROKEN.to}T00:00:00Z`));
 
     const report = summarize(stats.launches);
     const daily = dailyTotals(stats, stats.launches);
@@ -99,8 +111,23 @@ export default function PrototypePage() {
     const rateSummary = summarize(rate.value);
     const reportsPerDay = summarize(daily.reports);
     const appearances = appearancesByZone(stats);
+    const factions = factionDaily(stats, brokenFrom, brokenTo);
+    const shape = fightShape(stats, brokenFrom, brokenTo);
+    const streaks = longestStreaks(stats);
+
+    const appearanceValues = Float64Array.from(appearances.values());
+    const streakValues = Float64Array.from(streaks.values());
 
     return {
+      factions,
+      shape,
+      dominanceBins: linearBins(shape.dominance, 20),
+      appearanceBins: logBins(appearanceValues, 8),
+      streakBins: linearBins(streakValues, 16, Math.max(...streakValues)),
+      appearOnce: countEqual(appearanceValues, 1),
+      longestStreak: Math.max(...streakValues),
+      streakOverOne: streakValues.length - countEqual(streakValues, 1),
+      streakZones: streakValues.length,
       perReport: report,
       daily,
       dailySummary,
@@ -117,7 +144,7 @@ export default function PrototypePage() {
       topAppearances: Math.max(...appearances.values()),
       days: daily.day.length,
     };
-  }, [stats]);
+  }, [stats, meta]);
 
   // Names are off the load path everywhere else and stay off it here: one ~19 KB
   // block per outlier, fetched only once the reports are in hand. `names` is
@@ -355,26 +382,115 @@ export default function PrototypePage() {
               </Note>
             </Card>
 
+            <Card
+              title="Who was doing the launching"
+              status="open"
+              note="§7.3 — faction share of every launch on the day's most active zones. The one chart on this page that wears the faction colors, because it is the one subject that is a faction fact."
+            >
+              <StackedShare
+                day={derived.factions.day}
+                bands={FACTIONS.map((f) => ({
+                  label: f.label,
+                  color: f.token,
+                  value: derived.factions[f.key],
+                }))}
+                title="Share of MAZ launches by faction"
+                subtitle="Shares, not counts — the game's overall activity moves by orders of magnitude and would swamp the composition. 30-day trailing mean."
+                labelOf={labelOf}
+              />
+              <Note>
+                {derived.factions.dropped} days are missing from this chart on purpose:
+                2019-07-01 to 2019-09-11, where the per-faction columns are short of their own
+                total on 861 reports. The faction <em>player</em> columns fail on the same rows,
+                so it is the whole breakdown arriving partial rather than anything about
+                launches. A share taken across it divides by an incomplete denominator and would
+                read as a faction going quiet.
+              </Note>
+            </Card>
+
+            <Card
+              title="Is a MAZ actually a battle?"
+              status="open"
+              note="§7.3 — the leading faction's share of the launches on one zone, one day. A report at 100% is one faction launching into a zone nobody contested."
+            >
+              <Histogram
+                bins={derived.dominanceBins}
+                title="Leading faction's share of a report"
+                subtitle="Linear bins of 5 points. Mapped reports only, the 2019 window dropped."
+                xLabel="share held by the top faction"
+                markers={[{ at: 1 / 3, label: "even three-way" }]}
+              />
+              <Note>
+                <strong>
+                  {((100 * derived.shape.oneSided) / derived.shape.total).toFixed(1)}% of reports
+                  are one-sided
+                </strong>{" "}
+                — a single faction launching everything, {derived.shape.oneSided.toLocaleString()}{" "}
+                of {derived.shape.total.toLocaleString()}. Only{" "}
+                {((100 * derived.shape.threeWay) / derived.shape.total).toFixed(1)}% have all
+                three factions launching at all. &ldquo;Most active zone&rdquo; means most
+                <em> activity</em>, and a garrison being built alone counts.
+              </Note>
+            </Card>
+
+            <Card
+              title="How often a zone comes back"
+              status="open"
+              note="§7.4 — appearances per zone across the whole record, and the longest consecutive run each one managed."
+            >
+              <Histogram
+                bins={derived.appearanceBins}
+                title="Appearances per zone"
+                subtitle="Log bins, eight per decade. One sample per zone that has ever appeared."
+                xLabel="days on the board"
+              />
+              <Note>
+                {derived.appearOnce.toLocaleString()} of {derived.zones.toLocaleString()} zones
+                appear exactly once —{" "}
+                {((100 * derived.appearOnce) / derived.zones).toFixed(1)}% — while the leader
+                takes {derived.topAppearances.toLocaleString()} of{" "}
+                {derived.days.toLocaleString()} covered days. The mean of{" "}
+                {(stats.reports.reportCount / derived.zones).toFixed(1)} describes neither end.
+              </Note>
+
+              <div style={{ height: 22 }} />
+
+              <Histogram
+                bins={derived.streakBins}
+                title="Longest consecutive run per zone"
+                subtitle="Consecutive days on the board. The stricter cousin of the map's rolling appearance count."
+                xLabel="consecutive days"
+              />
+              <Note>
+                {derived.streakOverOne.toLocaleString()} zones (
+                {((100 * derived.streakOverOne) / derived.streakZones).toFixed(1)}%) ever managed
+                two days in a row; the record is {derived.longestStreak.toLocaleString()}. Streaks
+                were built as a ring encoding for the timelapse and rejected for flickering —
+                that says nothing about their value as a statistic, which is this.
+              </Note>
+            </Card>
+
             <Card title="Next on the bench" status="open">
               <ul
                 className="prose"
                 style={{ color: "var(--text-dim)", lineHeight: 1.7, paddingLeft: 18, margin: 0 }}
               >
                 <li>
-                  Cluster spread per day, off <code>distance.spread</code> — needs zone
-                  coordinates joined to the reports, which means the geometry tiles.
+                  <strong>§7.1&rsquo;s cluster charts.</strong> The clustering itself is built and
+                  measured — <code>distance.cluster</code>, run over the record, finds 36 days
+                  where four or more of the world&rsquo;s most active zones sat within thirty
+                  miles. Drawing it here needs coordinates, and coordinates mean loading the
+                  9.27 MB of geometry tiles the map loads. That is the next real decision on this
+                  page.
                 </li>
                 <li>
                   Which of the eleven biggest reports land near the 2017-04-26 range change, now
                   that <code>config.MISSILE_RANGE_INCREASED</code> pins the date.
                 </li>
                 <li>
-                  Faction launch share (§7.3). <strong>Unblocked:</strong>{" "}
-                  <code>maz_stats.bin.br</code> now carries the three per-faction launch columns.
-                  Drop 2019-07-01 to 2019-09-11 before computing any share — the split falls
-                  short of its own total across that window.
+                  Faction share against the map&rsquo;s own share of zones held — does launching
+                  lead holding, or follow it? Needs the scope series the main page already has.
                 </li>
-                <li>Appearance and streak distributions (§7.4).</li>
               </ul>
               <Note>
                 Top zone appears on {derived.topAppearances.toLocaleString()} of{" "}

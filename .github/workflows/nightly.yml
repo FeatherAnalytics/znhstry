@@ -71,19 +71,12 @@ jobs:
         with:
           enable-cache: true
 
-      # The cache is a speed-up, never the source of truth. R2 holds the only copy that
-      # matters, because the 31-slot ring cannot rebuild a history older than a month
-      # and an Actions cache is evicted after seven days idle.
-      - name: Restore extracted data (cache)
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: data/raw
-          key: raw-${{ github.run_id }}
-          restore-keys: raw-
-
-      - name: Restore extracted data (R2)
-        if: steps.cache.outputs.cache-matched-key == ''
+      # Straight from R2, every run, and deliberately not through actions/cache. R2 is
+      # the source of truth and the restore costs seconds; a cache is a second copy of
+      # the raw layer whose prefix fallback can resurrect an entry from before a layout
+      # migration - and a restore that "hits" on one of those skips R2, leaves both
+      # layouts side by side, and kills the build on a hive partition mismatch.
+      - name: Restore extracted data
         working-directory: pipeline
         run: uv run python -m znhstry restore
 

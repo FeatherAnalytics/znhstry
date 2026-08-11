@@ -348,8 +348,14 @@ export function useZoneData(
         onFlipsRef.current?.(answer);
       }
       setVersion((v) => v + 1);
+      // A failed shard fetch is retried on the next request, so an error is a
+      // condition to recover from rather than a terminal state - an answer
+      // arriving means the display is healthy again, and a banner left up over
+      // a working map reads as the map being wrong.
       setProgress((p) =>
-        p.historyReady && !p.scrubbing ? p : { ...p, historyReady: true, scrubbing: false },
+        p.historyReady && !p.scrubbing && !p.error
+          ? p
+          : { ...p, historyReady: true, scrubbing: false, error: null },
       );
     };
 

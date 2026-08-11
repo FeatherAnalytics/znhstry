@@ -186,6 +186,31 @@ export function dailyTotals(stats: MazStats, values: ArrayLike<number>): DailySe
   };
 }
 
+/**
+ * The same days, as an average over the reports behind each one.
+ *
+ * A raw daily sum is not comparable across days, because the top ten is not
+ * always ten: most days carry exactly ten reports and a few carry as many as
+ * twenty-nine, so a day can out-total another by being bigger rather than by
+ * being busier. Dividing by the report count asks the honest question - how hard
+ * was the average zone in the day's top ten fought - and it is the series any
+ * comparison across the record should read.
+ *
+ * `reports` is carried through unchanged, so a caller can still weight by it.
+ */
+export function perReport(daily: DailySeries): DailySeries {
+  const value = new Float64Array(daily.value.length);
+  for (let i = 0; i < value.length; i++) value[i] = daily.value[i] / daily.reports[i];
+  return { day: daily.day, value, reports: daily.reports };
+}
+
+/** How many entries equal `value`. */
+export function countEqual(values: ArrayLike<number>, value: number): number {
+  let n = 0;
+  for (let i = 0; i < values.length; i++) if (values[i] === value) n++;
+  return n;
+}
+
 /** How many times each zone appears, as `idx -> appearances`. */
 export function appearancesByZone(stats: MazStats): Map<number, number> {
   const counts = new Map<number, number>();

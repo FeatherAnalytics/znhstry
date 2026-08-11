@@ -28,9 +28,11 @@ import { dayToDate } from "@/lib/data";
 import type { Meta } from "@/lib/data";
 import {
   appearancesByZone,
+  countEqual,
   dailyTotals,
   loadMazStats,
   logBins,
+  perReport,
   summarize,
   type MazStats,
 } from "@/lib/mazStats";
@@ -78,17 +80,25 @@ export default function PrototypePage() {
   const derived = useMemo(() => {
     if (!stats) return null;
 
-    const perReport = summarize(stats.launches);
+    const report = summarize(stats.launches);
     const daily = dailyTotals(stats, stats.launches);
     const dailySummary = summarize(daily.value);
+    const rate = perReport(daily);
+    const rateSummary = summarize(rate.value);
+    const reportsPerDay = summarize(daily.reports);
     const appearances = appearancesByZone(stats);
 
     return {
-      perReport,
+      perReport: report,
       daily,
       dailySummary,
+      rate,
+      rateSummary,
+      reportsPerDay,
+      tenReportDays: countEqual(daily.reports, 10),
       perReportBins: logBins(stats.launches),
       dailyBins: logBins(daily.value),
+      rateBins: logBins(rate.value),
       zones: appearances.size,
       topAppearances: Math.max(...appearances.values()),
       days: daily.day.length,
@@ -201,11 +211,42 @@ export default function PrototypePage() {
                 markers={[{ at: derived.dailySummary.median, label: "median" }]}
               />
               <Note>
-                Careful with this one as a comparison across days: the top ten is exactly ten
-                reports on most days but runs to fourteen on a few, so a raw sum mixes day
-                sizes. <code>dailyTotals</code> returns the report count alongside the total for
-                exactly that reason — the per-report rate is the honest version and is the next
-                thing to draw here.
+                Do not compare days on this chart. The top ten is exactly ten reports on{" "}
+                {derived.tenReportDays.toLocaleString()} of {derived.days.toLocaleString()} days
+                but runs from {derived.reportsPerDay.min} to {derived.reportsPerDay.max}, so a
+                raw sum lets a day out-total another by being bigger rather than busier. The
+                next card divides it out.
+              </Note>
+            </Card>
+
+            <Card
+              title="Launches per report, day by day"
+              status="open"
+              note="§7.2.2 — the same days, normalized by how many reports each carried. This is the series to compare across the record."
+            >
+              <TimeSeries
+                day={derived.rate.day}
+                value={derived.rate.value}
+                title="Launches per MAZ report"
+                subtitle="Daily total divided by that day's report count, behind a 30-day trailing mean."
+                labelOf={labelOf}
+              />
+              <Histogram
+                bins={derived.rateBins}
+                title="Distribution of the daily rate"
+                subtitle="Log bins, six per decade. One sample per covered day."
+                xLabel="launches per report"
+                markers={[{ at: derived.rateSummary.median, label: "median" }]}
+              />
+              <Note>
+                Median {Math.round(derived.rateSummary.median).toLocaleString()} launches per
+                report on a typical day, p90 {Math.round(derived.rateSummary.p90).toLocaleString()}
+                , busiest day {Math.round(derived.rateSummary.max).toLocaleString()}. Tighter than
+                the per-report distribution two cards up (median{" "}
+                {Math.round(derived.perReport.median).toLocaleString()}, p90{" "}
+                {Math.round(derived.perReport.p90).toLocaleString()}) because averaging ten zones
+                pulls each day toward the middle — the spread that survives is between days, not
+                within them, and that is the quantity §7.2.3 regresses cluster size against.
               </Note>
             </Card>
 
@@ -233,9 +274,6 @@ export default function PrototypePage() {
                 className="prose"
                 style={{ color: "var(--text-dim)", lineHeight: 1.7, paddingLeft: 18, margin: 0 }}
               >
-                <li>
-                  Per-report rate rather than the daily sum, so days of different sizes compare.
-                </li>
                 <li>
                   Cluster spread per day, off <code>distance.spread</code> — needs zone
                   coordinates joined to the reports, which means the geometry tiles.

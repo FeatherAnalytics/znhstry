@@ -13,6 +13,7 @@ permissions:
 jobs:
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +42,7 @@ jobs:
 
   pipeline:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -54,9 +56,11 @@ jobs:
         working-directory: pipeline
         run: uv run python -c "from znhstry import boundaries, config, export, ingest, schema, upload"
 
+      # Pinned: an unpinned ruff turns a new release's new rule into a red build
+      # on a pull request that changed nothing.
       - name: Lint
         working-directory: pipeline
-        run: uvx ruff check src/znhstry
+        run: uvx ruff@0.16.2 check src/znhstry
 
       # Covers the parts with a right answer that does not need the network or the
       # 290 MB raw layer: the ring arithmetic, and the dtype contract the two write

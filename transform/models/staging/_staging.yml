@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: stg_battlestats
+    description: >
+      Grain: one row per battle report, tournament reports included. 61,517 rows.
+
+      The tests live here rather than on fct_zone_battles because this is the last
+      model that still holds the rows they are about: the mart inner-joins dim_zone
+      and filters `not is_tournament` and `battle_date is not null`, so a null key or
+      an unmappable zone is gone before any test downstream could see it.
+    columns:
+      - name: battle_report_number
+        description: QONQR's own identifier, and the key the scraper resumes from.
+        data_tests: [unique, not_null]
+      - name: zone_id
+        description: >
+          Negative on a tournament report, where it identifies a player rather than
+          a place. Null means the scrape lost the field.
+        data_tests:
+          - not_null
+          # Five mapped reports name a zone that is not in `zones`, so this warns
+          # rather than fails: it is watching for that count to move, which would
+          # mean the portal and the zone dump have drifted apart. Tournament zones
+          # are excluded because they have no row to match by design.
+          - relationships:
+              arguments:
+                to: ref('dim_zone')
+                field: zone_id
+              config:
+                where: "not is_tournament"
+                severity: warn
+      - name: battle_date
+        description: >
+          Parsed from the report page's US month-first date. fct_zone_battles drops
+          the rows where this is null, so a scrape that stopped parsing dates would
+          shrink the mart silently -- hence the guard at the point the rows still
+          exist.
+        data_tests:
+          - not_null:
+              config:
+                severity: warn

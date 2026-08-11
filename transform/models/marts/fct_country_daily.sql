@@ -1,9 +1,17 @@
--- Grain: one row per country per calendar day, dense within each country's
--- observed span.
+-- Grain: one row per country per calendar day, dense over the global span.
+--
+-- The spine is every country crossed with every day in the record, not each
+-- country's own first-to-last window, so a country's series starts at zero on
+-- day one rather than on the day it was first played. Charts can be laid over
+-- one another without aligning axes, at the cost of leading zeros.
 --
 -- Same cumulative-delta trick as fct_global_daily, partitioned by country.
--- Because a running sum is linear, summing this across countries reproduces
--- fct_global_daily exactly -- which is what the reconciliation test checks.
+-- Summing this across countries does NOT reproduce fct_global_daily: three
+-- zones have events but no row in `zones`, so they carry a null country_id,
+-- are filtered out below, and reach the global model only -- 722,697 Swarm
+-- bots' worth. That is intended and guarded by
+-- `assert_orphan_zones_survive_the_dim_zone_join`; the fix that breaks it is
+-- making fct_zone_events' dim_zone join inner.
 with daily as (
     select
         country_id,

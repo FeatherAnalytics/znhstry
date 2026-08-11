@@ -162,6 +162,20 @@ export function useZoneData(
   const requested = useRef(0);
   const answered = useRef(-1);
   const repaintAt = useRef(0);
+  /**
+   * Whether a tile landing right now may keep its `paint/` colors.
+   *
+   * `paint/` is the newest date's standings, and the display buffers are shared
+   * with the worker - so once a date the paint files cannot answer has been
+   * asked for, those bytes are the wrong map for the row of slots the tile
+   * brings. They are dropped and the worker is asked again instead, which is
+   * the only thing that can color a fresh slot for another date. Set where the
+   * request is made rather than where it is answered, so a tile landing in the
+   * gap between the two is treated as belonging to the date being asked for.
+   */
+  const paintApplies = useRef(true);
+  /** Tiles landed since the last date was asked for; see `paintApplies`. */
+  const [tileEpoch, setTileEpoch] = useState(0);
   /** Slots the worker has been told about. Only ever grows. */
   const sentSlots = useRef(0);
   const pending = useRef(false);
@@ -255,6 +269,7 @@ export function useZoneData(
         // The opening view is the whole world, so the middle of it is as good
         // a guess as any until the reader pans or shares their location.
         focus: { lat: 26, lon: 8 },
+        paintApplies: () => paintApplies.current,
         onTile: (stage, remaining) => {
           if (cancelled) return;
           // Unthrottled, unlike the repaint below: the worker must know about a
@@ -265,6 +280,11 @@ export function useZoneData(
           if (last || now - repaintAt.current > REPAINT_INTERVAL_MS) {
             repaintAt.current = now;
             setVersion((v) => v + 1);
+            // Slots whose paint was dropped are still uncolored, and no other
+            // input asks for a date when a tile lands. Re-asking on the repaint
+            // beat rather than per tile bounds it to five rebuilds a second,
+            // and only while the reader is off the date `paint/` answers.
+            if (!paintApplies.current) setTileEpoch((t) => t + 1);
             setProgress((p) => ({
               ...p,
               zones: geo.count,
@@ -328,8 +348,14 @@ export function useZoneData(
         onFlipsRef.current?.(answer);
       }
       setVersion((v) => v + 1);
+      // A failed shard fetch is retried on the next request, so an error is a
+      // condition to recover from rather than a terminal state - an answer
+      // arriving means the display is healthy again, and a banner left up over
+      // a working map reads as the map being wrong.
       setProgress((p) =>
-        p.historyReady && !p.scrubbing ? p : { ...p, historyReady: true, scrubbing: false },
+        p.historyReady && !p.scrubbing && !p.error
+          ? p
+          : { ...p, historyReady: true, scrubbing: false, error: null },
       );
     };
 
@@ -375,6 +401,12 @@ export function useZoneData(
     const lent = spare.current;
     spare.current = null;
 
+    // The worker is about to own what these buffers hold. Paint agrees with it
+    // only on the newest date with no window open - a window clears `visible`
+    // for every slot, including ones no tile has claimed yet, so a tile landing
+    // under one needs the worker as much as an older date does.
+    paintApplies.current = day === latest && changeStart === null;
+
     // The loading state is delayed rather than set now. During playback a date
     // is answered in tens of milliseconds, and flipping a state flag on and off
     // every frame both flickers the indicator and makes every commit schedule
@@ -401,7 +433,10 @@ export function useZoneData(
       },
       lent ? [lent.pk.buffer, lent.visible.buffer] : [],
     );
-  }, [day, changeStart, wanted, wantFlips]);
+    // `tileEpoch` is here so tiles that landed after the last answer get
+    // colored for the date on screen; it only moves while the reader is off
+    // the date `paint/` answers, so a plain cold load never repeats a request.
+  }, [day, changeStart, wanted, wantFlips, latest, tileEpoch]);
 
   const setFocus = useCallback((lat: number, lon: number) => {
     loaderRef.current?.focus(lat, lon);

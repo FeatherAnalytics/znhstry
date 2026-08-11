@@ -15,27 +15,23 @@ exposures:
 
       This exists so `dbt ls --select +exposure:zone_history_map` answers "what does
       the site actually depend on", which is otherwise buried in the SQL strings inside
-      export.py.
+      export.py. The list below is therefore the models export.py names, and nothing
+      else: `fct_zone_events` (through the `zone_events` view that applies the
+      RECORD_START cut), `dim_zone`, `fct_global_daily`, the two lookups, and
+      `fct_zone_battles`, which feeds the Most Active Zones overlay in the timelapse.
+
+      Two marts are deliberately absent. `fct_zone_checkpoints` and
+      `fct_country_daily` are built and tested but read by nothing outside
+      transform/ -- the viewer's dormancy problem is solved by `display/` anchors
+      written from the event stream, and its country series by a query over
+      `fct_zone_events`. Listing them here would make `+exposure:zone_history_map`
+      answer a question about the warehouse instead of about the site.
     owner:
       name: Feather Analytics
     depends_on:
       - ref('dim_zone')
       - ref('fct_zone_events')
-      - ref('fct_zone_checkpoints')
       - ref('fct_global_daily')
-      - ref('fct_country_daily')
+      - ref('fct_zone_battles')
       - ref('stg_regions')
       - ref('stg_countries')
-
-  - name: battle_history
-    label: Zone History — battle reports
-    type: application
-    maturity: low
-    url: https://www.featheranalytics.dev/znhstry/
-    description: >
-      Not wired into the viewer yet. Declared at low maturity so the lineage is honest
-      about what exists: the mart is built and tested, and nothing reads it.
-    owner:
-      name: Feather Analytics
-    depends_on:
-      - ref('fct_zone_battles')

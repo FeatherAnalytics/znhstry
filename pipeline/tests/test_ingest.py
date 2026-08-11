@@ -8,14 +8,25 @@ wrong - a skipped day and a silently widened column both look like ordinary data
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 import polars as pl
 import pytest
 
 from znhstry import config
-from znhstry.ingest import RingGapError, plan_slots
+from znhstry.ingest import RingGapError, plan_slots, read_daily
 from znhstry.schema import CHANGELOG_DTYPES, conform
+
+_DAILY_HEADER = (
+    "ZoneId,LastUpdateDateUtc,DateCapturedUtc,ZoneControlState,"
+    "LegionCount,SwarmCount,FacelessCount"
+)
+
+
+def _daily(tmp_path, *rows: str):
+    path = tmp_path / "dailyzoneupdates-07.csv"
+    path.write_text("\n".join((_DAILY_HEADER, *rows)) + "\n", encoding="utf-8")
+    return path
 
 
 def _history(tmp_path, newest: str):
@@ -73,13 +84,28 @@ def test_a_gap_wider_than_the_ring_refuses_to_run(tmp_path):
     strictly worse than stopping.
     """
     source = _history(tmp_path, "2026-06-01 00:01:00")
-    with pytest.raises(RingGapError, match="ring only holds"):
+    with pytest.raises(RingGapError, match="overwritten"):
         plan_slots(date(2026, 8, 8), source)
 
 
 def test_exactly_the_ring_is_still_allowed(tmp_path):
+    # 8 July to 7 August is 31 days and asks for 31 different slots, because both
+    # months are long enough that no day of the month comes round twice.
     source = _history(tmp_path, "2026-07-08 00:01:00")
     assert len(plan_slots(date(2026, 8, 8), source)) == config.RING_SLOTS
+
+
+def test_a_window_spanning_february_runs_out_of_ring_early(tmp_path):
+    """31 days is not the limit; distinct slot numbers are.
+
+    31 January to 2 March is 31 days, but February is short enough that slots 01 and
+    02 are needed for February *and* March. QONQR has already written March over
+    them, so the February days are gone - and a day count alone would call this fine
+    and merge March's events under January's history.
+    """
+    source = _history(tmp_path, "2026-01-31 00:01:00")
+    with pytest.raises(RingGapError, match="slot 01"):
+        plan_slots(date(2026, 3, 3), source)
 
 
 def test_the_calendar_is_utc_not_local(tmp_path, monkeypatch):
@@ -107,6 +133,45 @@ def test_the_calendar_is_utc_not_local(tmp_path, monkeypatch):
 def test_no_history_is_not_treated_as_an_empty_gap(tmp_path):
     with pytest.raises(RingGapError, match="no history"):
         plan_slots(date(2026, 8, 8), tmp_path)
+
+
+def test_a_daily_file_parses_into_the_contract(tmp_path):
+    path = _daily(tmp_path, "1,2026-08-07 00:01:21.1234567,2026-08-01 09:00:00,2,10,20,30")
+
+    out = read_daily([path])
+
+    assert out.columns == list(CHANGELOG_DTYPES)
+    # The fraction is truncated rather than rounded, matching the upstream importer.
+    assert out["LastUpdateDateUtc"][0] == datetime(2026, 8, 7, 0, 1, 21)
+
+
+def test_an_unparseable_event_stamp_names_the_rows_it_came_from(tmp_path):
+    """A stamp that is present but unreadable is not a zone nobody has touched.
+
+    `strict=False` collapses the two into the same null, and that null travels as far
+    as `merge`, where the partition year is None and `int(None)` raises a TypeError
+    naming nothing at all - by which point the file it came from is long gone.
+    """
+    path = _daily(
+        tmp_path,
+        "1,2026-08-07 00:01:21,2026-08-01 09:00:00,2,10,20,30",
+        "2,not a timestamp,,2,1,2,3",
+    )
+
+    with pytest.raises(ValueError, match="LastUpdateDateUtc"):
+        read_daily([path])
+
+
+def test_a_zone_nobody_has_touched_is_dropped_rather_than_refused(tmp_path):
+    """An absent stamp is the normal case: it carries no event, so there is nothing
+    to read. Only a stamp that is there and will not parse is a fault."""
+    path = _daily(
+        tmp_path,
+        "1,2026-08-07 00:01:21,2026-08-01 09:00:00,2,10,20,30",
+        "2,,,0,0,0,0",
+    )
+
+    assert read_daily([path]).height == 1
 
 
 def test_conform_casts_to_the_contract():

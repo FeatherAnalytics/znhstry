@@ -16,8 +16,8 @@ game. See "Where the data comes from".
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
 - **Ingest**: `httpx` + `polars` -> Parquet in `data/raw/`.
 - **Transform**: dbt-duckdb in `transform/` — 6 staging views, 1 intermediate, 6 marts,
-  1 seed, 12 data tests, 1 unit test, 2 exposures. `uv run dbt build` takes ~25 s over
-  9.88M events.
+  1 seed, 15 generic tests, 6 singular tests, 1 unit test, 1 exposure. `uv run dbt build`
+  takes ~25 s over 9.88M events.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
 - **Hosting**: the site on GitHub Pages, the data in Cloudflare R2. Two deployments.
@@ -31,7 +31,7 @@ the warehouse ships whatever the marts last held:
 cd pipeline  && uv run python -m znhstry ingest      # read the day's slot from Dropbox
 cd pipeline  && uv run python -m znhstry battlestats # scrape any new battle reports
 cd transform && uv run dbt build                   # rebuild the marts (~25 s)
-cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~26 min)
+cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~9 min)
 cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
 cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
 ```
@@ -460,9 +460,13 @@ first seconds of day `NN+1`.** That sliver is load-bearing: it is the only proof
 are on disk, because a max date of `NN` alone means slot `NN-1` was the last one read and
 `NN` is still a fragment.
 
-**A gap wider than 31 days is permanent.** The slot holding that day has been overwritten
-with a newer month. `plan_slots` raises rather than fetching it and appending the wrong
-month's events under a successful exit code. Restore from R2 instead.
+**A gap is permanent the moment two missing days need the same slot.** The ring's reach
+is the months being wrapped, not a flat 31 days: slots are days of the month, so a window
+spanning February needs slots 01–03 twice, and Dropbox only holds the newer month.
+`plan_slots` raises on any plan with a duplicate slot number rather than fetching it and
+appending the wrong month's events under a successful exit code — counting distinct slots
+is exact and subsumes the 31-day case, since any 32 consecutive days repeat one. Restore
+from R2 instead. `tests/test_ingest.py` pins the February case.
 
 **Dropbox needs `?dl=1` and answers no freshness question.** Without it you get an HTML
 interstitial with a 200 status, which is why `_download` checks the body starts with a
@@ -487,7 +491,13 @@ numbers it does not already have. A normal run costs one index page and stops.
 - **Most Active Zones only names today's ten.** Reports from a missed day appear on no
   index anywhere, so the span between what we hold and what is listed is walked by number.
 - **A report number with no report is normal.** ~61k real reports span a range of ~131k
-  numbers, so misses are counted and stepped over, never raised.
+  numbers, so misses are counted and stepped over, never raised. Because roughly half the
+  range is empty, the walk's progress cannot be read off the reports on disk —
+  `data/raw/battlestats/checked_through.txt` records the highest number actually asked
+  for, or a batch of dead numbers is re-walked every night forever.
+- **A page the parser cannot read is logged by number and skipped, never raised.** One
+  moved layout must not discard the 39 other pages a run already paid rate-limited
+  requests for.
 - **`Date` on a report page is US month-first** — `8/7/2026` is 7 August. Parsed with an
   explicit format, because for any day under 13 the wrong reading is also a valid date and
   the error would be silent and up to eleven months wrong.
@@ -642,10 +652,41 @@ against a threshold, because thresholds on upstream drift are brittle.
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
   `_BBOX_MARGIN = 1.05` in `export.py`.
-- **Guard packed integer columns for overflow and sign.** `day` is a uint16 offset from
-  `DAY_EPOCH` (2010-01-01, chosen so the 29 backfill sentinel rows are not negative); an
-  earlier row would underflow into a plausible-looking date rather than failing. `_pack`
-  checks bounds before writing.
+- **Guard packed integer columns for overflow and sign — every one of them.** `day` is a
+  uint16 offset from `DAY_EPOCH` (2010-01-01, chosen so the 29 backfill sentinel rows are
+  not negative); an earlier row would underflow into a plausible-looking date rather than
+  failing. Which columns "can" overflow is a judgment that goes stale the moment upstream
+  widens a field, so `_pack` bounds-checks all of them. It also rejects masked arrays:
+  DuckDB returns one for any column that carried nulls, `np.asarray` drops the mask, and
+  the null ships as a zero — a null country reads as country 0 everywhere downstream. A
+  null must be resolved in the query, coalesced or dropped.
+- **Integer division in DuckDB is `//`; `cast(a / b as integer)` rounds.**
+  `cast(6144 / 4096 as integer)` is 2, not 1. On block arithmetic that writes a spurious
+  empty block past the end of the index and can skip a block whose rows all sit in its
+  upper half — 4,096 zones whose history silently never lands on disk.
+- **Upload order: shards, then manifests, then the orphan sweep.** Until the new manifest
+  lands, clients read the old one, and the old one names exactly the keys the sweep
+  removes. `upload_all` also refuses to run when any shard is newer than the `meta.json`
+  that has to describe it — an export that died part way leaves fresh trees under a stale
+  manifest, and uploading that deletes live objects.
+- **`export_all` writes the boundary payloads itself.** The upload sweeps every bucket key
+  the data directory does not contain, so anything only a separate command writes is
+  deleted from R2 on the next nightly — and the viewer swallows the missing file, so the
+  outlines just vanish. The standalone `boundaries` command exists to *refresh* them.
+- **A rejected fetch must not stay in an in-flight cache.** `displayWorker.ts`, `names.ts`
+  and `zoneHistory.ts` all dedup concurrent requests through a promise map; evict on
+  rejection or one transient failure makes that year, name block, or history block
+  unloadable for the life of the page. The display error is likewise cleared when the next
+  answer arrives — recovery is expected, and a banner left standing over a working map
+  reads as the map being wrong.
+- **`ZoneMap`'s patch key carries the focus mask's identity, not its presence.** The
+  incremental repaint skips every row whose bytes did not move, so a key that only says "a
+  filter exists" leaves the first area's dimming on screen when the reader picks a second
+  one. Near-me ↔ area transitions are the ones that expose it.
+- **`paint/` bytes apply only while the display stands at the newest date with no window
+  open.** They are the newest standings; a tile landing after a scrub would otherwise
+  paint today's colors onto a historical map, and nothing re-asks for a date when a tile
+  lands. `useZoneData` gates this and re-asks the worker on the repaint beat instead.
 - **Sort by `observed_at`, never by `activity_date`.** 653,071 zone-days carry more than one
   event, so ordering by the date leaves them tied and DuckDB's parallel sort emits them in
   whatever order it finishes in. That is a correctness bug as well as a churn one: the
@@ -663,8 +704,8 @@ against a threshold, because thresholds on upstream drift are brittle.
 ## Export format
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
-uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **1,851 files,
-94.6 MB**, ~26 minutes.
+uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **~1,850 files,
+94.6 MB**, ~9 minutes on a GitHub runner.
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:
@@ -740,11 +781,6 @@ explicitly in `ZoneMap` rather than decided by which request finished first.
   reason for 16 is *requests*, though, not bytes. What it costs is precision in the
   nearest-first ordering: the first tile to land covers four times the area.
 - **Sorting scrambles idx**, so it is an explicit column rather than implied by row order.
-- **Every shard's URL carries a hash of its bytes** — `tiles/09_13.bin.br?v=fe82c88e`,
-  from `meta.geometry.tiles`. That is what makes `immutable` honest: changed bytes are a
-  different URL, so no reader can be served a stale shard and none of them ever has to
-  clear a cache. Per file, not one stamp for the export, so an unchanged shard keeps its
-  URL and stays cached. R2 ignores the query string, so nothing changes in the bucket.
 
 **`pk` is one byte: faction in the top two bits, a log-magnitude bucket in the low six.**
 Radius is `log10(count)` capped in pixels, so six bits carry more resolution than the screen
@@ -774,9 +810,13 @@ date is **3.16 MB**.
 
 ### `zone_history/` — the exact record, by block of zone index
 
-`zone_history/BBBB.bin.br`, 4096 zones per block, 656 blocks, 37.2 MB, **35 KB median**.
+`zone_history/BBBB.bin.br`, 4096 zones per block, 655 blocks, 37.2 MB, **35 KB median**.
 Columns are `idx` (uint32 delta), `day` (uint16), `control_state` (uint8) and the three
 counts (int32). Cut by zone rather than by date so a hover fetches one block, not the lot.
+Written from **one query over the whole stream, split in Python by a `idx // 4096` block
+column** — a query per block scans all 9.88M events 655 times to write 37 MB, and is most
+of the export's running time. Prefixing `block` to the `(idx, observed_at)` order changes
+nothing, because it is a function of `idx`.
 
 ### `names/` — by index block, and off the load path
 
@@ -928,7 +968,11 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
   This file and parts of the codebase still carry British spellings from earlier work; fix
   them as you touch them rather than in one sweep.
 - Testing is deliberately concentrated where failures are invisible, not spread evenly.
-  dbt carries 12 data tests and 1 unit test; `pipeline/tests/` covers the ring arithmetic
-  and the dtype contract, which decide what gets written before dbt can see it. The viewer
-  has none. `dbt source freshness` warns at 2 days stale and errors at 7 — well inside the
-  31-day ring, so there is time to act before a gap becomes unrecoverable.
+  dbt carries 15 generic data tests, 6 singular tests and 1 unit test; `pipeline/tests/`
+  covers the ring arithmetic and the dtype contract, which decide what gets written before
+  dbt can see it. The viewer has none. `dbt source freshness` warns at 2 days stale and
+  errors at 7 — well inside the 31-day ring, so there is time to act before a gap becomes
+  unrecoverable. **The nightly runs it right after ingest and fails red on error.** That
+  step is the only alarm that fires while the missing days are still fetchable — without
+  it a quiet upstream is a green no-op every night until the ring closes over the gap. Do
+  not remove or `continue-on-error` it.

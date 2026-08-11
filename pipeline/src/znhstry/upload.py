@@ -14,9 +14,10 @@ which is why the payloads live here rather than in the site bundle:
                             nightly run rewrites them, so a browser must ask
                             before reusing - see `_cache_control`.
 
-Upload order is deliberate: shards first, manifests last. Until the manifest
-lands, clients are still reading the previous one, and every file it names is
-still in place.
+Upload order is deliberate: shards first, manifests last, and only then the
+orphan sweep. Until the manifest lands, clients are still reading the previous
+one, and every file it names is still in place - including the keys the sweep
+is about to remove, which is why it goes after the manifest rather than before.
 
 Set ZNHSTRY_UPLOAD_FORCE=1 to re-send every object regardless of its ETag. Only
 needed to restamp headers on objects whose bytes have not changed, since the
@@ -241,15 +242,48 @@ def restore_raw(bucket: str | None = None) -> None:
     log.info("restore complete: %s files, %s MB", f"{len(keys):,}", f"{total / 1e6:.1f}")
 
 
+def _refuse_a_half_written_export(source: Path, files: list[Path]) -> None:
+    """Stop if any shard is newer than the manifest that has to describe it.
+
+    `export_all` writes `meta.json` last, so the manifest being the newest file in
+    its own tree is what "the export finished" looks like on disk. An export killed
+    part way leaves fresh shards under a manifest from the previous run - and the
+    upload would then take that stale manifest as the list of live keys and delete
+    every object the new run had not got round to writing yet.
+
+    Cheap, and it fails before anything is sent.
+    """
+    manifests = [p for p in files if p.name == "meta.json"]
+    if not manifests:
+        raise SystemExit(
+            f"no meta.json under {source} - `znhstry export` has not finished a run here."
+        )
+
+    for manifest in manifests:
+        tree = manifest.parent
+        stamp = manifest.stat().st_mtime_ns
+        newer = [
+            p for p in files if p.is_relative_to(tree) and p.stat().st_mtime_ns > stamp
+        ]
+        if newer:
+            raise SystemExit(
+                f"{len(newer):,} file(s) under {tree} are newer than its meta.json "
+                f"(e.g. {newer[0].relative_to(tree)}). The export did not finish, so the "
+                f"manifest does not name everything on disk - re-run `znhstry export` "
+                f"before uploading."
+            )
+
+
 def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     source = source or config.WEB_DATA
     bucket = _bucket(bucket)
     if not source.exists():
         raise SystemExit(f"{source} does not exist - run `znhstry export` first.")
 
-    s3 = _client()
-
     files = sorted(p for p in source.rglob("*") if p.is_file())
+    _refuse_a_half_written_export(source, files)
+
+    s3 = _client()
     # Manifests last: a client that reads one must find every shard it names.
     manifests = [p for p in files if p.name.endswith(".json") and p.suffix != ".br"]
     shards = [p for p in files if p not in set(manifests)]
@@ -296,8 +330,15 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
             if done % 250 == 0:
                 log.info("  %s / %s", f"{done:,}", f"{len(pending):,}")
 
-    # Orphans from a previous layout. Deleted after the new shards are all in
-    # place and before the manifest names them, so no client sees a gap.
+    # The manifest always goes, even when identical: it is the cheap file, and
+    # a client that finds a stale one finds shards that no longer exist.
+    for path in manifests:
+        total_bytes += send(path)
+
+    # Orphans from a previous layout, and last of all. Until the new manifest
+    # lands, every client is still reading the old one - and the old one names
+    # exactly these keys, so deleting them any earlier empties the map for
+    # anyone mid-load.
     #
     # The archive prefix is excluded, not merely absent from `key_of`: it lives in
     # this bucket and is not part of the export, so without this line publishing
@@ -311,11 +352,6 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
                 Bucket=bucket,
                 Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]},
             )
-
-    # The manifest always goes, even when identical: it is the cheap file, and
-    # a client that finds a stale one finds shards that no longer exist.
-    for path in manifests:
-        total_bytes += send(path)
 
     log.info(
         "upload complete: %s sent, %s skipped, %s MB",

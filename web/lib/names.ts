@@ -51,5 +51,11 @@ export function loadNames(
   });
 
   blocks.set(block, promise);
+  // One transient failure would otherwise leave every zone in the block
+  // permanently nameless, and silently - the hover just shows no name. Drop the
+  // entry so a later hover retries; callers already waiting keep this promise.
+  promise.catch(() => {
+    if (blocks.get(block) === promise) blocks.delete(block);
+  });
   return promise;
 }

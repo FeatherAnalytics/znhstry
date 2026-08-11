@@ -22,7 +22,7 @@ on this date?" a genuinely hard question.
 
 ## What the browser downloads
 
-A cold load is **422 requests and 11.6 MB**, and that draws every zone at the right colour.
+A cold load is **343 requests and 11.5 MB**, and that draws every zone at the right colour.
 A dot's colour and size are a single byte, faction in the top two bits and a log-magnitude
 bucket in the low six. History stores that same byte, so nothing converts between two
 representations and a scrub across eleven years costs 526 ms.
@@ -31,8 +31,7 @@ Per-zone bot counts are never downloaded in bulk. Hovering a dot fetches one 35 
 
 | Measured on fast 4G, cold cache, dev build | |
 |---|---|
-| played world complete, 1.6M zones, correctly coloured | 3.3 s |
-| every zone including never-played terrain, 2.68M | 8.4 s |
+| every zone on the map, all 2.68M, correctly coloured | 8.4 s |
 | scrub across eleven years, nothing cached | 526 ms |
 
 ## Architecture
@@ -42,7 +41,7 @@ QONQR's published CSV drop
   -> Parquet (data/raw, year-partitioned)
   -> dbt-duckdb (staging -> marts, tested)
   -> static binary shards
-  -> Cloudflare R2 (brotli, per-object cache policy)
+  -> Cloudflare R2 (brotli, ETag-revalidated)
   -> Next.js + deck.gl on GitHub Pages
 ```
 
@@ -52,13 +51,15 @@ QONQR's published CSV drop
 | Warehouse | DuckDB |
 | Transform | dbt-duckdb: staging, marts, data tests, unit tests, exposures, source freshness |
 | Export | Python, columnar dumps under brotli |
-| Web | Next.js static export, deck.gl, D3 |
+| Web | Next.js static export, deck.gl |
 | Host | GitHub Pages for the site, Cloudflare R2 for the data |
 
 The data lives apart from the site because it needs two response headers a static host
 cannot set. `Content-Encoding: br` lets the browser decompress, so the client ships no
-decoding code. A per-object `Cache-Control` marks a shard `immutable` only where that is
-true, which matters because shard names are stable and a nightly run rewrites some of them.
+decoding code. `Cache-Control: no-cache` makes every shard revalidate against its ETag,
+which matters because shard names are stable and a nightly run rewrites some of them —
+marking a shard `immutable` is a promise about bytes nobody is in a position to keep, and a
+304 carries no body, so being right costs a header exchange.
 
 ## Running it
 
@@ -89,6 +90,6 @@ The 61,517 rows of history behind that came from the community scrape at
 Report numbers are sparse across their range, so collecting them directly would have
 meant roughly 130,000 requests to a server that did not need them.
 
-## Licence
+## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

@@ -63,7 +63,12 @@ def _fetch(name: str) -> dict[str, Any]:
     log.info("boundaries: downloading %s", name)
     response = httpx.get(f"{SOURCE}/{name}.geojson", timeout=300.0, follow_redirects=True)
     response.raise_for_status()
-    cache.write_bytes(response.content)
+    # Through a temporary, like every other write in the pipeline: a download cut short
+    # leaves a file that exists, so the next run trusts the cache and parses a truncated
+    # GeoJSON instead of fetching it again.
+    tmp = cache.with_name(cache.name + ".tmp")
+    tmp.write_bytes(response.content)
+    tmp.replace(cache)
     return response.json()
 
 
@@ -134,8 +139,10 @@ def _flatten(geojson: dict[str, Any], tolerance: float) -> tuple[np.ndarray, np.
             points = _simplify(points, tolerance)
             if len(points) < 2:
                 continue
+            # A path starts where the last one ended. Re-summing the rings written
+            # so far to find that out is quadratic, and admin-1 is 24,000 rings.
+            starts.append(kept)
             kept += len(points)
-            starts.append(sum(len(p) for p in positions))
             positions.append(points)
 
     flat = (

@@ -19,16 +19,12 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 const ROOT = resolve(process.argv[3] ?? "dist/data");
 const PORT = Number(process.argv[2] ?? 3002);
 
-// In the bucket every shard but the manifest is immutable: its contents only
-// change when a nightly run genuinely changes that shard, and a reader who
-// visits twice re-downloads nothing.
-//
-// Locally that is a trap, because a re-export *does* rewrite the same names
-// with different bytes - a changed column layout, say - and the browser will
-// keep serving the old body with no way to notice. That cost real debugging
-// time: a paint shard that had gained a column still decoded as the old one
-// and painted the whole world dormant grey. So dev revalidates by default and
-// the production headers are opt-in, for when they are what is being tested.
+// Revalidation, matching the bucket: `upload.py` serves `public, no-cache` on
+// every object, so a reader asks before reusing anything. Here it matters twice
+// over, because a re-export rewrites the same names with different bytes - a
+// changed column layout, say - and a browser holding the old body has no way to
+// notice. That cost real debugging time: a paint shard that had gained a column
+// still decoded as the old one and painted the whole world dormant grey.
 //
 // `no-cache` alone does not achieve that. It means "revalidate before reusing",
 // and revalidation needs a validator to send in `If-None-Match`; with no ETag
@@ -36,9 +32,11 @@ const PORT = Number(process.argv[2] ?? 3002);
 // stale body and the header accomplishes nothing. That is not theoretical - it
 // served a four-day-old scope_daily and a stale meta.json listing an older tile
 // set, so the loader never requested the tiles missing from it and whole squares
-// of the map silently never appeared.
+// of the map silently never appeared. R2 sends a real ETag; so does this.
 //
-// R2 sends a real ETag, so production was always fine. This is dev-only.
+// SERVE_IMMUTABLE=1 pins shards in the browser cache for a year instead. Nothing
+// is served that way anywhere - it exists to watch the viewer hold a stale shard
+// on purpose, which is the failure the bucket's policy is there to prevent.
 const IMMUTABLE = "public, max-age=31536000, immutable";
 const REVALIDATE = "no-cache";
 const MANIFEST = "public, max-age=60";
@@ -137,6 +135,6 @@ server.listen(PORT, () => {
   console.log(
     `data: ${ROOT}\nserving on http://localhost:${PORT}` +
       `\ncache-control: ${immutable ? IMMUTABLE : REVALIDATE}` +
-      (immutable ? "" : "  (SERVE_IMMUTABLE=1 for the production headers)"),
+      (immutable ? "" : "  (SERVE_IMMUTABLE=1 to pin shards in cache for a year)"),
   );
 });

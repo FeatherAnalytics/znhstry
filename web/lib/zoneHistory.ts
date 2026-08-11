@@ -59,6 +59,13 @@ export function zoneBlock(
     `${base}/${meta.path}/${String(block).padStart(4, "0")}.bin.br`,
   ).then((buffer) => decodeColumns(buffer, meta.columns, entry[1]));
   blocks.set(block, promise);
+  // A rejection cached here is a block of 4096 zones whose exact counts stop
+  // being available for the rest of the session, and it fails quietly - the
+  // hover falls back to the bucketed estimate and nothing says why. Drop it so
+  // the next hover retries; callers already in flight keep this promise.
+  promise.catch(() => {
+    if (blocks.get(block) === promise) blocks.delete(block);
+  });
   return promise;
 }
 

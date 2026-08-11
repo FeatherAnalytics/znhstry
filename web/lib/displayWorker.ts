@@ -72,6 +72,14 @@ function load(dir: string, entry: ShardEntry): Promise<Columns> {
     decodeColumns(buffer, entry.columns, entry.rows),
   );
   inflight.set(key, promise);
+  // A cached rejection is permanent, and this map is the only thing standing
+  // between a transient 5xx and a year of the record that can never be drawn
+  // again for the life of the page. Dropping the entry costs nothing while the
+  // fetch is in flight - concurrent callers already hold the promise itself -
+  // and leaves the next request free to try again.
+  promise.catch(() => {
+    if (inflight.get(key) === promise) inflight.delete(key);
+  });
   return promise;
 }
 

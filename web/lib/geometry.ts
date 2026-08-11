@@ -249,6 +249,13 @@ function absorbPositions(
  * Positions are absorbed first and succeed, so the symptom was a region present in
  * grey with none of its colour, and nothing said why. Checking here makes the message
  * name the tile and the two numbers that disagree.
+ *
+ * `apply` is false when the display buffer no longer stands at the date `paint/`
+ * describes. These bytes are the newest standings, so writing them into a buffer
+ * the worker has filled for 2015 puts today's colors on a strip of that year's
+ * map, and nothing re-asks for a date when a tile lands. The tile's geometry is
+ * still absorbed and the file is still checked; only the colors are dropped, and
+ * the caller asks the worker to color the new slots instead.
  */
 function absorbPaint(
   geometry: ZoneGeometry,
@@ -257,11 +264,13 @@ function absorbPaint(
   firstSlot: number,
   rows: number,
   buffer: ArrayBuffer,
+  apply: boolean,
 ): void {
   // Reduced over the manifest's own spec rather than assuming one byte a zone, so
   // this stays right if `paint/` ever gains a column - which is why the manifest
   // carries `paint_columns` at all.
   requireRows(buffer, rows, meta.paint_columns, "paint");
+  if (!apply) return;
   const pk = new Uint8Array(buffer, 0, rows);
   // `paint/` is row-aligned to its tile, and a tile's rows are exactly one run
   // of slots - so with `pk` held by slot this is a copy rather than a scatter
@@ -286,6 +295,15 @@ export interface LoaderOptions {
   focus: { lat: number; lon: number };
   /** Fired after each file lands, with what is still outstanding in this stage. */
   onTile: (stage: LoadStage, remaining: number) => void;
+  /**
+   * Whether a landing tile's `paint/` bytes are still the right colors.
+   *
+   * `paint/` is the newest date's standings and the display buffer is shared
+   * with the display worker, so the two agree only while that date is the one
+   * on screen. Defaults to always applying them, which is what a caller with no
+   * history loaded wants. See `absorbPaint`.
+   */
+  paintApplies?: () => boolean;
   concurrency?: number;
 }
 
@@ -370,7 +388,15 @@ export function loadGeometry(options: LoaderOptions): LoaderHandle {
         ]);
         if (cancelled) return;
         const firstSlot = absorbPositions(geometry, meta, tile.zones, positions);
-        absorbPaint(geometry, display, meta, firstSlot, tile.zones, paint);
+        absorbPaint(
+          geometry,
+          display,
+          meta,
+          firstSlot,
+          tile.zones,
+          paint,
+          options.paintApplies?.() ?? true,
+        );
       },
     );
 

@@ -234,6 +234,22 @@ export function ZoneMap({
   // Only a mask in use makes its version meaningful; see the note in the loop.
   const maskVersion = only ? (onlyVersion ?? 0) : 0;
 
+  /**
+   * The focus mask's identity as a number, because the patch key below has to
+   * know when the mask *changed* and not merely that one exists.
+   *
+   * Picking a second area hands over a different mask of the same length. A key
+   * that records presence alone is identical across that swap, so every row
+   * whose `pk` and `visible` bytes did not move is skipped - and the first
+   * area's muted alphas stay on the map under the second area's dimming.
+   */
+  const seenFilter = useRef<Uint8Array | null>(null);
+  const filterVersion = useRef(0);
+  if (seenFilter.current !== filter) {
+    seenFilter.current = filter;
+    filterVersion.current += 1;
+  }
+
   useMemo(() => {
     const palette = readFactionColors();
     const colorArray = colors.current;
@@ -251,7 +267,7 @@ export function ZoneMap({
     // the cumulative backdrop is the one asking, so keying on it unconditionally
     // marked every frame a full rebuild and this stayed incremental in name only.
     const maskKey = mask ? `m${onlyVersion ?? 0}` : "";
-    const key = `${length}|${draw}|${filter ? "f" : ""}|${maskKey}`;
+    const key = `${length}|${draw}|${filter ? `f${filterVersion.current}` : ""}|${maskKey}`;
     const full = shadowKey.current !== key;
     shadowKey.current = key;
 

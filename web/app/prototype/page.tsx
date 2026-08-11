@@ -26,8 +26,11 @@ import { BASE } from "@/lib/dataOrigin";
 import { loadJson } from "@/lib/format";
 import { dayToDate } from "@/lib/data";
 import type { Meta } from "@/lib/data";
+import { loadNames } from "@/lib/names";
 import {
   appearancesByZone,
+  biggestDays,
+  biggestReports,
   countEqual,
   dailyTotals,
   loadMazStats,
@@ -40,6 +43,12 @@ import { Histogram } from "@/components/charts/Histogram";
 import { TimeSeries } from "@/components/charts/TimeSeries";
 
 type Status = "open" | "keep" | "promote" | "cut";
+
+// Both thresholds are chosen so the list is short enough to name every entry on
+// the page, which is what makes an outlier worth calling out rather than leaving
+// in a tail. At these values that is 11 reports and 3 days.
+const BIG_REPORT = 10_000;
+const BIG_DAY = 30_000;
 
 const STATUS_LABEL: Record<Status, string> = {
   open: "undecided",
@@ -99,11 +108,33 @@ export default function PrototypePage() {
       perReportBins: logBins(stats.launches),
       dailyBins: logBins(daily.value),
       rateBins: logBins(rate.value),
+      bigReports: biggestReports(stats, BIG_REPORT),
+      bigDays: biggestDays(stats, BIG_DAY),
       zones: appearances.size,
       topAppearances: Math.max(...appearances.values()),
       days: daily.day.length,
     };
   }, [stats]);
+
+  // Names are off the load path everywhere else and stay off it here: one ~19 KB
+  // block per outlier, fetched only once the reports are in hand. `names` is
+  // keyed by idx, so a block landing late fills its rows in place and the state
+  // bump redraws whatever arrived.
+  const [names, setNames] = useState<string[]>([]);
+  useEffect(() => {
+    if (!meta || !derived) return;
+    let cancelled = false;
+    const into: string[] = [];
+    const blocks = derived.bigReports.map((r) => loadNames(BASE, meta.names, r.idx, into));
+    Promise.all(blocks)
+      .then(() => {
+        if (!cancelled) setNames([...into]);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [meta, derived]);
 
   return (
     <main
@@ -269,6 +300,52 @@ export default function PrototypePage() {
               </Note>
             </Card>
 
+            <Card
+              title="The outliers, by name"
+              status="open"
+              note="§7.2 — both lists are short enough to name every entry, which is the point of calling them out rather than leaving them in a tail."
+            >
+              <Table
+                caption={`Single reports at ${BIG_REPORT.toLocaleString()}+ launches`}
+                head={["date", "zone", "launches", "players", "per player"]}
+                rows={derived.bigReports.map((r) => [
+                  labelOf(r.day),
+                  names[r.idx] || `zone ${r.idx}`,
+                  r.launches.toLocaleString(),
+                  r.players.toLocaleString(),
+                  r.players ? Math.round(r.launches / r.players).toLocaleString() : "—",
+                ])}
+              />
+              <Note>
+                {derived.bigReports.length} reports, against a median of{" "}
+                {Math.round(derived.perReport.median).toLocaleString()} launches — roughly
+                eighteen times a normal day&rsquo;s fighting on one zone.{" "}
+                <strong>Read the last column before the third.</strong> The largest report in the
+                record came from two active players and the second largest from two hundred;
+                ranked on launches alone they sit next to each other and the table says they are
+                the same event. One is a battle, the other is a grind.
+              </Note>
+
+              <div style={{ height: 22 }} />
+
+              <Table
+                caption={`Whole MAZ days at ${BIG_DAY.toLocaleString()}+ total launches`}
+                head={["date", "launches", "reports", "players"]}
+                rows={derived.bigDays.map((d) => [
+                  labelOf(d.day),
+                  d.launches.toLocaleString(),
+                  String(d.reports),
+                  d.players.toLocaleString(),
+                ])}
+              />
+              <Note>
+                {derived.bigDays.length} days out of {derived.days.toLocaleString()}, against a
+                median day of {Math.round(derived.dailySummary.median).toLocaleString()}. Players
+                are summed across the day&rsquo;s reports — there is no player key in this
+                payload, so somebody fighting two zones counts twice.
+              </Note>
+            </Card>
+
             <Card title="Next on the bench" status="open">
               <ul
                 className="prose"
@@ -277,6 +354,10 @@ export default function PrototypePage() {
                 <li>
                   Cluster spread per day, off <code>distance.spread</code> — needs zone
                   coordinates joined to the reports, which means the geometry tiles.
+                </li>
+                <li>
+                  Which of the eleven biggest reports land near the 2017-04-26 range change, now
+                  that <code>config.MISSILE_RANGE_INCREASED</code> pins the date.
                 </li>
                 <li>
                   Faction launch share (§7.3). <strong>Blocked:</strong> the export carries only
@@ -370,6 +451,80 @@ function Tiles({ items }: { items: { label: string; value: string }[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * A short list of named rows.
+ *
+ * Deliberately a table and not a chart. These lists are eleven and three rows
+ * long, and the whole reason they are worth showing is that each row has a name,
+ * a date and two numbers that have to be read against each other - which is a
+ * table. A bar chart of eleven bars would hide the players column, which is the
+ * column that matters.
+ *
+ * Scrolls inside itself rather than widening the column on a narrow screen.
+ */
+function Table({
+  caption,
+  head,
+  rows,
+}: {
+  caption: string;
+  head: string[];
+  rows: string[][];
+}) {
+  return (
+    <figure style={{ margin: 0 }}>
+      <figcaption className="display" style={{ fontSize: 13, marginBottom: 6 }}>
+        {caption}
+      </figcaption>
+      <div style={{ overflowX: "auto" }}>
+        <table
+          className="tabular"
+          style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
+        >
+          <thead>
+            <tr>
+              {head.map((cell, i) => (
+                <th
+                  key={cell}
+                  className="eyebrow"
+                  style={{
+                    textAlign: i === 0 || i === 1 ? "left" : "right",
+                    padding: "4px 8px 6px",
+                    borderBottom: "1px solid var(--hairline-bright)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {cell}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.join("|")}>
+                {row.map((cell, i) => (
+                  <td
+                    key={i}
+                    style={{
+                      textAlign: i === 0 || i === 1 ? "left" : "right",
+                      padding: "5px 8px",
+                      borderBottom: "1px solid var(--hairline)",
+                      color: i === 1 ? "var(--text)" : "var(--text-dim)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </figure>
   );
 }
 

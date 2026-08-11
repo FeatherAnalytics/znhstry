@@ -211,6 +211,76 @@ export function countEqual(values: ArrayLike<number>, value: number): number {
   return n;
 }
 
+// --- outliers -----------------------------------------------------------------
+//
+// Both lists below carry `players` next to `launches`, and that is the whole
+// reason they are separate functions rather than a sort with a slice.
+//
+// The two are not the same story. The largest mapped report in the record is
+// Budapest on 2024-12-15 at 20,929 launches - from **two** active players. The
+// second largest is Chermignac at 17,885, from 201. Ranked on launches alone
+// those sit next to each other and the chart says they are the same event: one
+// is a battle and the other is two people grinding. Anything that names an
+// outlier has to show both numbers or split the lists.
+
+export interface ReportOutlier {
+  /** Row in both MAZ shards, so a caller can reach any other column. */
+  row: number;
+  idx: number;
+  day: number;
+  launches: number;
+  players: number;
+}
+
+/** Single reports at or above `threshold` launches, biggest first. */
+export function biggestReports(stats: MazStats, threshold: number): ReportOutlier[] {
+  const out: ReportOutlier[] = [];
+  const { reportIdx, reportDay, reportCount } = stats.reports;
+  for (let r = 0; r < reportCount; r++) {
+    if (stats.launches[r] < threshold) continue;
+    out.push({
+      row: r,
+      idx: reportIdx[r],
+      day: reportDay[r],
+      launches: stats.launches[r],
+      players: stats.players[r],
+    });
+  }
+  return out.sort((a, b) => b.launches - a.launches);
+}
+
+export interface DayOutlier {
+  day: number;
+  launches: number;
+  /** Active players summed over the day's reports, so a zone fought by the
+   *  same person twice counts twice. There is no player key to dedupe on. */
+  players: number;
+  reports: number;
+}
+
+/** Whole MAZ days at or above `threshold` total launches, biggest first. */
+export function biggestDays(stats: MazStats, threshold: number): DayOutlier[] {
+  const { dayMin, dayMax, dayOffset } = stats.reports;
+  const out: DayOutlier[] = [];
+
+  for (let d = 0; d <= dayMax - dayMin; d++) {
+    const start = dayOffset[d];
+    const end = dayOffset[d + 1];
+    if (end <= start) continue;
+
+    let launches = 0;
+    let players = 0;
+    for (let r = start; r < end; r++) {
+      launches += stats.launches[r];
+      players += stats.players[r];
+    }
+    if (launches >= threshold) {
+      out.push({ day: dayMin + d, launches, players, reports: end - start });
+    }
+  }
+  return out.sort((a, b) => b.launches - a.launches);
+}
+
 /** How many times each zone appears, as `idx -> appearances`. */
 export function appearancesByZone(stats: MazStats): Map<number, number> {
   const counts = new Map<number, number>();

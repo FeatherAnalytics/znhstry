@@ -143,3 +143,27 @@ DAY_EPOCH = date(2010, 1, 1)
 # Cheap to do: 40 events across 40 zones, only 7 of which have no later event
 # and therefore stop counting as ever-played.
 RECORD_START = date(2012, 7, 30)
+
+# How far a nanomissile reaches, which is the outer bound on "who could have
+# fought over this zone" and therefore on how far a fight can spread.
+#
+# The range was increased mid-record and the cutover has to be respected, or the
+# early years get a radius the players did not have and any distance-binned
+# statistic fills its outer bins with unrelated activity.
+#
+# The changelog agrees with the date independently: first sightings step from
+# ~22k a month through April 2017 to ~34k from May and hold, which is what a
+# range increase looks like from the outside. That match is strong enough to
+# make this a constant rather than a guess.
+#
+# Miles, because that is the unit the game itself talks in. `NEAR_ME_KM` in
+# `web/app/page.tsx` is the same 1,000-mile figure - the viewer's "near me" ring
+# and "how far did the fight spread" are the same circle.
+MISSILE_RANGE_INCREASED = date(2017, 4, 26)
+MISSILE_RANGE_KM_BEFORE = 643.7376  # 400 miles
+MISSILE_RANGE_KM_AFTER = 1609.344  # 1,000 miles
+
+
+def missile_range_km(on: date) -> float:
+    """The nanomissile range in force on `on`."""
+    return MISSILE_RANGE_KM_AFTER if on >= MISSILE_RANGE_INCREASED else MISSILE_RANGE_KM_BEFORE

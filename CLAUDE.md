@@ -16,8 +16,8 @@ game. See "Where the data comes from".
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
 - **Ingest**: `httpx` + `polars` -> Parquet in `data/raw/`.
 - **Transform**: dbt-duckdb in `transform/` — 6 staging views, 1 intermediate, 6 marts,
-  1 seed, 12 data tests, 1 unit test, 2 exposures. `uv run dbt build` takes ~25 s over
-  9.88M events.
+  1 seed, 15 generic tests, 6 singular tests, 1 unit test, 1 exposure. `uv run dbt build`
+  takes ~25 s over 9.88M events.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
 - **Hosting**: the site on GitHub Pages, the data in Cloudflare R2. Two deployments.
@@ -740,11 +740,6 @@ explicitly in `ZoneMap` rather than decided by which request finished first.
   reason for 16 is *requests*, though, not bytes. What it costs is precision in the
   nearest-first ordering: the first tile to land covers four times the area.
 - **Sorting scrambles idx**, so it is an explicit column rather than implied by row order.
-- **Every shard's URL carries a hash of its bytes** — `tiles/09_13.bin.br?v=fe82c88e`,
-  from `meta.geometry.tiles`. That is what makes `immutable` honest: changed bytes are a
-  different URL, so no reader can be served a stale shard and none of them ever has to
-  clear a cache. Per file, not one stamp for the export, so an unchanged shard keeps its
-  URL and stays cached. R2 ignores the query string, so nothing changes in the bucket.
 
 **`pk` is one byte: faction in the top two bits, a log-magnitude bucket in the low six.**
 Radius is `log10(count)` capped in pixels, so six bits carry more resolution than the screen
@@ -928,7 +923,8 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
   This file and parts of the codebase still carry British spellings from earlier work; fix
   them as you touch them rather than in one sweep.
 - Testing is deliberately concentrated where failures are invisible, not spread evenly.
-  dbt carries 12 data tests and 1 unit test; `pipeline/tests/` covers the ring arithmetic
-  and the dtype contract, which decide what gets written before dbt can see it. The viewer
-  has none. `dbt source freshness` warns at 2 days stale and errors at 7 — well inside the
-  31-day ring, so there is time to act before a gap becomes unrecoverable.
+  dbt carries 15 generic data tests, 6 singular tests and 1 unit test; `pipeline/tests/`
+  covers the ring arithmetic and the dtype contract, which decide what gets written before
+  dbt can see it. The viewer has none. `dbt source freshness` warns at 2 days stale and
+  errors at 7 — well inside the 31-day ring, so there is time to act before a gap becomes
+  unrecoverable.

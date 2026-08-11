@@ -5,9 +5,9 @@ import type { NextConfig } from "next";
  * Load the repo-root `.env`, if there is one.
  *
  * Next only looks inside `web/`, but the same values are wanted by
- * `tools/upload-data.sh` at the root, and keeping one file beats keeping two in
- * sync. Anything already in the environment wins, so CI - which passes these as
- * workflow variables and never writes a file - is unaffected.
+ * `cd pipeline && uv run python -m znhstry upload`, and keeping one file beats
+ * keeping two in sync. Anything already in the environment wins, so CI - which
+ * passes these as workflow variables and never writes a file - is unaffected.
  *
  * `process.loadEnvFile` is built into Node 20.12+ and throws when the file is
  * absent, which is the normal case in CI.

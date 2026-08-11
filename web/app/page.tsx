@@ -50,7 +50,7 @@ import {
 
 // The payloads live in object storage, not in the site bundle, because they
 // need response headers a static host cannot set: Content-Encoding: br, and a
-// year-long immutable Cache-Control on shards that never change. Locally,
+// Cache-Control that revalidates every shard against its ETag. Locally,
 // `node tools/serve-data.mjs` stands in for the bucket on port 3002.
 const DATA_ROOT = process.env.NEXT_PUBLIC_DATA_ORIGIN ?? "http://localhost:3002";
 const BASE = `${DATA_ROOT}/${process.env.NEXT_PUBLIC_DATA_SCOPE ?? "global"}`;

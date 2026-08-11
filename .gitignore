@@ -40,3 +40,7 @@ dist/
 # Working notes: handoffs, ledgers, feature ideas. Local to whoever is working,
 # never part of the repo.
 thoughts/
+
+# Machine-local instructions for the assistant. Ignored here rather than in
+# .git/info/exclude, which does not travel with a clone.
+CLAUDE.local.md

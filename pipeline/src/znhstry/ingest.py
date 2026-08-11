@@ -135,6 +135,38 @@ def fetch(names: Iterable[str], dest_dir: Path | None = None) -> list[Path]:
     return paths
 
 
+def _parse_stamps(df: pl.DataFrame) -> pl.DataFrame:
+    """Parse both timestamp columns, refusing an event stamp that will not parse.
+
+    `strict=False` is what lets a capture date be absent, which is legitimate - a zone
+    nobody has taken has none. It also turns an unparseable string into that same null,
+    and for `LastUpdateDateUtc` the two are not the same thing at all: it is half the
+    event key and the partition key, so a null one reaches `merge` as a null year and
+    surfaces as `int(None)` with nothing in the message about which row or which file.
+
+    Checked after parsing rather than before, because before parsing there is nothing
+    to check - the string is there, it simply is not a timestamp.
+    """
+    text = {
+        c: pl.col(c).cast(pl.String).str.slice(0, _TIMESTAMP_WIDTH)
+        for c in ("LastUpdateDateUtc", "DateCapturedUtc")
+    }
+    parsed = df.with_columns(
+        [t.str.to_datetime(_TIMESTAMP_FORMAT, strict=False).alias(c) for c, t in text.items()]
+        + [text["LastUpdateDateUtc"].alias("_stamp_text")]
+    )
+
+    bad = parsed.filter(pl.col("_stamp_text").is_not_null() & pl.col("LastUpdateDateUtc").is_null())
+    if not bad.is_empty():
+        sample = bad.select("ZoneId", "_stamp_text").head(5).rows()
+        raise ValueError(
+            f"{bad.height:,} row(s) carry a LastUpdateDateUtc that is not "
+            f"{_TIMESTAMP_FORMAT!r}: {sample}. Every event is keyed and partitioned by "
+            f"it, so this cannot be read as a missing timestamp."
+        )
+    return parsed.drop("_stamp_text")
+
+
 def read_daily(paths: Iterable[Path]) -> pl.DataFrame:
     """Parse daily CSVs into the changelog contract.
 
@@ -146,16 +178,7 @@ def read_daily(paths: Iterable[Path]) -> pl.DataFrame:
         return pl.DataFrame(schema=CHANGELOG_DTYPES)
 
     df = pl.concat(frames, how="vertical_relaxed").filter(pl.col("LastUpdateDateUtc").is_not_null())
-    df = df.with_columns(
-        [
-            pl.col(c)
-            .cast(pl.String)
-            .str.slice(0, _TIMESTAMP_WIDTH)
-            .str.to_datetime(_TIMESTAMP_FORMAT, strict=False)
-            for c in ("LastUpdateDateUtc", "DateCapturedUtc")
-        ]
-    )
-    return conform(df, CHANGELOG_DTYPES).unique(subset=EVENT_KEY, keep="last")
+    return conform(_parse_stamps(df), CHANGELOG_DTYPES).unique(subset=EVENT_KEY, keep="last")
 
 
 def history_max(source: Path | None = None) -> date | None:
@@ -180,7 +203,8 @@ def plan_slots(today: date | None = None, source: Path | None = None) -> list[in
     widens the window on its own, so a missed night heals on the next run without
     anybody re-running it with arguments.
 
-    The ring is the limit. Past `RING_SLOTS` days the oldest missing slot has already
+    The ring is the limit, and it is counted in slot numbers rather than in days: the
+    moment two missing days share a day of the month, the older one's slot has already
     been overwritten with a newer month, and fetching it would append the wrong month's
     events while reporting success - so this raises instead.
     """
@@ -210,16 +234,29 @@ def plan_slots(today: date | None = None, source: Path | None = None) -> list[in
         return []
 
     days = [have + timedelta(days=n) for n in range((newest_complete - have).days + 1)]
-    if len(days) > config.RING_SLOTS:
+    slots = [d.day for d in days]
+
+    # The ring's reach is the months being wrapped, not a flat 31 days. Slots are days
+    # of the month, so a window spanning a short month asks for the same slot twice -
+    # 31 January to 2 March is 31 days and needs slots 1 and 2 for both February and
+    # March. Whichever day comes second is the one Dropbox holds; fetching the slot for
+    # the older one merges the wrong month's events, reports success, and advances the
+    # history past a gap that is now unrecoverable.
+    #
+    # Counting distinct slot numbers is exact and needs no month arithmetic, and it
+    # subsumes the plain "more than RING_SLOTS days" case: any window of 32 days repeats
+    # a day of the month whatever months it covers.
+    if len(set(slots)) != len(slots):
+        clash = next(s for i, s in enumerate(slots) if s in slots[:i])
         raise RingGapError(
             f"history ends {have} and {newest_complete} just closed: {len(days)} days "
-            f"to read, but the ring only holds {config.RING_SLOTS}. The oldest of those "
-            "slots has been overwritten with a newer month and is not recoverable from "
-            "Dropbox. Restore from the archive instead of running this."
+            f"to read, but slot {clash:02d} is needed for more than one of them. The "
+            "older day has been overwritten with a newer month and is not recoverable "
+            "from Dropbox. Restore from the archive instead of running this."
         )
 
     log.info("history reaches %s, reading %d slot(s) up to %s", have, len(days), newest_complete)
-    return [d.day for d in days]
+    return slots
 
 
 # --- The history, partitioned by year -------------------------------------
@@ -303,15 +340,10 @@ def read_zone_state(paths: Iterable[Path]) -> pl.DataFrame:
     if not frames:
         return pl.DataFrame(schema=ZONE_DTYPES)
 
-    df = pl.concat(frames, how="vertical_relaxed").with_columns(
-        [
-            pl.col(c)
-            .cast(pl.String)
-            .str.slice(0, _TIMESTAMP_WIDTH)
-            .str.to_datetime(_TIMESTAMP_FORMAT, strict=False)
-            for c in ("LastUpdateDateUtc", "DateCapturedUtc")
-        ]
-    )
+    # Same guard as the event path, and it matters more here: `merge_zones` sorts nulls
+    # first so a never-touched row cannot displace a real one, which means an unparseable
+    # stamp would quietly lose whichever observation it belonged to.
+    df = _parse_stamps(pl.concat(frames, how="vertical_relaxed"))
     df = df.with_columns(
         (
             pl.col("LegionCount").cast(pl.Int64)

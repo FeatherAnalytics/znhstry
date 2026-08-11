@@ -20,6 +20,19 @@ name: Nightly data update
 # actually goes and asks for exactly the days that are missing - so a run that fires
 # before the file lands does nothing, and the next night picks up both days. Nobody has
 # to re-run anything for an ordinary miss.
+#
+# ## What tells anyone the data has stopped
+#
+# A quiet upstream is indistinguishable from a healthy no-op: `plan_slots` asks for
+# nothing, every step is skipped, and the run is green. The freshness check is the alarm
+# - it errors at 7 days, comfortably inside the 31-slot ring, so there is still time to
+# fetch the missing days before the slots holding them are overwritten for good.
+#
+# The one thing it cannot catch is GitHub disabling the schedule, which happens after 60
+# days without a commit to the repository: nothing runs, so nothing can fail. GitHub
+# emails before it does that, and any push resets the clock - but a repo left alone for
+# two months needs the workflow re-enabled by hand, and the ring will have closed over
+# most of the gap by then.
 
 on:
   schedule:
@@ -74,10 +87,29 @@ jobs:
         working-directory: pipeline
         run: uv run python -m znhstry restore
 
+      # The dispatch input reaches the shell through the environment, never through
+      # `${{ }}`: an expression is pasted into the script before bash sees it, so
+      # anything typed in that box would run here, with the R2 credentials in scope.
       - name: Ingest the day's slot
         id: ingest
         working-directory: pipeline
-        run: uv run python -m znhstry ingest ${{ inputs.slots && format('--slots {0}', inputs.slots) || '' }}
+        env:
+          SLOTS: ${{ inputs.slots }}
+        run: |
+          if [ -n "$SLOTS" ]; then
+            set -- --slots "$SLOTS"
+          fi
+          uv run python -m znhstry ingest "$@"
+
+      # The alarm for a source that has gone quiet. Errors at 7 days stale, which is
+      # inside the ring, so a failure here still leaves time to recover the missing
+      # days; without it a stalled upstream is a green run every night until the slots
+      # holding the gap have been overwritten.
+      - name: Check the source is fresh
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt source freshness
 
       # A separate source: the game's live portal, not the Dropbox drop. Allowed to fail
       # without taking the map down with it -- battle reports are an overlay, and a slow

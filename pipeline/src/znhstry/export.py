@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ import duckdb
 import numpy as np
 import polars as pl
 
-from . import boundaries, config
+from . import boundaries, config, distance
 
 log = logging.getLogger(__name__)
 
@@ -87,26 +86,6 @@ TILE_DEGREES = 16
 COORD_SCALE = 10_000
 
 
-# The bbox is only a prefilter - haversine decides membership - so it must
-# never be tighter than the true circle. 111.32 km/degree is a mid-latitude
-# average, and a degree is shorter than that near the equator, which made the
-# box narrower than 1000 miles and clipped 11 edge zones before haversine saw
-# them. The margin makes the prefilter unambiguously generous.
-_BBOX_MARGIN = 1.05
-
-
-def _bbox(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
-    """Indexable prefilter around the scope circle. Deliberately over-wide."""
-    lat_delta = _BBOX_MARGIN * radius_km / 111.32
-    lon_delta = _BBOX_MARGIN * radius_km / (111.32 * math.cos(math.radians(lat)))
-    return (
-        max(lat - lat_delta, -90.0),
-        min(lat + lat_delta, 90.0),
-        lon - lon_delta,
-        lon + lon_delta,
-    )
-
-
 def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path) -> int:
     """Materialise the zones in scope with a dense index.
 
@@ -117,16 +96,7 @@ def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path
     filters = ["latitude is not null"]
 
     if scope.radius_km is not None:
-        lat_min, lat_max, lon_min, lon_max = _bbox(scope.lat, scope.lon, scope.radius_km)
-        filters.append(f"latitude between {lat_min} and {lat_max}")
-        filters.append(f"longitude between {lon_min} and {lon_max}")
-        filters.append(f"""
-            {config.EARTH_RADIUS_KM} * 2 * asin(sqrt(
-                pow(sin(radians(latitude - {scope.lat}) / 2), 2)
-                + cos(radians({scope.lat})) * cos(radians(latitude))
-                  * pow(sin(radians(longitude - {scope.lon}) / 2), 2)
-            )) <= {scope.radius_km}
-        """)
+        filters.append(distance.circle_sql(scope.lat, scope.lon, scope.radius_km))
 
     if scope.active_only:
         filters.append("zone_id in (select zone_id from zone_events)")

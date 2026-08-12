@@ -134,7 +134,82 @@ counts beside it are exact for the same selection, so the qualifier has to sit o
 number specifically rather than over the panel — otherwise it disclaims a number that needs
 no disclaimer.
 
-## Phase 4 — the single-zone case
+## Phase 4 — the total, and the zones nobody holds
+
+Two rows below the three factions, and neither is a rounding-up of the others.
+
+**The total.** Bots across all three factions, and zones across the whole selection. It is
+the number every share is a share of, and without it on screen the reader has to add three
+figures to know what they are looking at. Its provenance is inherited, not uniform: the bot
+total is approximate for a circle or the viewport because it is a sum of approximations,
+while the zone total is `count` and exact for every selection.
+
+**The unheld zones, split in two.** A zone holding nothing is a fact worth stating rather
+than the gap left over from the factions, and there are two kinds:
+
+| | What it is | How it is counted |
+|---|---|---|
+| never played | a real place with no bot in fourteen years | `everActive == 0` |
+| fought to empty | held something once, holds nothing now | `everActive == 1`, `pk == 0` |
+
+The map already draws these as two shades of grey, so the panel agreeing with it costs
+nothing and disagreeing would be a contradiction on one screen.
+
+**The never-played count needs no pass at all.** It cannot change with the date — a zone with
+no bot in the whole record is empty in every frame, which is exactly why terrain is built
+once when tiles land rather than per date. For the whole scope it is
+`meta.scope.zone_count - meta.scope.active_count`, a constant of 1,087,356. For a selection
+the page's loop reads `geometry.everActiveBySlot[slot]`, which is slot-keyed like `pk` and so
+adds no indirection:
+
+```ts
+// page.tsx, in the same loop
+if (display.pk[slot] === 0 && geometry.everActiveBySlot[slot] === 0) neverPlayed++;
+```
+
+Fought-to-empty is then `count - held - neverPlayed`, and the four categories — three
+factions plus unheld — sum to `count` by construction rather than by a second count that
+could disagree.
+
+**The worker does not need to know about any of this.** It has `state`, which is idx-keyed,
+and no `everActive`. Keeping the split on the page side means the worker's message stays four
+numbers, and the unfiltered case gets its never-played figure from the manifest.
+
+## Phase 5 — a country's regions, each on its own
+
+Selecting a country asks two questions at once: how is the country doing, and where inside it
+is anything happening. The panel answers the first; a list of per-region rows answers the
+second.
+
+**Both halves are already paid for.**
+
+- **Bots per region** come from `series/region.bin.br`, and selecting any single region
+  already fetches the whole 3.19 MB shard — it carries every region in the world. So a
+  country's regions cost nothing beyond a fetch the reader may already have made.
+- **Zones per region** come from one pass over the country's zones, bucketing
+  `display.pk[slot] >> 6` by `geometry.region[idx]`. The pass over the selection already
+  runs; this is a second array write inside it.
+
+**The country-wins rule is not optional here.** For 447 zones the region they name belongs to
+a different country — 155 zones pointing at West Pomeranian Voivodeship sit in the Solomon
+Islands. A per-region rollup that trusts `region_id` alone puts those zones under a region on
+the other side of the world and inflates a row the reader has no way to question. Bucket only
+zones whose `country[idx]` matches the selected country, and drop the rest into an explicit
+"region not identified" row rather than silently. `dim_zone` and the export's own region
+series already apply this rule, so the panel matching them is what keeps the three agreeing.
+
+**The list has to be ranked and capped, and the cap has to be spoken.** The median country
+has 10 regions and the mean 15, but Slovenia has 174, Latvia 118 and Russia 83 — a raw list
+is unusable for a third of the world. Rank by bots held, show the top ten, and print what was
+left out with its total: a silent truncation reads as "that is all of them", which is the
+failure mode the export's own logging rule exists to prevent.
+
+**Regions with nothing in them still belong in the total, not the list.** A country's regions
+that hold no bots would be most of the rows for a large quiet country, and they are the answer
+to a different question. Their count and their zone total go in the summary line above the
+list.
+
+## Phase 6 — the single-zone case
 
 Selecting one zone makes the breakdown degenerate: one faction leads with a zone count of
 1, the other two show 0. That reads as a bug rather than as a fact. For a single zone the
@@ -153,14 +228,25 @@ hover's label.
 - **No new series grain.** A per-faction *zone count over time* would be a new export —
   `series/` carries bots, not zone counts — and it is a different feature. The panel's
   numbers are for the date on screen.
+- **No per-region fetch.** The region series is one shard covering every region in the world,
+  so a country's regions are already in hand or one fetch away, and that fetch is the same one
+  a single region selection makes.
+- **No count of never-played zones over time.** It is a constant. Anything treating it as a
+  series is describing the crawler's progress rather than the game.
 
 ## Concerns
 
-- **Four numbers where the reader may want one.** Three factions plus empty, times bots and
-  zones, is six figures in a card that already carries a date, a scope label, a zone
-  denominator and a growth delta. The mobile sheet is the constraint — the floating card is
-  268 px against a 390 px screen. If it does not fit, the zone column is the part that goes,
-  because the bot counts are what the chart continues.
+- **The card is now carrying a lot.** Three factions, a total and two unheld categories, each
+  with bots and zones, on top of a date, a scope label, a zone denominator and a growth delta.
+  The mobile sheet is the binding constraint — the floating card is 268 px against a 390 px
+  screen, at which point it stops being an overlay and becomes the page. The order to shed in
+  is: the never-played/fought-to-empty split collapses to one unheld row, then the zone column
+  goes, then the region list moves behind a disclosure. The three faction bot counts and the
+  total are what the chart beneath continues, so they stay.
+- **A region list turns one selection into two scopes on one screen.** The panel is about the
+  country while the rows are about regions, and the reader has to know which number answers
+  which. The rows are subordinate — indented under a summary line that names the country and
+  says how many regions are shown out of how many exist.
 - **Empty needs a name that is not "uncaptured".** A zone fought down to nothing and a zone
   never played in fourteen years are both empty, and the map already distinguishes them with
   two shades of grey via `ever_active`. The panel should either use that distinction or avoid

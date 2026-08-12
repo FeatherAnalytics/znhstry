@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from . import boundaries, config, export, ingest, portal, upload
+from . import boundaries, config, export, hydrate, ingest, portal, upload
 
 STEPS = {
     "ingest": ingest.ingest_daily,
@@ -16,6 +16,9 @@ STEPS = {
     "battlestats": portal.scrape_battlestats,
     "export": export.export_all,
     "upload": upload.upload_all,
+    # Reads the published export back into a warehouse anyone can query. The only
+    # route to the history that needs no credentials.
+    "hydrate": hydrate.hydrate,
     # The raw layer's durable copy. `restore` is the first step on a fresh clone:
     # the 31-slot ring cannot seed a history it does not hold.
     "archive": upload.archive_raw,
@@ -42,6 +45,23 @@ def main() -> int:
             "normally just the one that closed at midnight."
         ),
     )
+    parser.add_argument(
+        "--origin",
+        help=(
+            "Hydrate step only. Base URL of a published export. Defaults to the "
+            "project's own public bucket, so a fresh clone needs no configuration."
+        ),
+    )
+    parser.add_argument(
+        "--no-names",
+        action="store_true",
+        help="Hydrate step only. Skip the 655 name blocks, which are most of the requests.",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Hydrate step only. Build from the cache alone, manifest included.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -62,6 +82,8 @@ def main() -> int:
         _emit(events=sum(added.values()))
     elif args.step == "battlestats":
         _emit(reports=portal.scrape_battlestats())
+    elif args.step == "hydrate":
+        hydrate.hydrate(args.origin, names=not args.no_names, offline=args.offline)
     else:
         STEPS[args.step]()
     return 0

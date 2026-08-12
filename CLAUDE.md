@@ -41,6 +41,7 @@ Other steps:
 ```bash
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry hydrate          # read the published export into a warehouse, no keys
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
 
@@ -608,6 +609,21 @@ numbers it does not already have. A normal run costs one index page and stops.
   in the world that day* — never relabel it "battles that day", which would imply the other
   ~3,000 active zones were quiet. No zone is reported twice in a day, so battle grain and
   zone-day grain coincide. Coverage starts 2014-01-01, eighteen months after release.
+- **`players` counts faction-player pairs, not people.** A player who launched for two
+  factions in the same zone on the same day is counted once under each, so the header
+  count can exceed the number of distinct handles in the report's own player list — report
+  131137 says 4 players and lists 3. Say "active players" and never "people", and treat any
+  per-player count derived from `players` as an upper bound.
+
+  This is **not** the 2019 faction-split fault, and conflating the two will send someone
+  down the wrong road. That one is a shortfall — the header total is *higher* than the three
+  faction columns, on 861 reports between 2019-07-01 and 2019-09-11. Faction switching
+  pushes the other way: the faction columns and the header agree with each other, and it is
+  the distinct-handle count that comes out lower.
+
+  Unverifiable from what we collect. The per-player list is a packed string on the report
+  page that ingest does not unpack, so nothing in `data/raw` holds the names to count.
+  See `thoughts/future-features.md`.
 - **Atlantis is the tournament world, and its reports are real.** 15,837 of the 61,517, over
   2,812 tournament zones from 2014-06-06 onward, and they carry the heaviest fighting in
   the game — a median 36 active players against 6 for a mapped zone. Do not treat them as
@@ -970,6 +986,57 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
 - **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
   DuckDB reads them through one glob; a column differing in width between them makes the
   source unreadable, not merely inconsistent.
+
+### Reading the export back, without a key
+
+`restore` needs an R2 credential, which means only whoever holds one can get the history.
+`uv run python -m znhstry hydrate` is the other way in, and it needs nothing: **the export
+is already public** — it is exactly what the browser downloads — and `zone_history/` in it
+is the complete event stream, all 9,895,648 rows, one row per event.
+
+It writes `data/znhstry_public.duckdb` with `zone`, `zone_event`, `zone_day`, `maz`,
+`country`, `region` and `faction`. Its own database, deliberately: the dbt profile owns
+`znhstry.duckdb` and a `dbt build` drops what it finds there.
+
+**`zone_event.seq` is the export's row order and it is load-bearing.** The export is
+ordered `(idx, observed_at)` but stores only `day`, so the 653,123 zone-days holding more
+than one event arrive tied — and a zone's standing for a day is the *last* of them. Without
+a sequence there is nothing to break those ties once SQL has touched the table, and "the
+state at date D" becomes whichever row the planner emitted last.
+
+`zone_day` is one row per zone-day, 9,242,525 of them, taking each day's last event as the
+standing and carrying `delta` — the step against the previous day that zone moved, not the
+calendar day before. Summing `delta` over a window is the net change across it. The
+changelog is sparse by design, so anything reading an absent day as a zero has discarded
+the 504,410 zones that last changed in 2019 or earlier.
+
+| | |
+|---|---|
+| ~1,480 requests, ~288 MB decoded | cached under `data/public/`, so a killed run resumes |
+| `--no-names` | drops 655 of those requests, and the zone names with them |
+| `--offline` | build from the cache alone, manifest included |
+| `--origin URL` | a different published export; defaults to the project's own bucket |
+
+**A cached file is trusted only at its exact expected length**, which is `rows x width`
+from the manifest. A truncated download would otherwise decode into plausible numbers for
+however many rows arrived.
+
+**The manifest is not cached like the rest.** The export writes `meta.json` last precisely
+so a client reading it finds every shard it names, and a stale one names shards that no
+longer exist. `--offline` reuses a copy on purpose, which is what makes a primed cache
+reproducible; nothing falls back to one by accident.
+
+Two things do not come back. **The grain is a day, not a timestamp** — the export stores
+`day`, not `observed_at`, so the 653,071 zone-days carrying more than one event arrive as
+several rows on the same date, in the right order but without the times between them. And
+**battlestats is only what MAZ carries**: five measures a report against the scrape's 77
+columns. So this is a warehouse to read. It cannot be uploaded, exported from, or extended
+by `ingest`, which needs the raw layer's own history to plan a slot.
+
+`_decode` must stay the exact inverse of `_pack`, and the two agree only by both following
+`meta.json`. Every way that can fail is silent — a wrong offset still yields numbers in
+range, a delta column accumulated in its stored width wraps into plausible coordinates —
+so `tests/test_hydrate_decode.py` round-trips them.
 
 ## Performance notes
 

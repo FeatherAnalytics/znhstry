@@ -100,6 +100,37 @@ WEB_DATA = ROOT / "dist" / "data"
 
 EARTH_RADIUS_KM = 6371.0088
 
+# --- Hydrate: the published export, read back --------------------------------
+#
+# The export is public - it is exactly what the browser downloads - so a clone can
+# have the whole event stream without an R2 key. The bucket's public URL is a
+# different thing from R2_ENDPOINT, which is the credentialed write API.
+#
+# Hardcoded rather than required, because the point of the step is that someone who
+# has just cloned the repo can run it with no configuration at all. `.env` still
+# wins if it names an origin, which is what makes a custom domain take over.
+
+PUBLIC_DATA_ORIGIN = (
+    os.environ.get("NEXT_PUBLIC_DATA_ORIGIN")
+    or os.environ.get("NEXT_PUBLIC_R2_URL")
+    or "https://pub-110a5c98bf1e495fa02397b90fd12708.r2.dev"
+)
+
+# Fetched payloads land here and are reused. ~1,480 files over an r2.dev URL with no
+# CDN in front of it, so a run that dies part way must not start over - and a cache
+# also means the decode can be re-run against bytes already on disk.
+PUBLIC_CACHE = DATA / "public"
+
+# Its own database. The dbt profile owns `znhstry.duckdb`, and a `dbt build` drops
+# and recreates everything it finds there.
+PUBLIC_DUCKDB_PATH = DATA / "znhstry_public.duckdb"
+
+PUBLIC_TIMEOUT = 120.0
+
+# r2.dev is rate-limited and documented as unsuitable for production traffic, which
+# is the same constraint the viewer's tile grid is sized around. Modest on purpose.
+PUBLIC_WORKERS = 8
+
 
 @dataclass(frozen=True)
 class Scope:

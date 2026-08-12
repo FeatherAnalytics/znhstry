@@ -14,6 +14,33 @@ export interface Totals {
   held: number;
 }
 
+/**
+ * Zones by leading faction, and the two kinds of zone nobody holds.
+ *
+ * Its own type rather than more fields on `Totals`, so bots and zones cannot be
+ * passed where the other is expected. Both describe the same selection on the
+ * same date, and they are not interchangeable: a faction can lead many zones
+ * thinly or one zone deeply.
+ *
+ * "Leads" and never "controls" - the faction here is whoever has the most bots
+ * standing, which is what the map colours by. `control_state` keeps naming
+ * whoever captured a zone last long after their last bot has gone, and counting
+ * that reports every zone ever taken as currently held.
+ *
+ * Null while the panel is reporting change: a per-faction zone count is a level,
+ * and "which faction gained most zones" is the thing the map refuses to colour
+ * by, because it makes one vocabulary mean two things.
+ */
+export interface FactionZones {
+  legion: number;
+  swarm: number;
+  faceless: number;
+  /** Real places with no bot in the whole record. Constant, not a count. */
+  neverPlayed: number;
+  /** Held something once, holds nothing now. */
+  emptied: number;
+}
+
 export interface HoveredZone {
   name: string;
   total: number;
@@ -35,6 +62,8 @@ export interface HoveredZone {
 interface Props {
   date: Date;
   totals: Totals;
+  /** Zones by leading faction for the same selection, or null in change mode. */
+  zones: FactionZones | null;
   previous: Totals | null;
   /** Zones in the current filter, or the whole scope when there is none. */
   zoneCount: number;
@@ -85,9 +114,45 @@ function Delta({ now, then }: { now: number; then: number | undefined }) {
   );
 }
 
+/** A summary row: a label, a bot figure and a zone figure, no bar. */
+function Line({
+  label,
+  value,
+  zones,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  zones: string;
+  strong?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 8,
+        marginBottom: 6,
+        color: strong ? "var(--text)" : "var(--text-dim)",
+      }}
+    >
+      {/* Aligns with the faction rows, which lead with a 7px swatch and an 8px gap. */}
+      <span aria-hidden style={{ width: 7, flexShrink: 0 }} />
+      <span style={{ flex: 1 }}>{label}</span>
+      <span className="tabular" style={{ fontWeight: strong ? 600 : 400 }}>
+        {value}
+      </span>
+      <span className="tabular" style={{ width: 58, textAlign: "right", fontSize: 11 }}>
+        {zones} {zones === "1" ? "zone" : "zones"}
+      </span>
+    </div>
+  );
+}
+
 export function StatsPanel({
   date,
   totals,
+  zones,
   previous,
   zoneCount,
   activeCount,
@@ -183,6 +248,23 @@ export function StatsPanel({
               </span>
               {!changeLabel && <Delta now={value} then={previous?.[faction.key]} />}
             </div>
+            {/* Zones led, beside the bots standing. The pair is the point: a
+                faction can lead many zones thinly or one zone deeply. */}
+            {zones && !pending && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  marginTop: 2,
+                  marginLeft: 15,
+                  color: "var(--text-dim)",
+                  fontSize: 11,
+                }}
+              >
+                <span className="tabular">{compactNumber(zones[faction.key])}</span>
+                <span>{zones[faction.key] === 1 ? "zone" : "zones"}</span>
+              </div>
+            )}
             <div style={{ height: 3, background: "var(--hairline)", marginTop: 5 }}>
               <div
                 style={{
@@ -198,6 +280,24 @@ export function StatsPanel({
           </div>
         );
       })}
+
+      {zones && !pending && (
+        <>
+          <div style={{ height: 1, background: "var(--hairline)", margin: "12px 0 10px" }} />
+          {/* The number every share above is a share of. The bot side is a sum of
+              approximations for a circle or the viewport; the zone side is exact
+              for every selection, so the qualifier belongs on one and not both. */}
+          <Line
+            label="Total"
+            value={compactNumber(totals.legion + totals.swarm + totals.faceless)}
+            zones={compactNumber(zoneCount)}
+            strong
+          />
+          {/* Two kinds of nothing, matching the two shades of grey on the map. */}
+          <Line label="Emptied" value="—" zones={compactNumber(zones.emptied)} />
+          <Line label="Never played" value="—" zones={compactNumber(zones.neverPlayed)} />
+        </>
+      )}
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "12px 0 10px" }} />
       <div style={{ minHeight: 46 }}>

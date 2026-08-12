@@ -86,6 +86,13 @@ export interface ZoneData {
    * directly and no worker answer has landed yet, so the panel counts its own.
    */
   held: number | null;
+  /**
+   * Zones by leading faction for the whole scope: `[empty, legion, swarm, faceless]`.
+   *
+   * Null until the first answer lands. Only ever the unfiltered breakdown - a
+   * selection is the page's own mask and the worker has never seen it.
+   */
+  byFaction: [number, number, number, number] | null;
   /** Bumped whenever the map needs to redraw: new tiles, or a new date. */
   version: number;
   /** The latest answered day's changes of hands, or null unless asked for. */
@@ -141,6 +148,7 @@ export function useZoneData(
   const [day, setDay] = useState<number | null>(null);
   const [shown, setShown] = useState<number | null>(null);
   const [held, setHeld] = useState<number | null>(null);
+  const [byFaction, setByFaction] = useState<[number, number, number, number] | null>(null);
   const [flips, setFlips] = useState<DayFlips | null>(null);
   const [version, setVersion] = useState(0);
   const [progress, setProgress] = useState<LoadProgress>({
@@ -342,6 +350,7 @@ export function useZoneData(
       settle();
       setShown(state.shown);
       setHeld(state.held);
+      setByFaction(state.byFaction);
       if (state.flips) {
         const answer = { day: state.day, ...state.flips };
         setFlips(answer);
@@ -454,6 +463,7 @@ export function useZoneData(
     changeStart,
     shown: changeStart === null ? null : shown,
     held,
+    byFaction,
     version,
     flips,
     pending,

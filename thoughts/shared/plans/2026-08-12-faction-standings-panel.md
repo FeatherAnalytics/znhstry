@@ -266,6 +266,35 @@ hover's label.
   to the newest date with no window open; the panel inherits that and should not second-guess
   it.
 
+## The number to check it against
+
+The whole scope on 2026-08-12, from two independent sources that agree exactly — the
+published manifest's own `current` block, and the event stream re-derived from
+`zone_history/` in the hydrated warehouse:
+
+| | Bots | Zones led |
+|---|---|---|
+| Legion | 24,224,517,577 | 625,472 |
+| Swarm | 26,048,562,013 | 514,265 |
+| Faceless | 27,578,810,929 | 422,126 |
+| Emptied | — | 33,861 |
+| Never played | — | 1,086,718 |
+| **Total** | **77,851,890,519** | **2,682,442** |
+
+Three things fall out of that table, and all three are worth checking on screen rather than
+trusting:
+
+- The five zone figures sum to `zone_count` exactly. If they do not, the four categories are
+  not a partition and the panel is double-counting or dropping zones.
+- The three faction zone counts sum to 1,561,863, which is the manifest's own `held`. So the
+  breakdown and the number the panel has always shown agree.
+- Never played is `zone_count - active_count` to the zone, which is what makes reading it off
+  the manifest rather than counting it correct.
+
+**Faceless leads on bots and trails on zones**, which is the pairing earning its place: 27.6B
+bots across 422,126 zones is 65,000 a zone, against Legion's 39,000. Depth against breadth,
+and neither number says it alone.
+
 ## Open questions
 
 - **Does the zone column belong in the same rows as the bots, or as its own line?** Same

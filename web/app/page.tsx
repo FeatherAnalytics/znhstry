@@ -409,7 +409,12 @@ export default function Page() {
 
   const shown = useMemo(() => {
     if (!display || day === null) {
-      return { totals: { legion: 0, swarm: 0, faceless: 0, held: 0 }, count: null, pending: true };
+      return {
+        totals: { legion: 0, swarm: 0, faceless: 0, held: 0 },
+        zones: null,
+        count: null,
+        pending: true,
+      };
     }
 
     // Three different counts, and mixing them up is how the panel starts lying.
@@ -433,10 +438,20 @@ export default function Page() {
     let held: number;
     let drawn: number;
     let count = 0;
+    // [empty, legion, swarm, faceless] by leading faction, plus the part of empty
+    // that has never held a bot in the whole record.
+    let byFaction: [number, number, number, number] = [0, 0, 0, 0];
+    let neverPlayed = 0;
 
     if (!filter && data.held !== null) {
       held = data.held;
       drawn = data.shown ?? display.size;
+      byFaction = data.byFaction ?? [0, 0, 0, 0];
+      // A constant, not a count. A zone with no bot in the record is empty in every
+      // frame - which is why terrain is built when tiles land and never per date -
+      // so the manifest already knows this and the main thread walks nothing.
+      neverPlayed = meta ? meta.scope.zone_count - meta.scope.active_count : 0;
+      count = display.size;
     } else {
       // By slot, because that is the order `pk` and `visible` are held in. The
       // mask is the page's own and stays in idx order, so it is the one thing
@@ -447,10 +462,16 @@ export default function Page() {
       drawn = 0;
       const slots = geometry?.count ?? 0;
       const toIdx = geometry?.slotToIdx;
+      const everActive = geometry?.everActiveBySlot;
       for (let slot = 0; slot < slots; slot++) {
         if (filter && !filter[toIdx![slot]]) continue;
         count++;
-        if (display.pk[slot] !== 0) held++;
+        const packed = display.pk[slot];
+        byFaction[packed >> 6]++;
+        if (packed !== 0) held++;
+        // Slot-keyed like `pk`, so the two shades of grey the map already draws
+        // cost no extra indirection here.
+        else if (everActive && everActive[slot] === 0) neverPlayed++;
         if (display.visible[slot] !== 0) drawn++;
       }
     }
@@ -462,7 +483,12 @@ export default function Page() {
 
     const now = at(day);
     if (!now) {
-      return { totals: { legion: 0, swarm: 0, faceless: 0, held }, count: filter ? count : null, pending: true };
+      return {
+        totals: { legion: 0, swarm: 0, faceless: 0, held },
+        zones: null,
+        count: filter ? count : null,
+        pending: true,
+      };
     }
 
     if (changing) {
@@ -477,6 +503,10 @@ export default function Page() {
           // down to nothing moved as much as one that was taken.
           held: drawn,
         } as Totals,
+        // A per-faction zone count is a level and there is no honest delta for it:
+        // "which faction gained most zones" is the very thing the map refuses to
+        // colour by, because it makes one vocabulary mean two things.
+        zones: null,
         count: filter ? count : null,
         pending: false,
       };
@@ -484,6 +514,15 @@ export default function Page() {
 
     return {
       totals: { ...now, held } as Totals,
+      zones: {
+        legion: byFaction[1],
+        swarm: byFaction[2],
+        faceless: byFaction[3],
+        neverPlayed,
+        // Held something once, holds nothing now. Derived so the four categories
+        // sum to `count` by construction rather than by a second count.
+        emptied: Math.max(0, count - held - neverPlayed),
+      },
       count: filter ? count : null,
       pending: false,
     };
@@ -760,6 +799,7 @@ export default function Page() {
     <StatsPanel
       date={dayToDate(meta.day_epoch, day)}
       totals={shown.totals}
+      zones={shown.zones}
       previous={previous}
       zoneCount={shown.count ?? meta.scope.zone_count}
       activeCount={meta.scope.active_count}

@@ -1,0 +1,132 @@
+---
+session: maz-statistics
+date: 2026-08-11
+status: complete
+outcome: PARTIAL_PLUS
+supersedes: 2026-08-10_21-44-08_maz-stats-bench-and-distance-module.md
+---
+# Everything from the 2026-08-10 handoff is carried forward here. That file's
+# seven action items are all either done or restated under next:. This is the
+# only handoff the next session needs to read.
+
+goal: Shipped the §7 MAZ bench — 8 charts, distance clustering in both languages, report-number links, and the faction launch split
+now: Look at /prototype in a browser — 8 cards, none of them ever visually verified
+
+test: cd pipeline && uv run pytest tests/ -q   # 98 pass
+# also: cd web && npx tsc --noEmit  ·  cd web && npm run build  (STOP npm run dev first — see failed:)
+
+branch: feat/maz-statistics — 9 commits ahead of origin/main, nothing pushed, tree clean
+
+done_this_session:
+  - task: Merged PR #12 (repo review findings, 12 commits) and PR #13 into the branch
+    files: [pipeline/src/znhstry/export.py, web/app/page.tsx]
+    note: Two conflicts — export.py import line, page.tsx origin constants (dataOrigin.ts already owned them)
+  - task: Committed the previous session's uncommitted work onto a fresh branch
+    files: [pipeline/src/znhstry/distance.py, web/lib/mazStats.ts, web/app/prototype/page.tsx]
+    note: perf/timelapse-framerate was already merged via PR #11, so it was a dead branch holding live work
+  - task: Pinned the nanomissile range constants
+    files: [pipeline/src/znhstry/config.py]
+  - task: Per-report launch rate chart (§7.2.2)
+    files: [web/lib/mazStats.ts, web/app/prototype/page.tsx]
+  - task: Outlier tables with players beside launches, then portal links (§7.2)
+    files: [web/lib/mazStats.ts, web/app/prototype/page.tsx]
+  - task: Added report number + 3 faction launch columns to maz_stats, re-exported
+    files: [transform/models/staging/stg_battlestats.sql, transform/models/marts/fct_zone_battles.sql, pipeline/src/znhstry/export.py, pipeline/tests/test_export_maz.py, CLAUDE.md]
+  - task: Faction share, fight lopsidedness, appearances, streaks charts (§7.3, §7.4)
+    files: [web/lib/mazStats.ts, web/components/charts/StackedShare.tsx, web/components/charts/palette.ts]
+  - task: Fixed Histogram assuming every axis was logarithmic
+    files: [web/components/charts/Histogram.tsx]
+  - task: Distance clustering in Python and TypeScript, plus §7.1 scatter and table
+    files: [pipeline/src/znhstry/distance.py, web/lib/mazClusters.ts, web/components/charts/Scatter.tsx]
+  - task: Recorded every measurement in the plan of record
+    files: [thoughts/future-features.md]
+
+blockers: []
+
+questions:
+  - Do the ~1,979 scatter dots overplot into a wash at the dense end? Never seen rendered.
+  - Do the 9 direct labels on the n>=5 cluster days collide?
+  - Appearances histogram labels 0/10/100/1.0k and skips a "1" tick, because bin 0's lower edge is 0. Cosmetic, pre-existing.
+  - Should the 861 broken 2019 reports be re-scraped? Bounded range 55800-57858. Hits the game's live server, so it is the user's call.
+
+decisions:
+  - clusters_computed_in_browser: "CLAUDE.md keeps coordinates out of the MAZ payload because a second copy is a second chance to disagree; that applies to a derived cluster too. Reading the map's own tiles means bench and map cannot disagree about where a zone is. Cost is 9.27 MB, so it sits behind a button."
+  - faction_colors_on_one_chart: "Faction share is the one subject where the reserved faction colors are correct. Recoloring would make it disagree with the map. Validator FAILs the dark lightness band (0.673/0.757 vs 0.48-0.67) and passes CVD 8.1, normal-vision 36.6, chroma, contrast. 8.1 is on the floor, so direct labels carry identity."
+  - neighborhood_km_one_constant: "48.28032 (30 miles) is both the cluster link cutoff and the map framing margin, so the circle the statistic describes and the circle the reader sees are one circle. Duplicated in config.py and mazClusters.ts by value, like EARTH_RADIUS_KM."
+  - days_get_no_portal_link: "The Most Active Zones index names only today's ten, so no URL means 'the whole of 2017-05-22'. Linking a day to its biggest report would put one zone behind a link claiming to be all ten."
+  - faction_2019_window_documented_not_repaired: "Test asserts containment outside 2019-07-01..09-11, not the count. A count test goes stale; a containment test catches a share chart elsewhere starting to divide by an incomplete denominator."
+  - streaks_log_binned: "Runs go 1 to 152 with almost every zone at 1. Linear bins put ~95% in the first bar."
+
+findings:
+  - faction_split_is_broken_only_in_2019: "861 reports fall short of their own total, ALL between 2019-07-01 and 2019-09-11, report numbers 55800-57858. The faction PLAYER columns fail on the same rows, which identifies it as the whole per-faction block arriving partial. Outside the window both splits are exact on all 60,496 reports."
+  - not_a_top_50_player_cap: "User's hypothesis, tested and disconfirmed. Largest faction-player sum is 939; 5,537 reports with >50 players outside the window reconcile perfectly; the 861 short reports have a MEDIAN of 7 players."
+  - not_geography: "Every country with 10+ reports in the window is 72-97% short, and Atlantis — which has no coordinates at all — sits at 83.1%, on the average. 40 of the 72 days are 100% short."
+  - concentration_is_the_exception: "57.0% of MAZ days have no two of the world's most active zones within 30 miles of each other; another 38.3% top out at a pair. Only 36 days in the record reach four or more. A MAZ day is normally ten unrelated fights."
+  - distance_grouping_is_stricter_than_region: "20 days at n=5 become 8. The difference is California, whose clusters run 160-1,000 km across. Both Kent days survive as the top of the record."
+  - cross_border_clusters_are_real: "332 of 2,372 clusters cross a region line, 18 cross a national one. Saint Louis across Illinois-Missouri, Moscow across the city/oblast line, Thailand across Phangnga/Phuket (the one new n=5 day). NOT the predicted DC/MD/VA or Kansas City."
+  - clustering_is_immune_to_regionid_corruption: "2023-05-12 clusters three zones within 29.2 km whose labels claim Moscow, Moskovskaya and Tyumenskaya Oblast. Coordinates put them where they actually are."
+  - maz_is_mostly_not_a_battle: "22.1% of reports are one-sided (one faction launching everything); only 10.6% have all three factions launching."
+  - half_of_maz_zones_appear_once: "5,871 of 11,723. Leader takes 1,286 of 4,599 days. Longest streak 152 consecutive days; 37.2% ever manage two in a row."
+  - reexport_moved_exactly_three_files: "maz_stats.bin.br (new columns), series/global_daily.json.br (PR #12's RECORD_START cut reaching output for the first time), and zone_history/0655.bin.br DELETED (PR #12's integer-division fix removing the spurious block past the end of the index). Other 1,849 shards byte-identical."
+  # carried from the 2026-08-10 handoff — still true, still load-bearing
+  - maz_stats_is_a_nested_shard_entry: "meta.maz.stats, not a top-level meta.maz_stats. Works with the existing loadShard unchanged."
+  - maz_stats_columns_are_misaligned_on_purpose: "players is uint16 then four (now six) int32s, so every int32 column starts on an odd 4-byte boundary and takes decodeColumns' aligned-copy path (web/lib/format.ts:112). Verified against real bytes, not just types."
+  - web_has_no_test_runner_by_design: "CLAUDE.md: 'The viewer has none.' Do not add one. Verify client math out-of-band by decoding the real shards in node and comparing against DuckDB — that is the pattern that has worked across both sessions."
+  - description_is_not_unique: "2026-06-13 has two different zones both named 'Diamond Springs' in the same cluster. ZoneId is the only key."
+  - region_names_do_not_collide_on_a_maz_day: "So Region alone was a safe grouping key for the old analysis despite the zones.RegionId corruption — but distance clustering supersedes it and is immune to that corruption anyway."
+  - launches_and_players_tell_different_stories: "Budapest 2024-12-15 is the largest mapped report ever at 20,929 launches from 2 active players; Chermignac 2017-05-22 is 17,885 from 201. Never rank outliers by launches alone."
+
+worked:
+  - "Cross-checking every browser figure against DuckDB over the raw parquet before committing. Caught nothing wrong, but it is the only thing that exercises the decode path — and it proved the TS cluster port matches Python exactly."
+  - "Verifying the TS clustering against Python: Python read zones.parquet at full precision, TS read tiles quantised to 1e-4 degrees, and they agree to 0.1 km — which validates the quantisation as well as the port."
+  - "Computing every printed figure from the loaded shards rather than writing numbers into the copy. Caught a stale claim (a card quoted the whole battlestats set's report spread on a mapped-only page)."
+  - "Running the dataviz validator instead of eyeballing the palette. It produced a real decision rather than a rubber stamp."
+  - "Hitting one live portal URL (report 113612 -> HTTP 200) to confirm the link format end to end."
+
+failed:
+  - "npm run build while npm run dev is running. They share .next, so the dev server dies with 'Cannot find module ./706.js'. ALWAYS stop dev first, then build, then rm -rf .next and restart."
+  - "git add -A swept the clustering work into an unrelated commit. Split it with reset --soft before pushing. Stage explicitly."
+  - "Assuming a changed export file meant the warehouse had moved. Raw data was untouched; the real cause was PR #12's export.py change reaching output for the first time. Check the merge diff before theorising."
+  - "Histogram inferred log vs linear from bin edges. On 0-1 bins every edge is in the same decade, so it drew '0' nineteen times on top of itself. Scale is now a declared prop."
+  - "No browser tooling in this session either (no chrome-devtools MCP, no claude-in-chrome). Nothing on /prototype has ever been looked at. This is the second session in a row it has been blocked."
+  - "rtk grep / rtk read — rg and read are not on PATH in this shell. Use the built-in Grep/Read tools. (Carried from 2026-08-10.)"
+  - "Ranking MAZ clusters by spread alone promotes tight 2-zone pairs over a 6-zone cluster; count alone puts California above Kent. Sort by count, then spread within a count."
+
+next:
+  - "Open http://localhost:3000/prototype/ and look at all 8 cards. Click 'Load geometry and cluster the record' on the first one."
+  - "§7.1's remaining piece: a zoomed map per cluster, framed at its bounding box plus NEIGHBORHOOD_KM, so a reader sees the fight sits on Canterbury. Needs deck.gl + CARTO tiles, not a chart. zoomFor in app/page.tsx already turns a degree span into a zoom."
+  - "§7.2.3: regress per-zone launches on cluster size, controlling for date and player count. Both inputs now exist — mazClusters gives cluster size, maz_stats gives launches and players."
+  - "§7.3 second half: does faction share of launches lead or follow the map's share of zones held? Needs the scope series the main page already loads."
+  - "Consider opening a continuity ledger for the §7 work stream — it has now run across two sessions."
+  - "Push the branch and open a PR when ready. 9 commits, conventional, nothing pushed yet."
+
+files:
+  created:
+    - pipeline/src/znhstry/distance.py
+    - pipeline/tests/test_distance.py
+    - web/lib/mazStats.ts
+    - web/lib/mazClusters.ts
+    - web/lib/dataOrigin.ts
+    - web/app/prototype/page.tsx
+    - web/components/charts/Histogram.tsx
+    - web/components/charts/TimeSeries.tsx
+    - web/components/charts/StackedShare.tsx
+    - web/components/charts/Scatter.tsx
+    - web/components/charts/palette.ts
+  modified:
+    - pipeline/src/znhstry/config.py
+    - pipeline/src/znhstry/export.py
+    - pipeline/tests/test_export_maz.py
+    - transform/models/staging/stg_battlestats.sql
+    - transform/models/marts/fct_zone_battles.sql
+    - web/app/page.tsx
+    - web/lib/maz.ts
+    - CLAUDE.md
+    - thoughts/future-features.md
+
+notes:
+  - "thoughts/ is gitignored, so future-features.md §7 and this handoff are not in any commit."
+  - "Background servers left running: npm run data on :3002 (was already up, not mine), npm run dev on :3000. They will not survive the session."
+  - "future-features.md §7 is still the plan of record and now carries every measurement from this session. Read it before §7.2.3 or §7.6."
+  - "ruff is not installed in the pipeline env — use uv run --with ruff ruff check. eslint is not installed in web/ — use npx tsc --noEmit and npm run build."
+  - "pandas is not installed in the pipeline env; use .fetchall() not .df(). 'days' and 'first' are reserved words in DuckDB."

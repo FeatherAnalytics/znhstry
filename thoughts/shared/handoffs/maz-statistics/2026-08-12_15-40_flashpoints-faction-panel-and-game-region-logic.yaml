@@ -3,13 +3,26 @@ session: maz-statistics
 date: 2026-08-12
 status: complete
 outcome: SHIPPED_UNVERIFIED
-supersedes: 2026-08-11_20-24_maz-charts-clusters-and-faction-split.yaml
+continues: 2026-08-11_20-24_maz-charts-clusters-and-faction-split.yaml
 ---
-# Everything from the 2026-08-11 handoff is carried forward. Read this one only.
+# READ BOTH HANDOFFS. This one does not supersede 2026-08-11_20-24 - that file is
+# the only record of the /prototype bench: its eight cards, why clusters are
+# computed in the browser, why faction colours are correct on exactly one chart,
+# the 861 broken 2019 faction reports, and the failures worth not repeating. Its
+# open questions are still open.
 #
 # A NEW SESSION HAS NONE OF THIS CONTEXT. Every number below is measured, not
 # estimated, and the queries that produced them are in
 # thoughts/maz-outliers-to-explore.md under "Reproducing this".
+#
+# Three documents carry the rest, all in thoughts/ and all force-added to git:
+#   maz-outliers-to-explore.md                  the analysis record, 11 sections
+#   shared/plans/2026-08-12-flashpoint-timelapse.md      flashpoint design
+#   shared/plans/2026-08-12-faction-standings-panel.md   panel design
+#
+# thoughts/future-features.md is the §7 plan of record and DOES NOT EXIST on this
+# machine - it lives wherever the 2026-08-10 session ran. Find it before doing
+# §7.2.3 or §7.6 work.
 
 goal: >
   Flashpoints on the map, a per-faction standings panel, and region counting that
@@ -83,6 +96,16 @@ machine_traps:
       corrected there. The credential helper is `gh auth git-credential`, which
       serves whichever account gh has active. Batch commits and push once.
   - name: duckdb CLI installed via brew (v1.5.5). NO_COLOR=1 strips ANSI from output.
+  - name: "`npm run build` kills a running `npm run dev`"
+    detail: >
+      They share .next, so the dev server dies with "Cannot find module ./706.js".
+      Stop dev, build, `rm -rf .next`, restart. Carried from the 2026-08-11 session
+      and still true - and the next task here is to run dev.
+  - name: .env now holds live R2 credentials
+    detail: >
+      Gitignored, and it must stay that way. It also carries
+      NEXT_PUBLIC_DATA_ORIGIN, which a production build uses and `npm run dev`
+      correctly ignores in favour of localhost:3002.
 
 # ---------------------------------------------------------------------------
 what_shipped:
@@ -220,6 +243,14 @@ findings:
     26,048,562,013 / 514,265, Faceless 27,578,810,929 / 422,126, 33,861 emptied,
     1,086,718 never played. The five zone figures sum to 2,682,442 and the three
     faction counts sum to meta's own held of 1,561,863. USE THIS TO CHECK THE PANEL.
+  region_change_touches_the_prior_session_cluster_work: >
+    The 2026-08-11 session measured "distance grouping is stricter than region - 20
+    days at n=5 become 8" and "clustering is immune to RegionId corruption", both
+    against the old country-wins region grouping. Region membership now means
+    something different, so the first of those figures should be re-derived before
+    it is quoted. The second still holds and holds more strongly: distance
+    clustering reads coordinates and never region ids, so it is unaffected by any
+    of this.
   korea_pair_undocumented: >
     CLAUDE.md's region list accounts for 446 of 447. The 447th is Hwanghae-namdo
     (North Korea) claimed by 1 zone in South Korea. Not recoverable by name-matching.
@@ -233,6 +264,8 @@ next:
   - "Open questions in the two plan docs: whether the flashpoint frame should follow radius_km rather than a 5/3 ratio; whether the neighbours line needs its own axis (Marquette differs 5x, Hebron 1.2x); whether bots-per-zone should be shown outright."
   - "Atlantis/tournament stats are now reachable - the raw layer is restored, so stg_battlestats has all 15,837 tournament reports. They were out of reach all session."
   - "thoughts/HANDOFF.md does not exist. The machine_traps above belong there."
+  - "Re-derive the 2026-08-11 finding that 20 five-zone region-days become 8 under distance clustering - it predates the region change. See findings.region_change_touches_the_prior_session_cluster_work."
+  - "Still open from 2026-08-11: whether to re-scrape the 861 broken 2019 faction reports (bounded range 55800-57858). It hits the game's live server, so it is the user's call."
 
 # ---------------------------------------------------------------------------
 worked:

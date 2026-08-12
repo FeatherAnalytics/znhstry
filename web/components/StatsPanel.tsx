@@ -85,6 +85,12 @@ interface Props {
    * so it is not repeated here.
    */
   compact?: boolean;
+  /**
+   * Rendered inside the panel, under the hover readout. The region breakdown
+   * lives here rather than in a box of its own so there is one card with one
+   * border, and so a long region list scrolls with the numbers it belongs to.
+   */
+  children?: React.ReactNode;
 }
 
 const FACTION_NAMES = ["Uncaptured", "Legion", "Swarm", "Faceless"];
@@ -162,6 +168,7 @@ export function StatsPanel({
   changeLabel,
   pending,
   compact = false,
+  children,
 }: Props) {
   // Bars are shares of the movement, so a negative faction gets no bar rather
   // than a nonsensical negative width.
@@ -178,6 +185,10 @@ export function StatsPanel({
               top: 16,
               right: 16,
               width: 268,
+              // A long region list scrolls with the numbers it belongs to rather
+              // than pushing the card off the screen.
+              maxHeight: "calc(100vh - 32px)",
+              overflowY: "auto",
               padding: "16px 18px 18px",
               background: "rgba(14,18,24,0.82)",
               backdropFilter: "var(--panel-blur)",

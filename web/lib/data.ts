@@ -37,10 +37,16 @@ export interface SparseSeries {
 }
 
 import type { MazEntry } from "./maz";
+import type { FlashpointsMeta } from "./flashpoints";
 
 export interface Meta {
   /** Most Active Zones, `(idx, day)`. Absent until an export has written it. */
   maz?: MazEntry;
+  /**
+   * Curated flashpoints: their definitions inline, their series in one shard.
+   * Absent until an export has written them, and absent when none are seeded.
+   */
+  flashpoints?: FlashpointsMeta;
   scope: {
     name: string;
     label: string;

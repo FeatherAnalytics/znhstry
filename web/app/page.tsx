@@ -40,8 +40,19 @@ import { useCompact } from "@/lib/useCompact";
 import { BottomSheet, type SheetStop } from "@/components/BottomSheet";
 import { chartSpanOf, readModeOf, windowPhrase, type ReadMode, type ViewKey } from "@/lib/windows";
 import { WindowPicker } from "@/components/WindowPicker";
+import { FlashpointImpact } from "@/components/FlashpointImpact";
+import { RegionBreakdown } from "@/components/RegionBreakdown";
 import { TimelapseBar, PERIODS, type Period } from "@/components/TimelapseBar";
 import { loadMaz, type MazData } from "@/lib/maz";
+import {
+  boardLayers,
+  framing,
+  loadImpact,
+  readFlashpoints,
+  FLASHPOINT_DAYS_PER_SECOND,
+  type Flashpoint,
+  type ImpactSeries,
+} from "@/lib/flashpoints";
 import { BASE, DATA_ROOT } from "@/lib/dataOrigin";
 import {
   useFlipStream,
@@ -105,6 +116,8 @@ export default function Page() {
   const [rangeEnd, setRangeEnd] = useState<number | null>(null);
   const [activePeriod, setActivePeriod] = useState<string | null>("Whole record");
   const [maz, setMaz] = useState<MazData | null>(null);
+  const [flashpoint, setFlashpoint] = useState<Flashpoint | null>(null);
+  const [impact, setImpact] = useState<Map<string, ImpactSeries> | null>(null);
 
   // Daily reads what moved; the other two read levels and restrict what is
   // drawn afterwards.
@@ -154,6 +167,22 @@ export default function Page() {
     if (meta) setZoneCount(meta.scope.zone_count);
   }, [meta]);
 
+  /** Curated flashpoints, straight out of the manifest. */
+  const flashpoints = useMemo(
+    () => (meta?.flashpoints ? readFlashpoints(meta.flashpoints) : []),
+    [meta],
+  );
+
+  // One 1 KB shard for every flashpoint's series, fetched when the mode opens
+  // rather than when one is picked - the whole payload is smaller than a single
+  // tile, so splitting it would cost a request to save nothing.
+  useEffect(() => {
+    if (!timelapse || impact || !meta?.flashpoints || flashpoints.length === 0) return;
+    loadImpact(BASE, meta.flashpoints, flashpoints)
+      .then(setImpact)
+      .catch(() => undefined);
+  }, [timelapse, impact, meta, flashpoints]);
+
   // MAZ is only ever needed by the timelapse, so it is not on the load path.
   useEffect(() => {
     if (!timelapse || maz || !meta?.maz) return;
@@ -176,6 +205,27 @@ export default function Page() {
     return max > min ? { min, max } : { min, max: min + 1 };
   }, [outer, rangeStart, rangeEnd]);
 
+  const gotoFlashpoint = useCallback(
+    (next: Flashpoint | null) => {
+      setFlashpoint(next);
+      if (!next) return;
+      setActivePeriod(null);
+      setRangeStart(next.runStart);
+      setRangeEnd(next.runEnd);
+      data.setDay(next.runStart);
+      // A flashpoint is a third kind of focus; two of them at once means neither.
+      setArea(null);
+      setHome(null);
+      setSelectedZone(null);
+      setHistoryMode("viewport");
+      // Bring the tile queue to the flashpoint, so whatever has not arrived yet
+      // arrives nearest-first around it.
+      data.setFocus(next.anchor.lat, next.anchor.lon);
+      setViewState((v) => ({ ...v, ...framing(next, zoomFor) }));
+    },
+    [data],
+  );
+
   const applyPeriod = useCallback(
     (period: Period) => {
       if (!meta) return;
@@ -184,6 +234,7 @@ export default function Page() {
       setRangeStart(toDay(period.start));
       setRangeEnd(toDay(period.end));
       setActivePeriod(period.label);
+      setFlashpoint(null);
       // A preset about something global opens on the globe. Leaving a region
       // selected would show a worldwide change through a keyhole.
       if (period.world) {
@@ -338,6 +389,26 @@ export default function Page() {
     focus: timelapse ? mapFilter : null,
     stream,
   });
+
+  /**
+   * The board zones' rings, drawn over the MAZ marks.
+   *
+   * After the recurrence rings in the layer list so they sit on top: a flashpoint
+   * names at most ten zones against a hundred amber ones, and it is the stronger
+   * claim on screen.
+   */
+  // The ring the map draws comes from the flashpoint's own radius, so the circle
+  // on screen and the circle the impact figures describe are one circle.
+  const flashpointLayers = useMemo(() => {
+    if (!flashpoint || !geometry || day === null) return [];
+    return boardLayers({
+      flashpoint,
+      geometry,
+      day,
+      zoom: viewState.zoom ?? 0,
+      nameOf: (idx) => geometry.names[idx] ?? null,
+    });
+  }, [flashpoint, geometry, day, viewState.zoom]);
 
   // --- the chart, which is also where every bot count comes from -----------
 
@@ -667,6 +738,10 @@ export default function Page() {
    */
   const dayRef = useRef<number | null>(null);
   dayRef.current = day;
+  // Read inside the loop rather than keyed on, so picking a flashpoint mid-run
+  // changes the pace without tearing down the timer and resetting its debt.
+  const flashpointRef = useRef<Flashpoint | null>(null);
+  flashpointRef.current = flashpoint;
 
   useEffect(() => {
     if (!playing || !timelapse || !lapseBounds) return;
@@ -676,7 +751,11 @@ export default function Page() {
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
-      debt += ((now - last) / 1000) * LAPSE_DAYS_PER_SECOND;
+      // A flashpoint is a few days in one neighborhood, so the run is short
+      // enough to afford being slow and being slow is the entire point: at the
+      // record-crossing rate a Marquette run ends in under two seconds and the
+      // day the fight happened is a single frame.
+      debt += ((now - last) / 1000) * (flashpointRef.current ? FLASHPOINT_DAYS_PER_SECOND : LAPSE_DAYS_PER_SECOND);
       last = now;
       if (debt > 1) debt = 1;
       if (debt < 1) return;
@@ -784,6 +863,9 @@ export default function Page() {
       onTogglePlay={() => setPlaying((p) => !p)}
       marks={overlays.marks}
       flips={overlays.flips}
+      flashpoints={flashpoints}
+      activeFlashpoint={flashpoint?.id ?? null}
+      onFlashpoint={gotoFlashpoint}
       claimed={stream.claimed}
     />
   ) : null;
@@ -794,6 +876,21 @@ export default function Page() {
     if (!playing && day !== null && dayBounds && day >= dayBounds.max) data.setDay(dayBounds.min);
     setPlaying((p) => !p);
   };
+
+  /* A country selection asks where inside it anything is happening, which the
+     panel's own totals cannot say. Only for a whole country: picking one region
+     already answers it. */
+  const regionBreakdown =
+    ready && area && area.regionId === null && geometry && display && lookups ? (
+      <RegionBreakdown
+        geometry={geometry}
+        display={display}
+        lookups={lookups}
+        countryId={area.countryId}
+        countryLabel={area.label}
+        version={data.version}
+      />
+    ) : null;
 
   const statsPanel = ready ? (
     <StatsPanel
@@ -809,7 +906,9 @@ export default function Page() {
       changeLabel={changing ? `Net change ${windowPhrase(span)}` : null}
       pending={shown.pending}
       compact={compact}
-    />
+    >
+      {regionBreakdown}
+    </StatsPanel>
   ) : null;
 
   const historyBar = ready ? (
@@ -980,8 +1079,18 @@ export default function Page() {
             draw={emptyOnly ? "empty" : "all"}
             only={timelapse && backdrop === "cumulative" ? stream.mask : null}
             onlyVersion={stream.version}
-            overlays={timelapse ? overlays.layers : undefined}
-            ring={home ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM } : null}
+            overlays={timelapse ? [...overlays.layers, ...flashpointLayers] : undefined}
+            ring={
+              flashpoint
+                ? {
+                    lat: flashpoint.anchor.lat,
+                    lon: flashpoint.anchor.lon,
+                    radiusKm: flashpoint.radiusKm,
+                  }
+                : home
+                  ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM }
+                  : null
+            }
             onViewStateChange={setViewState}
             onHover={handleHover}
             onClickZone={(idx) => {
@@ -1016,6 +1125,15 @@ export default function Page() {
       {/* The timelapse replaces the chart rather than sitting beside it: it runs
           on a date range, and a chart drawn for a window would be describing a
           different span from the one playing. */}
+      {/* The impact readout sits above the bar, where the chart would be: it
+          describes the same span the bar is playing. */}
+      {timelapse && flashpoint && (
+        <FlashpointImpact
+          flashpoint={flashpoint}
+          series={impact?.get(flashpoint.id) ?? null}
+          compact={compact}
+        />
+      )}
       {timelapse ? timelapseBar : !compact && historyBar}
     </main>
   );

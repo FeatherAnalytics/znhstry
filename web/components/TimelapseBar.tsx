@@ -2,6 +2,7 @@
 
 import { dateToDay, dayToDate } from "@/lib/format";
 import type { Backdrop } from "@/lib/timelapse";
+import type { Flashpoint } from "@/lib/flashpoints";
 
 /**
  * Named spans worth watching, as ISO dates. `null` is the end of the record on
@@ -92,6 +93,10 @@ interface Props {
   marks: number;
   flips: number;
   claimed: number;
+  /** Curated days worth watching, or empty when the export carries none. */
+  flashpoints: Flashpoint[];
+  activeFlashpoint: string | null;
+  onFlashpoint: (flashpoint: Flashpoint | null) => void;
 }
 
 const iso = (epoch: string, day: number): string =>
@@ -115,10 +120,16 @@ export function TimelapseBar({
   marks,
   flips,
   claimed,
+  flashpoints,
+  activeFlashpoint,
+  onFlashpoint,
 }: Props) {
-  const caveat = activePeriod
-    ? (PERIODS.find((p) => p.label === activePeriod)?.caveat ?? null)
-    : null;
+  const chosen = flashpoints.find((f) => f.id === activeFlashpoint) ?? null;
+  // A flashpoint's own note replaces the period caveat while one is picked: both
+  // describe the span on screen, and two of them at once is one too many.
+  const caveat =
+    chosen?.blurb ??
+    (activePeriod ? (PERIODS.find((p) => p.label === activePeriod)?.caveat ?? null) : null);
   const toDay = (value: string) =>
     value ? dateToDay(epoch, new Date(`${value}T00:00:00Z`)) : null;
 
@@ -214,12 +225,33 @@ export function TimelapseBar({
           <button
             key={p.label}
             onClick={() => onPeriod(p)}
-            aria-pressed={activePeriod === p.label}
-            style={chip(activePeriod === p.label)}
+            aria-pressed={activePeriod === p.label && !chosen}
+            style={chip(activePeriod === p.label && !chosen)}
           >
             {p.label}
           </button>
         ))}
+
+        {/* Flashpoints are a different kind of choice from a period - a place as
+            well as a span - so the select says so rather than sitting among the
+            chips as an eleventh one. */}
+        {flashpoints.length > 0 && (
+          <select
+            value={activeFlashpoint ?? ""}
+            onChange={(e) =>
+              onFlashpoint(flashpoints.find((f) => f.id === e.target.value) ?? null)
+            }
+            aria-label="Fly to a flashpoint"
+            style={{ ...control, maxWidth: 210 }}
+          >
+            <option value="">Flashpoint…</option>
+            {flashpoints.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.label} · {iso(epoch, f.boardStart).slice(0, 10)}
+              </option>
+            ))}
+          </select>
+        )}
 
         <span
           className="eyebrow tabular"

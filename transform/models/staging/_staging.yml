@@ -40,3 +40,29 @@ models:
           - not_null:
               config:
                 severity: warn
+
+  - name: stg_flashpoints
+    description: >
+      Grain: one row per curated flashpoint, as seeded. Ten rows.
+
+      A seed rather than a source: these were found by querying the whole 9.9M-event
+      record, which is not something a model can rediscover. Version control is what
+      makes the export reproducible and adding one a one-line diff.
+
+      Two windows, and collapsing them breaks the long flashpoints. board_start and
+      board_end are the flashpoint's own days, over which on_the_board is measured;
+      run_start and run_end are what playback covers. Adelaide's campaign draws 70
+      distinct zones onto the leaderboard across its 59 days, so a single window turns
+      "the fight against its surroundings" into "activity against inactivity".
+    columns:
+      - name: flashpoint_id
+        description: Stable slug. Names the row in every downstream model and payload.
+        data_tests: [unique, not_null]
+      - name: anchor_zone_id
+        description: >
+          ZoneId, never a name and never a coordinate. Description is not unique -- two
+          different zones are both called Diamond Springs -- and a coordinate here would
+          be a second copy of what dim_zone holds. int_flashpoints resolves it.
+        data_tests: [not_null]
+      - name: radius_km
+        data_tests: [not_null]

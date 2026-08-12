@@ -83,3 +83,59 @@ models:
     columns:
       - name: country_id
         data_tests: [not_null]
+
+  - name: fct_flashpoint_zone
+    description: >
+      Grain: one row per flashpoint per zone inside its circle. Membership by
+      great-circle distance from the anchor, with a bounding box padded 5% in front of
+      the haversine -- 111.32 km per degree of latitude is a mid-latitude average, so an
+      unpadded box is narrower than the radius it stands for and clips edge zones.
+
+      on_the_board is measured over the board window, never the run window and never all
+      time. Widen it and Adelaide's 9 board zones become 70 of its 193, at which point
+      the two groups are "active" and "inactive" rather than "the fight" and "its
+      surroundings".
+    columns:
+      - name: flashpoint_id
+        data_tests: [not_null]
+      - name: zone_id
+        data_tests: [not_null]
+      - name: on_the_board
+        data_tests: [not_null]
+
+  - name: fct_flashpoint_impact
+    description: >
+      Grain: one row per flashpoint per day per group, sparse over the run window.
+
+      net_delta sums fct_zone_events.total_delta, which is already the step against each
+      zone's own previous observation -- so summing it over a window is the net change
+      across that window, and dormant zones carry forward for free. The changelog holds
+      no row for a day a zone did not move, so anything treating an absent day as a zero
+      has discarded the 504,410 zones that last changed in 2019 or earlier.
+
+      zones_moving is how a reader tells a calm neighborhood from missing rows. Six of
+      the ten flashpoints produce no on-the-board rows at all, because the record before
+      late 2018 is a thin stream of first sightings and 2019 is the collection gap.
+    columns:
+      - name: net_delta
+        data_tests: [not_null]
+      - name: zones_moving
+        data_tests: [not_null]
+
+  - name: fct_flashpoint
+    description: >
+      Grain: one row per flashpoint. Dense -- every seeded row appears, including the
+      ones the changelog cannot describe. This is the manifest the export packs and the
+      viewer's picker reads.
+
+      changelog_covered exists because absence and zero are different answers. It is
+      true only when the zones reported fighting have events to show for it; neighbors
+      moving is not enough, since Chermignac's circle has neighbor events in 2017 while
+      the anchor itself has none. Six of the ten flashpoints are false.
+    columns:
+      - name: flashpoint_id
+        data_tests: [unique, not_null]
+      - name: zones_in_circle
+        data_tests: [not_null]
+      - name: changelog_covered
+        data_tests: [not_null]

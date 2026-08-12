@@ -86,6 +86,13 @@ export interface ZoneData {
    * directly and no worker answer has landed yet, so the panel counts its own.
    */
   held: number | null;
+  /**
+   * Zones by leading faction for the whole scope: `[empty, legion, swarm, faceless]`.
+   *
+   * Null until the first answer lands. Only ever the unfiltered breakdown - a
+   * selection is the page's own mask and the worker has never seen it.
+   */
+  byFaction: [number, number, number, number] | null;
   /** Bumped whenever the map needs to redraw: new tiles, or a new date. */
   version: number;
   /** The latest answered day's changes of hands, or null unless asked for. */
@@ -121,6 +128,14 @@ export function useZoneData(
   mode: ReadMode = "state",
   wantFlips = false,
   /**
+   * The first day of the change window, when the caller owns a date range.
+   *
+   * Null or absent leaves the window to `span`. Clamped to the record and to the
+   * day on screen, so a range whose start is ahead of the playhead measures
+   * nothing rather than measuring backwards.
+   */
+  from: number | null = null,
+  /**
    * Called from the worker's message handler as each answer lands.
    *
    * Exists so a caller can accumulate flips without doing it in an effect. An
@@ -141,6 +156,7 @@ export function useZoneData(
   const [day, setDay] = useState<number | null>(null);
   const [shown, setShown] = useState<number | null>(null);
   const [held, setHeld] = useState<number | null>(null);
+  const [byFaction, setByFaction] = useState<[number, number, number, number] | null>(null);
   const [flips, setFlips] = useState<DayFlips | null>(null);
   const [version, setVersion] = useState(0);
   const [progress, setProgress] = useState<LoadProgress>({
@@ -221,8 +237,17 @@ export function useZoneData(
   }, [series, meta]);
 
   // Null in standings, so the worker never scans for movement there.
+  //
+  // `from` overrides the span when the caller has a date range of its own: the
+  // timelapse and a flashpoint both run between two dates, and measuring their
+  // change over "all time" answers a question about the record rather than about
+  // the run on screen.
   const changeStart =
-    mode === "change" && day !== null && dayBounds ? windowStart(span, day, dayBounds.min) : null;
+    mode === "change" && day !== null && dayBounds
+      ? from !== null && from !== undefined
+        ? Math.max(dayBounds.min, Math.min(from, day))
+        : windowStart(span, day, dayBounds.min)
+      : null;
 
   // --- geometry, paint, lookups, ids, series: all racing ------------------
 
@@ -252,12 +277,15 @@ export function useZoneData(
         .then((s) => {
           if (cancelled || !s.rows.length) return;
           setSeries(s);
-          // Opens on the last *finished* day, not the newest one. The day still
-          // in progress holds only the hours elapsed so far, and a window
-          // ending on it undercounts for a reason that is nothing to do with
-          // the game. `Current` is the view that deliberately wants the newest
-          // date, and it asks for it.
-          setDay((current) => current ?? lastCompleteDay(m.day_epoch, s.rows[s.rows.length - 1][0]));
+          // Opens on the newest date, because the opening view is `Current` and a
+          // level is correct at any moment. It is also the only date `paint/` can
+          // answer, so the first frame costs no display stream at all - opening a
+          // day earlier puts an anchor plus a year, up to 3.16 MB, in front of the
+          // tiles the reader is watching arrive. A window is the sensitive case,
+          // and `changeView` clamps to `lastComplete` when one is chosen: a span
+          // ending on the day still in progress undercounts for a reason that has
+          // nothing to do with the game.
+          setDay((current) => current ?? s.rows[s.rows.length - 1][0]);
         })
         .catch(() => undefined);
 
@@ -342,6 +370,7 @@ export function useZoneData(
       settle();
       setShown(state.shown);
       setHeld(state.held);
+      setByFaction(state.byFaction);
       if (state.flips) {
         const answer = { day: state.day, ...state.flips };
         setFlips(answer);
@@ -454,6 +483,7 @@ export function useZoneData(
     changeStart,
     shown: changeStart === null ? null : shown,
     held,
+    byFaction,
     version,
     flips,
     pending,

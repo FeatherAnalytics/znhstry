@@ -5,7 +5,7 @@ import type { MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import {
   StatsPanel,
-  compactNumber,
+  exactNumber,
   type HoveredZone,
   type Totals,
 } from "@/components/StatsPanel";
@@ -17,6 +17,7 @@ import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 import { HistoryBar, type HistoryMode } from "@/components/HistoryBar";
 import {
   areaFilter,
+  inArea,
   radiusFilter,
   singleZoneFilter,
   viewportFilter,
@@ -39,21 +40,28 @@ import { useCompact } from "@/lib/useCompact";
 import { BottomSheet, type SheetStop } from "@/components/BottomSheet";
 import { chartSpanOf, readModeOf, windowPhrase, type ReadMode, type ViewKey } from "@/lib/windows";
 import { WindowPicker } from "@/components/WindowPicker";
+import { FlashpointImpact } from "@/components/FlashpointImpact";
+import { RegionBreakdown } from "@/components/RegionBreakdown";
 import { TimelapseBar, PERIODS, type Period } from "@/components/TimelapseBar";
 import { loadMaz, type MazData } from "@/lib/maz";
+import {
+  boardLayers,
+  framing,
+  loadImpact,
+  readFlashpoints,
+  FLASHPOINT_DAYS_PER_SECOND,
+  FLASHPOINT_BOARD_DAYS_PER_SECOND,
+  type Flashpoint,
+  type ImpactSeries,
+} from "@/lib/flashpoints";
+import { BASE, DATA_ROOT } from "@/lib/dataOrigin";
+import { EMPHASIS_ALL, toggleEmphasis } from "@/lib/emphasis";
 import {
   useFlipStream,
   useMazOverlays,
   PLAY_DAYS_PER_SECOND as LAPSE_DAYS_PER_SECOND,
   type Backdrop,
 } from "@/lib/timelapse";
-
-// The payloads live in object storage, not in the site bundle, because they
-// need response headers a static host cannot set: Content-Encoding: br, and a
-// Cache-Control that revalidates every shard against its ETag. Locally,
-// `node tools/serve-data.mjs` stands in for the bucket on port 3002.
-const DATA_ROOT = process.env.NEXT_PUBLIC_DATA_ORIGIN ?? "http://localhost:3002";
-const BASE = `${DATA_ROOT}/${process.env.NEXT_PUBLIC_DATA_SCOPE ?? "global"}`;
 
 const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
 
@@ -110,6 +118,8 @@ export default function Page() {
   const [rangeEnd, setRangeEnd] = useState<number | null>(null);
   const [activePeriod, setActivePeriod] = useState<string | null>("Whole record");
   const [maz, setMaz] = useState<MazData | null>(null);
+  const [flashpoint, setFlashpoint] = useState<Flashpoint | null>(null);
+  const [impact, setImpact] = useState<Map<string, ImpactSeries> | null>(null);
 
   // Daily reads what moved; the other two read levels and restrict what is
   // drawn afterwards.
@@ -121,6 +131,13 @@ export default function Page() {
 
   const [boundaries, setBoundaries] = useState<BoundaryLayer[]>([]);
   const [hovered, setHovered] = useState<HoveredZone | null>(null);
+  /**
+   * Which of the five categories the map lights, driven by the panel's rows.
+   *
+   * A highlight, not a selection: it never reaches `filter`, so every count in the
+   * panel keeps describing the same zones while the map answers "where are these".
+   */
+  const [emphasis, setEmphasis] = useState(EMPHASIS_ALL);
   const [historyMode, setHistoryMode] = useState<HistoryMode>("scope");
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
   const [area, setArea] = useState<Area | null>(null);
@@ -148,7 +165,17 @@ export default function Page() {
   const [zoneCount, setZoneCount] = useState<number | null>(null);
   const stream = useFlipStream(zoneCount, backdrop, rangeStart);
 
-  const data = useZoneData(BASE, span, readMode, timelapse, stream.absorb);
+  // In the timelapse the change window is the run's own range rather than a span
+  // from the picker: "net change over all time" is a fact about the record, and
+  // what the reader is watching is a period they chose.
+  const data = useZoneData(
+    BASE,
+    span,
+    readMode,
+    timelapse,
+    timelapse ? rangeStart : null,
+    stream.absorb,
+  );
   const { meta, geometry, display, lookups, zoneIds, series, day, dayBounds, changeStart, progress } =
     data;
   // Pulled out because the playback loops below own a timer each and must key
@@ -158,6 +185,22 @@ export default function Page() {
   useEffect(() => {
     if (meta) setZoneCount(meta.scope.zone_count);
   }, [meta]);
+
+  /** Curated flashpoints, straight out of the manifest. */
+  const flashpoints = useMemo(
+    () => (meta?.flashpoints ? readFlashpoints(meta.flashpoints) : []),
+    [meta],
+  );
+
+  // One 1 KB shard for every flashpoint's series, fetched when the mode opens
+  // rather than when one is picked - the whole payload is smaller than a single
+  // tile, so splitting it would cost a request to save nothing.
+  useEffect(() => {
+    if (!timelapse || impact || !meta?.flashpoints || flashpoints.length === 0) return;
+    loadImpact(BASE, meta.flashpoints, flashpoints)
+      .then(setImpact)
+      .catch(() => undefined);
+  }, [timelapse, impact, meta, flashpoints]);
 
   // MAZ is only ever needed by the timelapse, so it is not on the load path.
   useEffect(() => {
@@ -181,6 +224,33 @@ export default function Page() {
     return max > min ? { min, max } : { min, max: min + 1 };
   }, [outer, rangeStart, rangeEnd]);
 
+  const gotoFlashpoint = useCallback(
+    (next: Flashpoint | null) => {
+      setFlashpoint(next);
+      if (!next) return;
+      setActivePeriod(null);
+      // Opens on the standings, not on the day's events. A flashpoint frames a few
+      // hundred zones, and the Daily backdrop draws only the ones with an event on
+      // the date - which on the first frame of the baseline is often none of them,
+      // so the reader arrives at an empty rectangle. Playback then shows the fight
+      // arriving over a neighborhood that is visible from the start.
+      setBackdrop("all");
+      setRangeStart(next.runStart);
+      setRangeEnd(next.runEnd);
+      data.setDay(next.runStart);
+      // A flashpoint is a third kind of focus; two of them at once means neither.
+      setArea(null);
+      setHome(null);
+      setSelectedZone(null);
+      setHistoryMode("viewport");
+      // Bring the tile queue to the flashpoint, so whatever has not arrived yet
+      // arrives nearest-first around it.
+      data.setFocus(next.anchor.lat, next.anchor.lon);
+      setViewState((v) => ({ ...v, ...framing(next, zoomFor) }));
+    },
+    [data],
+  );
+
   const applyPeriod = useCallback(
     (period: Period) => {
       if (!meta) return;
@@ -189,6 +259,7 @@ export default function Page() {
       setRangeStart(toDay(period.start));
       setRangeEnd(toDay(period.end));
       setActivePeriod(period.label);
+      setFlashpoint(null);
       // A preset about something global opens on the globe. Leaving a region
       // selected would show a worldwide change through a keyhole.
       if (period.world) {
@@ -276,8 +347,7 @@ export default function Page() {
       let north = -90;
       for (let slot = 0; slot < geometry.count; slot++) {
         const idx = geometry.slotToIdx[slot];
-        if (geometry.country[idx] !== next.countryId) continue;
-        if (next.regionId !== null && geometry.region[idx] !== next.regionId) continue;
+        if (!inArea(geometry, idx, next.countryId, next.regionId)) continue;
         const lat = geometry.latitude[idx];
         const lon = geometry.longitude[idx];
         if (lon < west) west = lon;
@@ -314,7 +384,7 @@ export default function Page() {
    * world zoom is indistinguishable from them disappearing - you lost the whole
    * picture to look at one point of it.
    */
-  const mapFilter: ZoneFilter = useMemo(() => {
+  const selectionFilter: ZoneFilter = useMemo(() => {
     if (!geometry || !meta) return null;
     if (area) return areaFilter(geometry, area.countryId, area.regionId);
     if (home) return radiusFilter(geometry, home.lat, home.lon, NEAR_ME_KM);
@@ -324,13 +394,34 @@ export default function Page() {
   }, [geometry, meta, area, home, progress.zones]);
 
   /**
-   * What the readouts count. The same mask, plus the clicked zone when there is
+   * A flashpoint dims the map to its own radius, so the circle the impact figures
+   * describe is the circle the reader sees lit. It wins outright because
+   * `gotoFlashpoint` clears the other two - a flashpoint is a third kind of focus.
+   *
+   * It stops at the map. The panel's bot counts come from a precomputed series and
+   * the coarsest one available for a circle is a one-degree cell - 111 km against a
+   * 48 km ring - so scoping the panel here would put an approximation next to the
+   * exact figures the impact readout takes from the flashpoint's own payload.
+   */
+  const mapFilter: ZoneFilter = useMemo(() => {
+    if (!geometry || !flashpoint) return selectionFilter;
+    return radiusFilter(
+      geometry,
+      flashpoint.anchor.lat,
+      flashpoint.anchor.lon,
+      flashpoint.radiusKm,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geometry, flashpoint, selectionFilter, progress.zones]);
+
+  /**
+   * What the readouts count. The selection, plus the clicked zone when there is
    * one - most specific wins: zone > area > near-me.
    */
   const filter: ZoneFilter = useMemo(() => {
-    if (!geometry || selectedZone === null) return mapFilter;
+    if (!geometry || selectedZone === null) return selectionFilter;
     return singleZoneFilter(geometry.size, selectedZone);
-  }, [geometry, selectedZone, mapFilter]);
+  }, [geometry, selectedZone, selectionFilter]);
 
   // The timelapse's own layers. `mapFilter` rather than `filter`, so clicking a
   // zone to read about it does not empty the map of marks.
@@ -344,6 +435,26 @@ export default function Page() {
     focus: timelapse ? mapFilter : null,
     stream,
   });
+
+  /**
+   * The board zones' rings, drawn over the MAZ marks.
+   *
+   * After the recurrence rings in the layer list so they sit on top: a flashpoint
+   * names at most ten zones against a hundred amber ones, and it is the stronger
+   * claim on screen.
+   */
+  // The ring the map draws comes from the flashpoint's own radius, so the circle
+  // on screen and the circle the impact figures describe are one circle.
+  const flashpointLayers = useMemo(() => {
+    if (!flashpoint || !geometry || day === null) return [];
+    return boardLayers({
+      flashpoint,
+      geometry,
+      day,
+      zoom: viewState.zoom ?? 0,
+      nameOf: (idx) => geometry.names[idx] ?? null,
+    });
+  }, [flashpoint, geometry, day, viewState.zoom]);
 
   // --- the chart, which is also where every bot count comes from -----------
 
@@ -415,7 +526,12 @@ export default function Page() {
 
   const shown = useMemo(() => {
     if (!display || day === null) {
-      return { totals: { legion: 0, swarm: 0, faceless: 0, held: 0 }, count: null, pending: true };
+      return {
+        totals: { legion: 0, swarm: 0, faceless: 0, held: 0 },
+        zones: null,
+        count: null,
+        pending: true,
+      };
     }
 
     // Three different counts, and mixing them up is how the panel starts lying.
@@ -439,10 +555,20 @@ export default function Page() {
     let held: number;
     let drawn: number;
     let count = 0;
+    // [empty, legion, swarm, faceless] by leading faction, plus the part of empty
+    // that has never held a bot in the whole record.
+    let byFaction: [number, number, number, number] = [0, 0, 0, 0];
+    let neverPlayed = 0;
 
     if (!filter && data.held !== null) {
       held = data.held;
       drawn = data.shown ?? display.size;
+      byFaction = data.byFaction ?? [0, 0, 0, 0];
+      // A constant, not a count. A zone with no bot in the record is empty in every
+      // frame - which is why terrain is built when tiles land and never per date -
+      // so the manifest already knows this and the main thread walks nothing.
+      neverPlayed = meta ? meta.scope.zone_count - meta.scope.active_count : 0;
+      count = display.size;
     } else {
       // By slot, because that is the order `pk` and `visible` are held in. The
       // mask is the page's own and stays in idx order, so it is the one thing
@@ -453,10 +579,16 @@ export default function Page() {
       drawn = 0;
       const slots = geometry?.count ?? 0;
       const toIdx = geometry?.slotToIdx;
+      const everActive = geometry?.everActiveBySlot;
       for (let slot = 0; slot < slots; slot++) {
         if (filter && !filter[toIdx![slot]]) continue;
         count++;
-        if (display.pk[slot] !== 0) held++;
+        const packed = display.pk[slot];
+        byFaction[packed >> 6]++;
+        if (packed !== 0) held++;
+        // Slot-keyed like `pk`, so the two shades of grey the map already draws
+        // cost no extra indirection here.
+        else if (everActive && everActive[slot] === 0) neverPlayed++;
         if (display.visible[slot] !== 0) drawn++;
       }
     }
@@ -468,7 +600,12 @@ export default function Page() {
 
     const now = at(day);
     if (!now) {
-      return { totals: { legion: 0, swarm: 0, faceless: 0, held }, count: filter ? count : null, pending: true };
+      return {
+        totals: { legion: 0, swarm: 0, faceless: 0, held },
+        zones: null,
+        count: filter ? count : null,
+        pending: true,
+      };
     }
 
     if (changing) {
@@ -483,6 +620,10 @@ export default function Page() {
           // down to nothing moved as much as one that was taken.
           held: drawn,
         } as Totals,
+        // A per-faction zone count is a level and there is no honest delta for it:
+        // "which faction gained most zones" is the very thing the map refuses to
+        // colour by, because it makes one vocabulary mean two things.
+        zones: null,
         count: filter ? count : null,
         pending: false,
       };
@@ -490,6 +631,15 @@ export default function Page() {
 
     return {
       totals: { ...now, held } as Totals,
+      zones: {
+        legion: byFaction[1],
+        swarm: byFaction[2],
+        faceless: byFaction[3],
+        neverPlayed,
+        // Held something once, holds nothing now. Derived so the four categories
+        // sum to `count` by construction rather than by a second count.
+        emptied: Math.max(0, count - held - neverPlayed),
+      },
       count: filter ? count : null,
       pending: false,
     };
@@ -509,6 +659,31 @@ export default function Page() {
       held: 0,
     };
   }, [history, day, changing]);
+
+  /**
+   * Net bots across the run so far, for the timelapse.
+   *
+   * The panel's own figures follow the backdrop - standings on two of the three -
+   * so the movement since the period opened would otherwise not be on screen at
+   * all, which is the one number a run is about. Read off the same series the
+   * panel and the chart use, so it cannot disagree with either.
+   */
+  const sinceRange: { label: string; value: number } | null = useMemo(() => {
+    if (!timelapse || !history || day === null || rangeStart === null || changing) return null;
+    const from = Math.max(0, Math.min(rangeStart, day));
+    if (from >= day) return null;
+    const net = (key: "legion" | "swarm" | "faceless") => history[key][day] - history[key][from];
+    return {
+      label: `Since ${dayToDate(meta!.day_epoch, from).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      })}`,
+      value: net("legion") + net("swarm") + net("faceless"),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timelapse, history, day, rangeStart, changing, meta]);
 
   // --- hover: the map's bucket now, the record a moment later ---------------
 
@@ -634,6 +809,10 @@ export default function Page() {
    */
   const dayRef = useRef<number | null>(null);
   dayRef.current = day;
+  // Read inside the loop rather than keyed on, so picking a flashpoint mid-run
+  // changes the pace without tearing down the timer and resetting its debt.
+  const flashpointRef = useRef<Flashpoint | null>(null);
+  flashpointRef.current = flashpoint;
 
   useEffect(() => {
     if (!playing || !timelapse || !lapseBounds) return;
@@ -643,7 +822,28 @@ export default function Page() {
 
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
-      debt += ((now - last) / 1000) * LAPSE_DAYS_PER_SECOND;
+      // A flashpoint is a few days in one neighborhood, so the run is short
+      // enough to afford being slow and being slow is the entire point: at the
+      // record-crossing rate a Marquette run ends in under two seconds and the
+      // day the fight happened is a single frame.
+      const chosen = flashpointRef.current;
+      const current0 = dayRef.current;
+      // Slower still while the playhead is standing on the flashpoint's own days.
+      // The whole run exists to show one or three days, and at the run's ordinary
+      // pace they go by in the same fraction of a second as the fifty-six days of
+      // context around them.
+      const onTheDay =
+        chosen !== null &&
+        current0 !== null &&
+        current0 >= chosen.boardStart &&
+        current0 <= chosen.boardEnd;
+      debt +=
+        ((now - last) / 1000) *
+        (onTheDay
+          ? FLASHPOINT_BOARD_DAYS_PER_SECOND
+          : chosen
+            ? FLASHPOINT_DAYS_PER_SECOND
+            : LAPSE_DAYS_PER_SECOND);
       last = now;
       if (debt > 1) debt = 1;
       if (debt < 1) return;
@@ -681,6 +881,14 @@ export default function Page() {
   const changeView = useCallback(
     (next: ViewKey) => {
       setView(next);
+      // A flashpoint belongs to the timelapse: it owns a range, a camera and a
+      // dimming mask, none of which the windows have a way to express. Leaving it
+      // set behind a window keeps the map framed on one neighborhood and the panel
+      // reading a viewport aggregate under a heading that says Global.
+      if (next !== "timelapse") {
+        setFlashpoint(null);
+        setHistoryMode("scope");
+      }
       if (!dayBounds) return;
       if (next === "current") data.setDay(dayBounds.max);
       else data.setDay((d) => (d === null || d > dayBounds.lastComplete ? dayBounds.lastComplete : d));
@@ -751,6 +959,9 @@ export default function Page() {
       onTogglePlay={() => setPlaying((p) => !p)}
       marks={overlays.marks}
       flips={overlays.flips}
+      flashpoints={flashpoints}
+      activeFlashpoint={flashpoint?.id ?? null}
+      onFlashpoint={gotoFlashpoint}
       claimed={stream.claimed}
     />
   ) : null;
@@ -762,21 +973,67 @@ export default function Page() {
     setPlaying((p) => !p);
   };
 
+  /* A country selection asks where inside it anything is happening, which the
+     panel's own totals cannot say. Only for a whole country: picking one region
+     already answers it.
+
+     Absent while the panel is reporting movement, for the same reason the zone
+     column is: every figure in these rows is a level, and sitting them under a
+     heading that says "net change" makes them read as deltas. */
+  const regionBreakdown =
+    ready && !changing && area && area.regionId === null && geometry && display && lookups ? (
+      <RegionBreakdown
+        geometry={geometry}
+        display={display}
+        lookups={lookups}
+        countryId={area.countryId}
+        countryLabel={area.label}
+        version={data.version}
+      />
+    ) : null;
+
   const statsPanel = ready ? (
     <StatsPanel
       date={dayToDate(meta.day_epoch, day)}
       totals={shown.totals}
+      zones={shown.zones}
       previous={previous}
       zoneCount={shown.count ?? meta.scope.zone_count}
       activeCount={meta.scope.active_count}
       scopeLabel={focusLabel ?? meta.scope.label}
       hovered={hovered}
       stateReady={!shown.pending}
-      changeLabel={changing ? `Net change ${windowPhrase(span)}` : null}
+      changeLabel={
+        changing
+          ? // Named by its own first day in the timelapse, where the window is the
+            // run's range: "over all time" would describe the record instead of
+            // the period the reader picked.
+            changeStart !== null && timelapse
+              ? `Net change since ${dayToDate(meta.day_epoch, changeStart).toLocaleDateString(
+                  "en-GB",
+                  { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" },
+                )}`
+              : `Net change ${windowPhrase(span)}`
+          : null
+      }
       pending={shown.pending}
       compact={compact}
-    />
+      since={sinceRange}
+      emphasis={emphasis}
+      onEmphasis={(key) => setEmphasis((current) => toggleEmphasis(current, key))}
+    >
+      {regionBreakdown}
+    </StatsPanel>
   ) : null;
+
+  const impactPanel =
+    timelapse && flashpoint ? (
+      <FlashpointImpact
+        flashpoint={flashpoint}
+        series={impact?.get(flashpoint.id) ?? null}
+        compact={compact}
+      />
+    ) : null;
 
   const historyBar = ready ? (
     <HistoryBar
@@ -858,14 +1115,13 @@ export default function Page() {
           whiteSpace: "nowrap",
         }}
       >
+        {/* One figure, exact. Two of them at 390 px truncate mid-number, and half a
+            count is worse than a rounded one - the panel a tap away has both. */}
         {changing
-          ? `${compactNumber(shown.totals.held)} moved`
-          : `${compactNumber(shown.totals.held)} occupied`}
-        {" · "}
-        {compactNumber(
-          shown.totals.legion + shown.totals.swarm + shown.totals.faceless,
-        )}{" "}
-        bots
+          ? `${exactNumber(shown.totals.held)} moved`
+          : `${exactNumber(
+              shown.totals.legion + shown.totals.swarm + shown.totals.faceless,
+            )} bots`}
       </span>
     </div>
   ) : null;
@@ -944,10 +1200,21 @@ export default function Page() {
             viewState={viewState}
             filter={mapFilter}
             draw={emptyOnly ? "empty" : "all"}
+            emphasis={emphasis}
             only={timelapse && backdrop === "cumulative" ? stream.mask : null}
             onlyVersion={stream.version}
-            overlays={timelapse ? overlays.layers : undefined}
-            ring={home ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM } : null}
+            overlays={timelapse ? [...overlays.layers, ...flashpointLayers] : undefined}
+            ring={
+              flashpoint
+                ? {
+                    lat: flashpoint.anchor.lat,
+                    lon: flashpoint.anchor.lon,
+                    radiusKm: flashpoint.radiusKm,
+                  }
+                : home
+                  ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM }
+                  : null
+            }
             onViewStateChange={setViewState}
             onHover={handleHover}
             onClickZone={(idx) => {
@@ -973,7 +1240,10 @@ export default function Page() {
 
         {compact && ready && (
           <BottomSheet stop={sheetStop} onStop={setSheetStop} summary={sheetSummary}>
-            {statsPanel}
+            {/* Inside the sheet on a narrow screen, where the chart it stands in
+                for also lives. In the page's own flow it would be laid out under a
+                sheet that is fixed over the map, and the two would collide. */}
+            {timelapse && flashpoint ? impactPanel : statsPanel}
             {sheetStop === "full" && historyBar}
           </BottomSheet>
         )}
@@ -982,6 +1252,9 @@ export default function Page() {
       {/* The timelapse replaces the chart rather than sitting beside it: it runs
           on a date range, and a chart drawn for a window would be describing a
           different span from the one playing. */}
+      {/* The impact readout sits above the bar, where the chart would be: it
+          describes the same span the bar is playing. */}
+      {!compact && impactPanel}
       {timelapse ? timelapseBar : !compact && historyBar}
     </main>
   );

@@ -100,6 +100,37 @@ WEB_DATA = ROOT / "dist" / "data"
 
 EARTH_RADIUS_KM = 6371.0088
 
+# --- Hydrate: the published export, read back --------------------------------
+#
+# The export is public - it is exactly what the browser downloads - so a clone can
+# have the whole event stream without an R2 key. The bucket's public URL is a
+# different thing from R2_ENDPOINT, which is the credentialed write API.
+#
+# Hardcoded rather than required, because the point of the step is that someone who
+# has just cloned the repo can run it with no configuration at all. `.env` still
+# wins if it names an origin, which is what makes a custom domain take over.
+
+PUBLIC_DATA_ORIGIN = (
+    os.environ.get("NEXT_PUBLIC_DATA_ORIGIN")
+    or os.environ.get("NEXT_PUBLIC_R2_URL")
+    or "https://pub-110a5c98bf1e495fa02397b90fd12708.r2.dev"
+)
+
+# Fetched payloads land here and are reused. ~1,480 files over an r2.dev URL with no
+# CDN in front of it, so a run that dies part way must not start over - and a cache
+# also means the decode can be re-run against bytes already on disk.
+PUBLIC_CACHE = DATA / "public"
+
+# Its own database. The dbt profile owns `znhstry.duckdb`, and a `dbt build` drops
+# and recreates everything it finds there.
+PUBLIC_DUCKDB_PATH = DATA / "znhstry_public.duckdb"
+
+PUBLIC_TIMEOUT = 120.0
+
+# r2.dev is rate-limited and documented as unsuitable for production traffic, which
+# is the same constraint the viewer's tile grid is sized around. Modest on purpose.
+PUBLIC_WORKERS = 8
+
 
 @dataclass(frozen=True)
 class Scope:
@@ -143,3 +174,42 @@ DAY_EPOCH = date(2010, 1, 1)
 # Cheap to do: 40 events across 40 zones, only 7 of which have no later event
 # and therefore stop counting as ever-played.
 RECORD_START = date(2012, 7, 30)
+
+# How far a nanomissile reaches, which is the outer bound on "who could have
+# fought over this zone" and therefore on how far a fight can spread.
+#
+# The range was increased mid-record and the cutover has to be respected, or the
+# early years get a radius the players did not have and any distance-binned
+# statistic fills its outer bins with unrelated activity.
+#
+# The changelog agrees with the date independently: first sightings step from
+# ~22k a month through April 2017 to ~34k from May and hold, which is what a
+# range increase looks like from the outside. That match is strong enough to
+# make this a constant rather than a guess.
+#
+# Miles, because that is the unit the game itself talks in. `NEAR_ME_KM` in
+# `web/app/page.tsx` is the same 1,000-mile figure - the viewer's "near me" ring
+# and "how far did the fight spread" are the same circle.
+MISSILE_RANGE_INCREASED = date(2017, 4, 26)
+MISSILE_RANGE_KM_BEFORE = 643.7376  # 400 miles
+MISSILE_RANGE_KM_AFTER = 1609.344  # 1,000 miles
+
+# Thirty miles: the scale at which a group of zones is one neighborhood fight
+# rather than a region's population showing through.
+#
+# One constant with two jobs, deliberately. It is the link cutoff for clustering
+# a day's Most Active Zones by distance, and it is the margin a cluster is framed
+# at on a map - so the circle the statistic describes and the circle the reader
+# sees are the same circle. It is also the "zones within thirty miles" radius the
+# neighborhood questions ask about.
+#
+# Chosen against the record rather than for roundness: the tightest known cluster
+# is five zones inside 11 km, the widest single-neighborhood one about 19 km end
+# to end, and the California days that should *not* collapse into one place are
+# 160 km apart at their closest. 48 km sits clear of both edges.
+NEIGHBORHOOD_KM = 48.28032  # 30 miles
+
+
+def missile_range_km(on: date) -> float:
+    """The nanomissile range in force on `on`."""
+    return MISSILE_RANGE_KM_AFTER if on >= MISSILE_RANGE_INCREASED else MISSILE_RANGE_KM_BEFORE

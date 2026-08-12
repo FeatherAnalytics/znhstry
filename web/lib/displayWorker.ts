@@ -316,8 +316,18 @@ async function show(message: ShowMessage): Promise<void> {
   if (toIdx) for (let s = 0; s < slotCount; s++) pk[s] = state[toIdx[s]];
 
   // Order-agnostic, and over bytes still in cache from the gather above.
+  //
+  // `held` keeps its own test rather than falling out of `zoneCount - byFaction[0]`.
+  // The two are equal only while a zero byte and a zero faction describe the same
+  // zones - which holds, because the export's `_leader` returns uncaptured exactly
+  // when the total is zero - but that is an invariant of the packing two languages
+  // away, and trading an explicit test for a dependency on it saves one decrement.
+  const byFaction: [number, number, number, number] = [0, 0, 0, 0];
   let held = 0;
-  for (let i = 0; i < zoneCount; i++) if (state[i] !== 0) held++;
+  for (let i = 0; i < zoneCount; i++) {
+    byFaction[state[i] >> 6]++;
+    if (state[i] !== 0) held++;
+  }
 
   const shown =
     windowStart === null
@@ -332,7 +342,7 @@ async function show(message: ShowMessage): Promise<void> {
       }
     : null;
 
-  post({ type: "state", token, day, shown, held, pk, visible, flips }, [
+  post({ type: "state", token, day, shown, held, byFaction, pk, visible, flips }, [
     pk.buffer,
     visible.buffer,
     ...(flips ? [flips.idx.buffer, flips.from.buffer, flips.to.buffer] : []),

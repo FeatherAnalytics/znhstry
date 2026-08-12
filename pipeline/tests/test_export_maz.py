@@ -77,9 +77,10 @@ def test_report_grain_is_one_row_per_zone_day(con) -> None:
 
 
 def test_packed_columns_cannot_overflow(con) -> None:
-    """`players` is a uint16 and `day` a uint16 offset from DAY_EPOCH."""
-    max_players, min_day, max_day = con.execute(f"""
-        select max(b.total_active_players), min({DAY}), max({DAY})
+    """`players` is a uint16, `report` a uint32, `day` a uint16 from DAY_EPOCH."""
+    max_players, min_day, max_day, min_report, max_report = con.execute(f"""
+        select max(b.total_active_players), min({DAY}), max({DAY}),
+               min(b.battle_report_number), max(b.battle_report_number)
         from fct_zone_battles b join scope s on s.zone_id = b.zone_id
         where b.battle_date >= date '{config.RECORD_START}'
     """).fetchone()
@@ -88,3 +89,49 @@ def test_packed_columns_cannot_overflow(con) -> None:
     # A day before the epoch would underflow into a plausible-looking date.
     assert min_day >= 0
     assert max_day < 2**16
+    # Report numbers only ever climb, so this is the column that will reach its
+    # ceiling first. ~131k today against 4.29 billion, but the check is free and
+    # a silent wrap would send readers to somebody else's battle.
+    assert min_report >= 0
+    assert max_report < 2**32
+
+
+def test_faction_launches_fit_their_column(con) -> None:
+    """The three faction splits share `launches`' int32, and are never negative."""
+    row = con.execute(f"""
+        select max(greatest(b.legion_total_launches,
+                            b.swarm_total_launches,
+                            b.faceless_total_launches)),
+               min(least(b.legion_total_launches,
+                         b.swarm_total_launches,
+                         b.faceless_total_launches))
+        from fct_zone_battles b join scope s on s.zone_id = b.zone_id
+        where b.battle_date >= date '{config.RECORD_START}'
+    """).fetchone()
+    assert row[1] >= 0
+    assert row[0] < 2**31
+
+
+def test_the_faction_split_shortfall_stays_inside_2019(con) -> None:
+    """The three faction launch columns do not sum to `total_launches` everywhere.
+
+    861 reports disagree across the whole source and every one falls between
+    2019-07-01 and 2019-09-11, always with the total higher. The faction *player*
+    columns fail on the same rows, so it is the whole per-faction block arriving
+    partial - collection rather than play, documented rather than repaired. See
+    `stg_battlestats` for the explanations that were measured and ruled out.
+
+    This asserts the *containment*, not the count. If a shortfall ever appears
+    outside that window, a faction-share chart elsewhere in the record has
+    silently started reading an incomplete denominator.
+    """
+    outside = con.execute(f"""
+        select count(*)
+        from fct_zone_battles b join scope s on s.zone_id = b.zone_id
+        where b.battle_date >= date '{config.RECORD_START}'
+          and b.total_launches <> b.legion_total_launches
+                                + b.swarm_total_launches
+                                + b.faceless_total_launches
+          and b.battle_date not between date '2019-07-01' and date '2019-09-11'
+    """).fetchone()[0]
+    assert outside == 0

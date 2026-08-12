@@ -1,13 +1,18 @@
 version: 2
 
 unit_tests:
-  - name: region_label_dropped_when_country_disagrees
+  - name: region_label_follows_region_id_even_across_a_border
     description: >
-      The country-wins rule, stated as an example rather than as a join condition.
-      Zone 1's region agrees with its country and keeps its label. Zone 2's region
-      belongs to a different country -- the real shape of the 447 zones filed under
-      a region on the wrong continent -- and must come out with a country and no
-      region, never with a contradictory pair.
+      The game's own grouping, stated as an example rather than as a join condition.
+      Zone 1's region agrees with its country. Zone 2's region belongs to a different
+      country -- the real shape of the 447 zones filed under a region on the wrong
+      continent -- and keeps that label anyway, because QONQR's site counts a region
+      by RegionId and reports 1,890 zones in West Pomeranian Voivodeship including the
+      155 sitting in the Solomon Islands.
+
+      A contradictory pair on screen is upstream's, and printing it is the price of a
+      total a player can reconcile against their own screen. Dropping the label puts
+      every affected region below the game's figure with nothing to explain the gap.
     model: dim_zone
     given:
       - input: ref('stg_zones')
@@ -31,4 +36,4 @@ unit_tests:
     expect:
       rows:
         - {zone_id: 1, country_name: "Realland", region_name: "Right Place"}
-        - {zone_id: 2, country_name: "Realland", region_name: null}
+        - {zone_id: 2, country_name: "Realland", region_name: "Wrong Continent"}

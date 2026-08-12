@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ import duckdb
 import numpy as np
 import polars as pl
 
-from . import boundaries, config
+from . import boundaries, config, distance
 
 log = logging.getLogger(__name__)
 
@@ -87,26 +86,6 @@ TILE_DEGREES = 16
 COORD_SCALE = 10_000
 
 
-# The bbox is only a prefilter - haversine decides membership - so it must
-# never be tighter than the true circle. 111.32 km/degree is a mid-latitude
-# average, and a degree is shorter than that near the equator, which made the
-# box narrower than 1000 miles and clipped 11 edge zones before haversine saw
-# them. The margin makes the prefilter unambiguously generous.
-_BBOX_MARGIN = 1.05
-
-
-def _bbox(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
-    """Indexable prefilter around the scope circle. Deliberately over-wide."""
-    lat_delta = _BBOX_MARGIN * radius_km / 111.32
-    lon_delta = _BBOX_MARGIN * radius_km / (111.32 * math.cos(math.radians(lat)))
-    return (
-        max(lat - lat_delta, -90.0),
-        min(lat + lat_delta, 90.0),
-        lon - lon_delta,
-        lon + lon_delta,
-    )
-
-
 def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path) -> int:
     """Materialise the zones in scope with a dense index.
 
@@ -117,16 +96,7 @@ def _create_scope(con: duckdb.DuckDBPyConnection, scope: config.Scope, out: Path
     filters = ["latitude is not null"]
 
     if scope.radius_km is not None:
-        lat_min, lat_max, lon_min, lon_max = _bbox(scope.lat, scope.lon, scope.radius_km)
-        filters.append(f"latitude between {lat_min} and {lat_max}")
-        filters.append(f"longitude between {lon_min} and {lon_max}")
-        filters.append(f"""
-            {config.EARTH_RADIUS_KM} * 2 * asin(sqrt(
-                pow(sin(radians(latitude - {scope.lat}) / 2), 2)
-                + cos(radians({scope.lat})) * cos(radians(latitude))
-                  * pow(sin(radians(longitude - {scope.lon}) / 2), 2)
-            )) <= {scope.radius_km}
-        """)
+        filters.append(distance.circle_sql(scope.lat, scope.lon, scope.radius_km))
 
     if scope.active_only:
         filters.append("zone_id in (select zone_id from zone_events)")
@@ -359,9 +329,11 @@ def _export_lookups(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]
             "countries": countries,  # id -> [iso_code, name]
             "regions": regions,  # id -> [name, country_id]
             "note": (
-                "A zone's country_id is authoritative. Where regions[region_id][1] "
-                "disagrees with it the region is wrong, not the country -- verified "
-                "against coordinates. Suppress the region label in that case."
+                "regions[region_id][1] is the region's own country. It disagrees with "
+                "the zone's country_id for 447 zones, and the game files those under "
+                "the region regardless -- its site counts regions by region_id and "
+                "countries by country_id, so a region is not a subset of its country. "
+                "Group the same way or your totals will not match a player's screen."
             ),
         },
     )
@@ -452,6 +424,122 @@ def _export_maz(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     return entry
 
 
+def _export_flashpoints(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    """The curated flashpoints, and what each one did to the bots around it.
+
+    **The definitions travel in `meta.json` and the series in one shard.** Ten
+    flashpoints are four kilobytes of JSON against a manifest already at 124 KB, and
+    the manifest is fetched by every visit anyway - so folding them in costs 3% of a
+    file already paid for and saves a request that would only ever follow it. The
+    series are ~10 KB for all of them together, which is not worth ten objects and
+    ten possible requests: requests are the binding constraint on an `r2.dev` URL
+    with no CDN, the same reason the tile grid is 16 degrees.
+
+    One shard also means there is no tree to clear. It is overwritten in place every
+    run and cannot strand an orphan the way a per-flashpoint layout could.
+
+    **`flashpoint` is a position, not an id.** The column is a uint8 index into the
+    manifest's `entries` list, so the client filters rows without carrying ten
+    strings per row. Both are ordered by `run_start`, and the two orders have to
+    agree - which is why they are built from one query rather than two.
+
+    **`changelog_covered` decides whether the viewer draws anything at all.** Six of
+    the ten flashpoints predate usable coverage: the record before late 2018 is a
+    thin stream of first sightings and 2019 is the collection gap, so the battle
+    reports say the fight happened while the event stream has no rows for it. A
+    chart over that is a flat line at zero, which reads as a calm neighborhood and is
+    the opposite of the truth.
+    """
+    cursor = con.execute("""
+        select f.flashpoint_id, f.label, f.blurb,
+               f.anchor_latitude, f.anchor_longitude,
+               f.board_start, f.board_end, f.run_start, f.run_end,
+               f.radius_km, f.zones_in_circle, f.changelog_covered
+        from fct_flashpoint f
+        order by f.run_start, f.flashpoint_id
+    """)
+    names = [column[0] for column in cursor.description]
+    manifest = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+    if not manifest:
+        # Reachable without a seed, or when every anchor fails to resolve - which
+        # `assert_flashpoint_anchors_all_resolve` exists to make legible, but a
+        # `dbt run` without a `dbt test` gets here first. Stopping with a line in the
+        # log beats an empty `values ()` and an opaque parser error mid-export.
+        log.info("  flashpoints: none seeded")
+        return {"path": None, "rows": 0, "columns": [], "bytes": 0, "entries": []}
+
+    epoch = f"date '{config.DAY_EPOCH}'"
+    order = {row["flashpoint_id"]: position for position, row in enumerate(manifest)}
+    codes = ", ".join(f"('{fid}', {position})" for fid, position in order.items())
+
+    entry = _write_columnar(
+        out / "flashpoints.bin.br",
+        f"""
+        with code(flashpoint_id, flashpoint) as (values {codes})
+        select c.flashpoint,
+               cast(date_diff('day', {epoch}, i.activity_date) as integer) as day,
+               cast(i.on_the_board as integer) as on_the_board,
+               i.net_delta,
+               i.zones_moving
+        from fct_flashpoint_impact i
+        join code c on c.flashpoint_id = i.flashpoint_id
+        order by c.flashpoint, on_the_board, day
+        """,
+        {
+            "flashpoint": "uint8",
+            "day": DAY,
+            "on_the_board": "uint8",
+            "net_delta": COUNT,
+            "zones_moving": "uint16",
+        },
+        con,
+    )
+
+    # Board membership is resolved to idx here rather than shipped as zone_id: the
+    # viewer holds every zone's position at its idx already, and translating a
+    # zone_id would mean scanning all 2,682,442 entries of `zone_ids`.
+    board = con.execute("""
+        select z.flashpoint_id, s.idx
+        from fct_flashpoint_zone z
+        join scope s on s.zone_id = z.zone_id
+        where z.on_the_board
+        order by 1, 2
+    """).fetchall()
+    board_idx: dict[str, list[int]] = {fid: [] for fid in order}
+    for flashpoint_id, idx in board:
+        board_idx[flashpoint_id].append(int(idx))
+
+    def day_of(value: Any) -> int:
+        return (value - config.DAY_EPOCH).days
+
+    entry["entries"] = [
+        {
+            "id": row["flashpoint_id"],
+            "label": row["label"],
+            "blurb": row["blurb"],
+            "lat": float(row["anchor_latitude"]),
+            "lon": float(row["anchor_longitude"]),
+            "board": [day_of(row["board_start"]), day_of(row["board_end"])],
+            "run": [day_of(row["run_start"]), day_of(row["run_end"])],
+            "radius_km": float(row["radius_km"]),
+            "board_idx": board_idx[row["flashpoint_id"]],
+            "zones_in_circle": int(row["zones_in_circle"]),
+            "changelog_covered": bool(row["changelog_covered"]),
+        }
+        for row in manifest
+    ]
+    covered = sum(1 for row in manifest if row["changelog_covered"])
+    log.info(
+        "  flashpoints: %d (%d with changelog coverage), %s rows, %s KB",
+        len(manifest),
+        covered,
+        f"{entry['rows']:,}",
+        entry["bytes"] // 1024,
+    )
+    return entry
+
+
 def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     """What each MAZ report measured, **row-aligned with `maz.bin.br`**.
 
@@ -467,17 +555,36 @@ def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, An
     carry a packed string of roughly 924,728 player rows that ingest does not
     unpack yet.
 
+    `report` is QONQR's own battle report number, and it is here for one reason:
+    it is the only thing that can point at the page a row came from,
+    `portal.qonqr.com/Home/BattleStatistics/<report>`. Everything else in this
+    payload is a measurement, so it is the one column that is a *reference*
+    rather than a fact, and it cannot be derived from anything the client holds.
+    Not delta-encoded: reports are numbered in the order QONQR wrote them and
+    these rows are ordered `(day, idx)`, so the sequence climbs across days and
+    scrambles within one.
+
+    The three faction launch columns are a genuine split of `launches` and not
+    the per-weapon breakdown. Read `stg_battlestats` before using them - the sum
+    is short of the total for a ten-week window in 2019, which is collection
+    rather than play, and a share taken across it will read as a faction going
+    quiet.
+
     The same `group by` and `order by` as `_export_maz`, which is what keeps the
     rows aligned. Change one and you must change both.
     """
     entry = _write_columnar(
         out / "maz_stats.bin.br",
         f"""
-        select max(b.total_active_players) as players,
-               max(b.total_launches)       as launches,
-               max(b.bots_launched)        as bots_launched,
-               max(b.bots_killed)          as bots_killed,
-               max(b.bots_lost)            as bots_lost
+        select max(b.battle_report_number)   as report,
+               max(b.total_active_players)   as players,
+               max(b.total_launches)         as launches,
+               max(b.legion_total_launches)  as legion_launches,
+               max(b.swarm_total_launches)   as swarm_launches,
+               max(b.faceless_total_launches) as faceless_launches,
+               max(b.bots_launched)          as bots_launched,
+               max(b.bots_killed)            as bots_killed,
+               max(b.bots_lost)              as bots_lost
         from fct_zone_battles b
         join scope s on s.zone_id = b.zone_id
         where b.battle_date >= date '{config.RECORD_START}'
@@ -486,8 +593,12 @@ def _export_maz_stats(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, An
                  s.idx
         """,
         {
+            "report": IDX,
             "players": "uint16",
             "launches": COUNT,
+            "legion_launches": COUNT,
+            "swarm_launches": COUNT,
+            "faceless_launches": COUNT,
             "bots_launched": COUNT,
             "bots_killed": COUNT,
             "bots_lost": COUNT,
@@ -707,17 +818,19 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         paint_payload, paint_spec, _ = _pack({"pk": display_pk[member]}, paint_columns)
         paint_bytes = _write(out / "paint" / f"{name}.bin.br", paint_payload)
 
-        tiles.append([
-            name,
-            len(member),
-            int(played[member].sum()),
-            tile_bytes,
-            paint_bytes,
-            # South-west corner in degrees. The client derives the rest from
-            # tile_degrees rather than carrying four floats per tile.
-            row * TILE_DEGREES - 90,
-            col * TILE_DEGREES - 180,
-        ])
+        tiles.append(
+            [
+                name,
+                len(member),
+                int(played[member].sum()),
+                tile_bytes,
+                paint_bytes,
+                # South-west corner in degrees. The client derives the rest from
+                # tile_degrees rather than carrying four floats per tile.
+                row * TILE_DEGREES - 90,
+                col * TILE_DEGREES - 180,
+            ]
+        )
 
     first_paint = sum(t[3] + t[4] for t in tiles)
     names_manifest = _export_names(idx, names, out)
@@ -1009,13 +1122,15 @@ def _export_zone_history(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str,
             frozenset({"idx"}),
         )
         path = out / "zone_history" / f"{int(block):04d}.bin.br"
-        entries.append({
-            "path": path.name,
-            "rows": count,
-            "columns": spec,
-            "bytes": _write(path, payload, BROTLI_QUALITY_BULK),
-            "block": int(block),
-        })
+        entries.append(
+            {
+                "path": path.name,
+                "rows": count,
+                "columns": spec,
+                "bytes": _write(path, payload, BROTLI_QUALITY_BULK),
+                "block": int(block),
+            }
+        )
 
     total = sum(e["bytes"] for e in entries)
     log.info(
@@ -1142,8 +1257,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     """
     day = f"cast(date_diff('day', date '{config.DAY_EPOCH}', e.activity_date) as integer)"
     moved = (
-        "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 "
-        "or sum(e.faceless_delta) != 0"
+        "having sum(e.legion_delta) != 0 or sum(e.swarm_delta) != 0 or sum(e.faceless_delta) != 0"
     )
     columns = {
         "area_id": "uint16",
@@ -1168,12 +1282,16 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         con,
     )
 
-    # A region only counts zones whose country agrees with it. For 447 zones the
-    # region's own country contradicts the zone's, and the coordinates side with
-    # the country every time - 155 zones filed under a Polish voivodeship sit in
-    # the Solomon Islands. The join drops those rather than charting a region
-    # that reaches across an ocean, which is the same rule the map's area filter
-    # applies.
+    # Grouped on region_id alone, which is how the game reads it: QONQR's own site
+    # reports 1,890 zones in West Pomeranian Voivodeship and 198 in Northwest
+    # Territories, both of which are the region_id counts. Country totals there come
+    # from country_id - Poland is 44,080 either way - so the two fields are read
+    # independently and a region is not a subset of its country.
+    #
+    # 447 zones make that visible, 155 of them filed under a Polish voivodeship while
+    # sitting in the Solomon Islands. Charting them under Poland is what the game does,
+    # and a series a player cannot reconcile against their own screen is worth less
+    # than one that reaches across an ocean.
     region = _write_columnar(
         out / "series" / "region.bin.br",
         f"""
@@ -1182,7 +1300,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
                sum(e.faceless_delta) as faceless
         from zone_events e
         join scope s on s.zone_id = e.zone_id
-        join stg_regions r on r.region_id = e.region_id and r.country_id = e.country_id
+        join stg_regions r on r.region_id = e.region_id
         group by 1, 2 {moved}
         order by 1, 2
         """,
@@ -1225,11 +1343,13 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         payload, cell_spec, rows = _pack(
             {n: cells[n][start:end] for n in cell_columns}, cell_columns
         )
-        cell_shards.append([
-            name,
-            rows,
-            _write(out / "series" / "cells" / f"{name}.bin.br", payload, BROTLI_QUALITY_BULK),
-        ])
+        cell_shards.append(
+            [
+                name,
+                rows,
+                _write(out / "series" / "cells" / f"{name}.bin.br", payload, BROTLI_QUALITY_BULK),
+            ]
+        )
 
     cell_bytes = sum(shard[2] for shard in cell_shards)
     log.info(
@@ -1288,8 +1408,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         log.info("scope %s: %s zones", scope.name, f"{zone_count:,}")
 
         active_count = con.execute(
-            "select count(*) from scope s "
-            "where s.zone_id in (select zone_id from zone_events)"
+            "select count(*) from scope s where s.zone_id in (select zone_id from zone_events)"
         ).fetchone()[0]
 
         _clear_shards(out)
@@ -1302,6 +1421,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         series = _export_series(con, out)
         area_series = _export_area_series(con, out)
         maz = _export_maz(con, out)
+        flashpoints = _export_flashpoints(con, out)
 
         span = con.execute(
             "select min(activity_date), max(activity_date) from zone_events e "
@@ -1357,6 +1477,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             "display": display,
             "zone_history": zone_history,
             "maz": maz,
+            "flashpoints": flashpoints,
             "series": series,
             "area_series": area_series,
             "encoding": {
@@ -1382,9 +1503,8 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         }
         (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-        scrub = (
-            max(e["bytes"] for e in display["shards"])
-            + max((e["bytes"] for e in display["anchors"]), default=0)
+        scrub = max(e["bytes"] for e in display["shards"]) + max(
+            (e["bytes"] for e in display["anchors"]), default=0
         )
         total = (
             display["anchor_bytes"]

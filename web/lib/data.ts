@@ -37,10 +37,16 @@ export interface SparseSeries {
 }
 
 import type { MazEntry } from "./maz";
+import type { FlashpointsMeta } from "./flashpoints";
 
 export interface Meta {
   /** Most Active Zones, `(idx, day)`. Absent until an export has written it. */
   maz?: MazEntry;
+  /**
+   * Curated flashpoints: their definitions inline, their series in one shard.
+   * Absent until an export has written them, and absent when none are seeded.
+   */
+  flashpoints?: FlashpointsMeta;
   scope: {
     name: string;
     label: string;
@@ -85,15 +91,16 @@ export interface ZoneIdentity {
 /**
  * Resolve a zone's administrative labels.
  *
- * `country_id` is authoritative and `region_id` is not: 447 zones carry a
- * region belonging to a different country, and checking their coordinates
- * settles it every time - zones the data files under a Polish voivodeship sit
- * at 161E in the Solomon Islands. So the region is shown only when its own
- * country agrees with the zone's, and dropped rather than printed as nonsense.
+ * Both labels come straight from the zone's own ids, which is what the game
+ * shows. For 447 zones the region belongs to a different country than the zone
+ * does - a zone filed under a Polish voivodeship sits at 161E in the Solomon
+ * Islands - and the pairing reads as nonsense because it is nonsense, upstream.
  *
- * The upstream data is the source of truth here, weird geography included.
- * This suppresses a label it can prove is contradictory; it does not correct
- * anything.
+ * Printed anyway, because the alternative is a hover that names no region for a
+ * zone the game says is in one, and because our region totals are counted the
+ * same way: QONQR's site reports 1,890 zones in West Pomeranian Voivodeship and
+ * we report 1,890. A label that disagreed with its own count would be worse than
+ * a label that disagrees with a map.
  *
  * `zoneIds` and the name may still be in flight - both load behind the map -
  * so either can come back null and the caller shows what it has.
@@ -109,12 +116,11 @@ export function zoneIdentity(
 
   const country = lookups?.countries[String(countryId)] ?? null;
   const region = lookups?.regions[String(regionId)] ?? null;
-  const regionAgrees = region !== null && region[1] === countryId;
 
   return {
     zoneId: zoneIds ? zoneIds[idx] : null,
     name: geometry.names[idx] ?? null,
-    region: regionAgrees ? region[0] : null,
+    region: region ? region[0] : null,
     country: country ? country[1] : null,
     countryCode: country ? country[0] : null,
   };

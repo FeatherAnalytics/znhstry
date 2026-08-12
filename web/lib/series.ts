@@ -7,7 +7,8 @@
  * would put the whole event stream back on the critical path.
  *
  *   country   exact, one row per country-day that moved
- *   region    exact, and only for zones whose country agrees with the region
+ *   region    exact, grouped by region_id the way the game counts it, so a
+ *             region is not a subset of the country it is listed under
  *   1deg cell for a circle or a viewport, which no precomputation can name
  *             ahead of time. Sharded by the same 16-degree tiles as the map.
  *

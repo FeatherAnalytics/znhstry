@@ -41,6 +41,7 @@ Other steps:
 ```bash
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry hydrate          # read the published export into a warehouse, no keys
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
 
@@ -162,6 +163,14 @@ and only a window is sensitive to a partial day. `lastCompleteDay()` treats only
 current UTC date as unfinished, so a stale export whose newest day is a week old is left
 alone.
 
+**The opening date is the newest one, and that is a load-time invariant, not a preference.**
+`paint/` answers exactly one date — the newest in the export — so opening a single day
+earlier means the first frame cannot be painted from the tiles and the worker fetches an
+anchor plus a year of `display/`, up to 3.16 MB, in front of the tiles the reader is
+watching arrive. A nightly export's newest day *is* today, so this fires on every cold load
+in production and on none locally against a stale `dist/`. `useZoneData` opens on the series'
+last day and `changeView` clamps to `lastComplete` when a window is chosen.
+
 **"Moved" means the zone had an event in the window**, not that it crossed a size bucket.
 No second state is built to answer it — it is a question about whether rows exist, and
 `display/` carries a row for every zone-day with an event precisely so the answer is exact.
@@ -225,10 +234,13 @@ list and has nothing to do with the geometry export, which keeps every zone in o
 
 Two masks, and they are deliberately different:
 
-- **`mapFilter`** — a picked area or near-me. What the map dims by. Zones outside it stay
-  on the map at alpha 26; a quarter opacity was not enough, because two million faint dots
-  still read as a wash of colour.
-- **`filter`** — the same mask plus the clicked zone. What the readouts count.
+- **`mapFilter`** — a picked area, near-me, or the circle of a flashpoint. What the map dims
+  by. Zones outside it stay on the map at alpha 26; a quarter opacity was not enough,
+  because two million faint dots still read as a wash of colour.
+- **`filter`** — the selection plus the clicked zone. What the readouts count. A flashpoint
+  is deliberately *not* in it: the coarsest series available for a circle is a one-degree
+  cell, 111 km against a 48 km ring, so scoping the panel to it would put an approximation
+  beside the exact figures the impact readout takes from the flashpoint's own payload.
 
 **Clicking a dot never changes the map.** It is a request to read about that zone, not to
 empty the world; folding a selection into `mapFilter` dims all 2.68M other zones, which at
@@ -256,6 +268,26 @@ is zones in the selection and is the denominator — deliberately not "zones dra
 with empty zones off that would read "1.6M of 1.6M occupied". `held` is zones with bots on
 the ground, never the control flag. `drawn` is what the view is showing, which is what
 "moved" means.
+
+**Every figure in the panel is exact, and the five zone categories are why.** Three faction
+counts plus Empty plus Never played sum to the total — 2,682,442 for the whole scope — and
+"422K + 625K + 514K + 34K + 1.1M" against "2.7M" is a sum nobody can check. Each row stacks
+its label, its bots and its zones rather than sharing a line, because fourteen digits will
+not sit beside a zone count and a growth delta in 268 px. The mobile sheet's peek line
+carries one exact figure for the same reason: two of them truncate mid-number, and half a
+count is worse than a rounded one.
+
+**Clicking a row isolates that category on the map**, as `EMPHASIS` bits in `lib/emphasis.ts`
+— one integer, so it can key `ZoneMap`'s incremental repaint, and the faction bits are
+`1 << faction`, the arithmetic the fill loop already does on `pk`. It dims rather than hides,
+like a picked area, but much harder: the categories are wildly unequal, 33,861 empty zones
+against 1.6M held ones, so a dimmed majority at alpha 26 still sums to more colour than the
+isolated minority. Off goes to 4, the chosen category to 255, and grey grows as well, having
+the least headroom of anything on a dark basemap. Rows stack, and clicking the last one back
+off returns to everything rather than to nothing.
+
+It is a highlight and never a selection: it does not reach `filter`, so every count keeps
+describing the same zones while the map answers "where are these".
 
 Other behaviour worth keeping:
 
@@ -406,6 +438,39 @@ the entire early timelapse with nothing to draw. See the data facts above.
 `useFlipStream` must hand `absorb` to `useZoneData` before that hook runs, while
 `useMazOverlays` needs the geometry and display state it returns.
 
+**The bar counts the day's changes of hands and nothing else.** A count of MAZ rings was
+there and said nothing: a ring is an appearance in a trailing 30-day window, so the number
+rises and falls with the window sliding rather than with anything happening that day.
+
+**A run's change window is its own range, never a span from the picker.** "Net change over
+all time" is a fact about the record; what the reader is watching is a period they chose, so
+`useZoneData` takes the range's first day and the panel names it — plus a small line carrying
+net bots across the run so far, which is the one number a run is about and which the two
+level-reading backdrops would otherwise leave off the screen entirely.
+
+### Flashpoints
+
+A named day, framed and dimmed. Picking one sets the range, the playhead, the camera, the
+tile focus and the pace together, and clears the area and near-me selections — a flashpoint
+is a third kind of focus, and two at once means neither.
+
+- **It opens on the All zones backdrop.** Daily draws only the zones with an event on the
+  date, and on the first frame of a 28-day baseline that is usually none of the few hundred
+  inside the circle, so the reader arrives at an empty rectangle.
+- **The board days play at a third of a day per second**, against 2.5 for the rest of the run
+  and 30 for a record-crossing playback. Those days are the reason the run exists; at the
+  surrounding pace they take the same half-second as any other day.
+- **The playhead turns amber and says so on those days.** Amber because being the flashpoint's
+  day is not a faction fact — the same rule the MAZ rings follow.
+- **Leaving the timelapse drops the flashpoint.** It owns a range, a camera and a mask that
+  the windows have no way to express; left set behind a window it keeps the map framed on one
+  neighborhood and the panel reading a viewport aggregate under a heading that says Global.
+- **The impact readout names its spans and its units in words.** Three signed numbers under
+  "before", "during" and "after" is a table only its author can read. Figures are exact and a
+  one-day total prints no daily rate, being its own. On a narrow screen it renders inside the
+  bottom sheet, where the chart it stands in for also lives; in the page's own flow it would
+  be laid out under a sheet that is fixed over the map, and the two collide.
+
 **Neither the trail nor the cumulative mask is React state updated from an effect.** Both
 live in refs, are filled from the worker's answer handler, and publish with one version bump.
 An effect that sets state on every answer makes React count a nested passive update on every
@@ -419,7 +484,28 @@ React state at all.
 | | Columns | Size |
 |---|---|---|
 | `maz.bin.br` | `idx` (uint32), `day` (uint16 delta) | 268 KB -> **63 KB** |
-| `maz_stats.bin.br` | `players` (uint16), `launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 803 KB -> 425 KB |
+| `maz_stats.bin.br` | `report` (uint32), `players` (uint16), `launches`, `legion_launches`, `swarm_launches`, `faceless_launches`, `bots_launched`, `bots_killed`, `bots_lost` (int32) | 1.55 MB -> 624 KB |
+
+**`report` is the one column here that is a reference rather than a measurement.** It is
+QONQR's own battle report number, and it exists so a row can point at the page it came
+from — `portal.qonqr.com/Home/BattleStatistics/<report>`. Nothing else in the payload can
+be turned into that link. Not delta-encoded: reports are numbered in the order QONQR wrote
+them while these rows are ordered `(day, idx)`, so the sequence climbs across days and
+scrambles within one.
+
+**The three faction launch columns do not always sum to `launches`, and the exception is
+dated.** 861 reports fall short, all between 2019-07-01 and 2019-09-11, report numbers
+55800–57858, with the total higher on every one. The faction *player* columns fail on
+exactly the same rows, which is what shows it to be the whole per-faction block arriving
+partial rather than anything about launches — outside that window both splits are exact on
+all 60,496 reports. It is not a top-N player cap (the largest faction-player sum is 939,
+and 5,537 reports with over 50 players outside the window reconcile), not a zeroed faction,
+and not the big collection days. Only the date predicts it, and geography does not: every
+country with 10+ reports in the window is 72–97% short, and Atlantis — which has no
+geography at all — sits at 83.1%, on the window's average. Forty of the seventy-two days
+are 100% short. Anything computing faction share drops that window or states it.
+`stg_battlestats` carries the full working, and
+`tests/test_export_maz.py` asserts the *containment* rather than the count.
 
 45,685 reports over 11,723 zones, sorted `(day, idx)` because every read is a contiguous
 range of days. That ordering is why `idx` is not delta-encoded: it restarts on every day
@@ -559,7 +645,7 @@ numbers it does not already have. A normal run costs one index page and stops.
   recent observations, which may be years. We recompute deltas from `changelog`.
   `TotalDelta` is also absolute (churn), never negative. Not extracted.
 - **`Description` is not unique** — many zones share a name. `ZoneId` is the only key.
-- **`zones.CountryId` is authoritative; `zones.RegionId` is the corrupt field.** For 447
+- **A region is not a subset of its country, and that is the game's own model.** For 447
   zones the region they point at belongs to a different country, and coordinates back the
   country every time: 155 zones pointing at West Pomeranian Voivodeship (Poland) sit at
   162°E, -10° in the Solomon Islands; 135 pointing at Northwest Territories (Canada) are in
@@ -576,9 +662,34 @@ numbers it does not already have. A normal run costs one index page and stops.
   Solomon Islands zones point at 2452 when that country's regions are 2746–2753, so it is
   wholesale wrong rather than off by one. Not worth a repair rule that fires once.
 
-  The data dictionary documents both join paths as equivalent. They are not. Trust
-  `CountryId`, and drop the region label when it disagrees rather than printing a
-  contradiction.
+  **QONQR's own site counts a country by `CountryId` and a region by `RegionId`,
+  independently, and we match it.** Their figures: Poland 44,080 zones, West Pomeranian
+  Voivodeship 1,890, Northwest Territories 198. The first comes from `CountryId` and the
+  other two from `RegionId` alone, contradicted zones included. So the region ids are the
+  game's real state rather than an import artifact, and its hierarchy genuinely files a
+  zone at 162°E in the Solomon Islands under a Polish voivodeship.
+
+  **The cost is that regions do not sum to their country**, and anything presenting them
+  as a partition has to say so:
+
+  | Country | By `CountryId` | Its regions by `RegionId` |
+  |---|---|---|
+  | Poland | 44,080 | 44,235 |
+  | Ukraine | 26,105 | 26,173 |
+  | Canada | 7,688 | 7,823 |
+  | Azerbaijan | 4,647 | 4,734 |
+  | Solomon Islands | 2,736 | 2,581 |
+  | DR Congo | 21,443 | 21,308 |
+
+  Selecting Northwest Territories therefore draws 198 zones across Canada and the Congo,
+  and the camera frames both. That is strange to look at and is what the game says. The
+  alternative — a total no player can reconcile against their own screen — is worse than a
+  region that reaches across an ocean.
+
+  The data dictionary documents both join paths as equivalent. They are not, and neither
+  is a correction of the other: `CountryId` answers "where is this zone", `RegionId`
+  answers "which region does the game file it under", and a query has to know which
+  question it is asking.
 - **`battlestats` column names contain spaces** and need backticks.
   `Country = 'Atlantis'` marks **tournament** zones — see below. Not test data.
 - **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed
@@ -587,6 +698,21 @@ numbers it does not already have. A normal run costs one index page and stops.
   in the world that day* — never relabel it "battles that day", which would imply the other
   ~3,000 active zones were quiet. No zone is reported twice in a day, so battle grain and
   zone-day grain coincide. Coverage starts 2014-01-01, eighteen months after release.
+- **`players` counts faction-player pairs, not people.** A player who launched for two
+  factions in the same zone on the same day is counted once under each, so the header
+  count can exceed the number of distinct handles in the report's own player list — report
+  131137 says 4 players and lists 3. Say "active players" and never "people", and treat any
+  per-player count derived from `players` as an upper bound.
+
+  This is **not** the 2019 faction-split fault, and conflating the two will send someone
+  down the wrong road. That one is a shortfall — the header total is *higher* than the three
+  faction columns, on 861 reports between 2019-07-01 and 2019-09-11. Faction switching
+  pushes the other way: the faction columns and the header agree with each other, and it is
+  the distinct-handle count that comes out lower.
+
+  Unverifiable from what we collect. The per-player list is a packed string on the report
+  page that ingest does not unpack, so nothing in `data/raw` holds the names to count.
+  See `thoughts/future-features.md`.
 - **Atlantis is the tournament world, and its reports are real.** 15,837 of the 61,517, over
   2,812 tournament zones from 2014-06-06 onward, and they carry the heaviest fighting in
   the game — a median 36 active players against 6 for a mapped zone. Do not treat them as
@@ -636,18 +762,27 @@ against a threshold, because thresholds on upstream drift are brittle.
   boundary an event lands on — the preceding event fails `next > B` and the event itself
   fails `B > observed`, so no row matches, and 19,062 checkpoints vanish.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
-- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones read
-  "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both keys, so a
-  contradicted region is null rather than wrong, and
-  `tests/assert_region_label_agrees_with_country.sql` fails if one appears.
+- **Join regions on `region_id` alone, and never add `country_id` to make it tidy.** Adding
+  it drops 447 zones from their regions and puts every region total 155, 135, 87 or 68
+  below what QONQR's own site reports — a number a player can read off their screen and we
+  cannot match. The contradictory pairing it prevents ("Solomon Islands / West Pomeranian
+  Voivodeship") is upstream's, not ours.
+  `tests/assert_region_membership_matches_the_game.sql` fails if a zone with a `region_id`
+  ever loses its label.
 - **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
   discovers them because they arrive in the daily CSVs like any other change.
 - **Every input to a deck.gl binary attribute belongs in its `updateTriggers`.** `ZoneMap`
   mutates `colors` and `radii` in place, and deck.gl cannot see a mutation — only a changed
-  trigger makes it re-upload. Listing the date but not the focus mask or the empty-zone mode
-  means dimming an area silently stops repainting the map. It is invisible while anything
-  else happens to rebuild the `data` object every render, and appears the moment that is
-  memoised.
+  trigger makes it re-upload. Listing the date but not the focus mask, the empty-zone mode or
+  the emphasis means dimming an area silently stops repainting the map. It is invisible while
+  anything else happens to rebuild the `data` object every render, and appears the moment that
+  is memoised. For a binary attribute the `data` object's *identity* is the only thing deck.gl
+  watches, so the same input also belongs in that memo's dependencies: writing the fill loop
+  and forgetting the memo repaints the panel and leaves the dots alone.
+- **Format every date with `timeZone: "UTC"`.** A day is a UTC date, and `toLocaleDateString`
+  without it renders in the reader's own zone — one day earlier everywhere west of UTC, which
+  reads as the playhead disagreeing with the panel rather than as a formatting fault, and is
+  invisible to anyone developing at GMT or east of it.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
@@ -705,7 +840,7 @@ against a threshold, because thresholds on upstream drift are brittle.
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
 uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **~1,850 files,
-94.6 MB**, ~9 minutes on a GitHub runner.
+94.5 MB**, ~9 minutes on a GitHub runner (19 minutes on the dev machine that wrote this).
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:
@@ -949,6 +1084,57 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
 - **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
   DuckDB reads them through one glob; a column differing in width between them makes the
   source unreadable, not merely inconsistent.
+
+### Reading the export back, without a key
+
+`restore` needs an R2 credential, which means only whoever holds one can get the history.
+`uv run python -m znhstry hydrate` is the other way in, and it needs nothing: **the export
+is already public** — it is exactly what the browser downloads — and `zone_history/` in it
+is the complete event stream, all 9,895,648 rows, one row per event.
+
+It writes `data/znhstry_public.duckdb` with `zone`, `zone_event`, `zone_day`, `maz`,
+`country`, `region` and `faction`. Its own database, deliberately: the dbt profile owns
+`znhstry.duckdb` and a `dbt build` drops what it finds there.
+
+**`zone_event.seq` is the export's row order and it is load-bearing.** The export is
+ordered `(idx, observed_at)` but stores only `day`, so the 653,123 zone-days holding more
+than one event arrive tied — and a zone's standing for a day is the *last* of them. Without
+a sequence there is nothing to break those ties once SQL has touched the table, and "the
+state at date D" becomes whichever row the planner emitted last.
+
+`zone_day` is one row per zone-day, 9,242,525 of them, taking each day's last event as the
+standing and carrying `delta` — the step against the previous day that zone moved, not the
+calendar day before. Summing `delta` over a window is the net change across it. The
+changelog is sparse by design, so anything reading an absent day as a zero has discarded
+the 504,410 zones that last changed in 2019 or earlier.
+
+| | |
+|---|---|
+| ~1,480 requests, ~288 MB decoded | cached under `data/public/`, so a killed run resumes |
+| `--no-names` | drops 655 of those requests, and the zone names with them |
+| `--offline` | build from the cache alone, manifest included |
+| `--origin URL` | a different published export; defaults to the project's own bucket |
+
+**A cached file is trusted only at its exact expected length**, which is `rows x width`
+from the manifest. A truncated download would otherwise decode into plausible numbers for
+however many rows arrived.
+
+**The manifest is not cached like the rest.** The export writes `meta.json` last precisely
+so a client reading it finds every shard it names, and a stale one names shards that no
+longer exist. `--offline` reuses a copy on purpose, which is what makes a primed cache
+reproducible; nothing falls back to one by accident.
+
+Two things do not come back. **The grain is a day, not a timestamp** — the export stores
+`day`, not `observed_at`, so the 653,071 zone-days carrying more than one event arrive as
+several rows on the same date, in the right order but without the times between them. And
+**battlestats is only what MAZ carries**: five measures a report against the scrape's 77
+columns. So this is a warehouse to read. It cannot be uploaded, exported from, or extended
+by `ingest`, which needs the raw layer's own history to plan a slot.
+
+`_decode` must stay the exact inverse of `_pack`, and the two agree only by both following
+`meta.json`. Every way that can fail is silent — a wrong offset still yields numbers in
+range, a delta column accumulated in its stored width wraps into plausible coordinates —
+so `tests/test_hydrate_decode.py` round-trips them.
 
 ## Performance notes
 

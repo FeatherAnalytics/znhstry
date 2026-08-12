@@ -1,0 +1,536 @@
+/**
+ * The per-report MAZ metrics, and the distribution math over them.
+ *
+ * `maz_stats.bin.br` is row-aligned with `maz.bin.br` and carries **no key
+ * columns at all** - row *i* describes report *i*, and the zone and the day come
+ * from the other file. That is the frugal shape and it is only safe while both
+ * are read together, so they are loaded by one function here rather than
+ * separately by whoever needs them.
+ *
+ * **This covers mapped MAZ only.** The export builds it from `fct_zone_battles`,
+ * which excludes the 15,837 tournament reports because they have no coordinates.
+ * Tournament zones carry the heaviest fighting in the game - a median 36 active
+ * players against 6 - so any figure derived from here describes the mapped world
+ * and must say so.
+ *
+ * Everything below the loader is pure and takes plain arrays, because the point
+ * of these functions is to be moved into the main app once a chart earns its
+ * place there.
+ */
+
+import { loadShard } from "./format";
+import { loadMaz, type MazData, type MazEntry } from "./maz";
+
+/** Row `i` describes report `i` of the accompanying `MazData`. */
+export interface MazStats {
+  reports: MazData;
+  /** QONQR's own battle report number - see `portalReportUrl`. */
+  report: Uint32Array;
+  players: Uint16Array;
+  launches: Int32Array;
+  /**
+   * The per-faction split of `launches`.
+   *
+   * **They do not sum to `launches` everywhere.** 861 reports fall short, all of
+   * them between 2019-07-01 and 2019-09-11, always with the total higher. The
+   * faction *player* columns fail on the same rows, which is what shows it to be
+   * the whole per-faction block arriving partial rather than anything about
+   * launches. Outside the window both splits are exact on all 60,496 reports.
+   *
+   * It is not a top-N player cap and not a zeroed faction - see
+   * `stg_battlestats` for what was measured and ruled out. Anything computing a
+   * share has to drop that window or say so, since a share of an incomplete
+   * denominator reads as a faction going quiet.
+   */
+  legionLaunches: Int32Array;
+  swarmLaunches: Int32Array;
+  facelessLaunches: Int32Array;
+  botsLaunched: Int32Array;
+  botsKilled: Int32Array;
+  botsLost: Int32Array;
+}
+
+/** Where a report came from. The portal renders one page per report number. */
+export const PORTAL_REPORT = "https://portal.qonqr.com/Home/BattleStatistics";
+
+export function portalReportUrl(report: number): string {
+  return `${PORTAL_REPORT}/${report}`;
+}
+
+const REQUIRED = [
+  "report",
+  "players",
+  "launches",
+  "legion_launches",
+  "swarm_launches",
+  "faceless_launches",
+  "bots_launched",
+  "bots_killed",
+  "bots_lost",
+] as const;
+
+export async function loadMazStats(base: string, entry: MazEntry): Promise<MazStats> {
+  if (!entry.stats) throw new Error("meta.maz carries no stats shard");
+
+  const [reports, columns] = await Promise.all([
+    loadMaz(base, entry),
+    loadShard(base, entry.stats),
+  ]);
+
+  // The row alignment is the whole contract and nothing downstream can detect a
+  // break in it - both files parse, both hold plausible numbers, and the only
+  // symptom is one zone's launches attributed to another.
+  if (entry.stats.rows !== reports.reportCount) {
+    throw new Error(
+      `maz_stats has ${entry.stats.rows} rows against ${reports.reportCount} reports`,
+    );
+  }
+
+  // An export written before a column existed still parses: `loadShard` reads
+  // whatever `meta.json` lists, so a missing column is simply absent and the
+  // first symptom is `undefined[i]` somewhere far away. Name them here, where
+  // the message can say which shard is stale.
+  const missing = REQUIRED.filter((name) => !columns[name]);
+  if (missing.length) {
+    throw new Error(`maz_stats is missing ${missing.join(", ")} - re-run the export`);
+  }
+
+  return {
+    reports,
+    report: columns.report as Uint32Array,
+    players: columns.players as Uint16Array,
+    launches: columns.launches as Int32Array,
+    legionLaunches: columns.legion_launches as Int32Array,
+    swarmLaunches: columns.swarm_launches as Int32Array,
+    facelessLaunches: columns.faceless_launches as Int32Array,
+    botsLaunched: columns.bots_launched as Int32Array,
+    botsKilled: columns.bots_killed as Int32Array,
+    botsLost: columns.bots_lost as Int32Array,
+  };
+}
+
+// --- distributions ------------------------------------------------------------
+
+export interface Summary {
+  count: number;
+  min: number;
+  median: number;
+  p90: number;
+  p99: number;
+  max: number;
+  mean: number;
+}
+
+/**
+ * Order statistics, not a mean and a standard deviation.
+ *
+ * Every quantity here is heavy-tailed: the biggest single report is orders of
+ * magnitude above the median, so a mean sits somewhere in the empty space
+ * between the bulk and the tail and describes neither. The mean is returned
+ * anyway, to be shown *next to* the median where the gap between them is the
+ * point.
+ */
+export function summarize(values: ArrayLike<number>): Summary {
+  if (values.length === 0) {
+    return { count: 0, min: 0, median: 0, p90: 0, p99: 0, max: 0, mean: 0 };
+  }
+
+  const sorted = Float64Array.from(values as ArrayLike<number>).sort();
+  const at = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+
+  let total = 0;
+  for (let i = 0; i < sorted.length; i++) total += sorted[i];
+
+  return {
+    count: sorted.length,
+    min: sorted[0],
+    median: at(0.5),
+    p90: at(0.9),
+    p99: at(0.99),
+    max: sorted[sorted.length - 1],
+    mean: total / sorted.length,
+  };
+}
+
+export interface Bin {
+  /** Inclusive lower edge. */
+  lo: number;
+  /** Exclusive upper edge. */
+  hi: number;
+  count: number;
+}
+
+/**
+ * Logarithmic bins, because a linear histogram of any of these is one tall bar
+ * and a flat line.
+ *
+ * Launches on a single report run from single digits to five figures. Linear
+ * bins wide enough to reach the maximum put 99% of the mass in the first one,
+ * which draws the tail correctly and says nothing about the bulk - the shape
+ * worth seeing is in the first two decades.
+ *
+ * Zero and negative values fall in the first bin rather than being dropped: a
+ * report with no launches is real data, and silently discarding rows makes the
+ * count under the chart disagree with the count above it.
+ */
+export function logBins(values: ArrayLike<number>, binsPerDecade = 6): Bin[] {
+  let max = 1;
+  for (let i = 0; i < values.length; i++) if (values[i] > max) max = values[i];
+
+  const count = Math.max(1, Math.ceil(Math.log10(max) * binsPerDecade) + 1);
+  const edge = (b: number) => 10 ** (b / binsPerDecade);
+
+  const bins: Bin[] = Array.from({ length: count }, (_, b) => ({
+    lo: b === 0 ? 0 : edge(b),
+    hi: edge(b + 1),
+    count: 0,
+  }));
+
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i];
+    const b = value <= 1 ? 0 : Math.min(count - 1, Math.floor(Math.log10(value) * binsPerDecade));
+    bins[b].count++;
+  }
+  return bins;
+}
+
+export interface DailySeries {
+  /** Days since the export epoch, ascending, only days that carry reports. */
+  day: Int32Array;
+  value: Float64Array;
+  /** Reports behind each day's value - the denominator for a per-report rate. */
+  reports: Int32Array;
+}
+
+/**
+ * One value per MAZ day, summed over that day's reports.
+ *
+ * A raw daily sum mixes days of different sizes: the top ten is exactly ten
+ * reports on 3,452 of 4,599 days but runs to fourteen on a few, so `reports`
+ * comes back alongside the total and a per-report rate is one division away.
+ */
+export function dailyTotals(stats: MazStats, values: ArrayLike<number>): DailySeries {
+  const { dayMin, dayMax, dayOffset } = stats.reports;
+  const span = dayMax - dayMin + 1;
+
+  const days: number[] = [];
+  const totals: number[] = [];
+  const counts: number[] = [];
+
+  for (let d = 0; d < span; d++) {
+    const start = dayOffset[d];
+    const end = dayOffset[d + 1];
+    if (end <= start) continue;
+
+    let total = 0;
+    for (let r = start; r < end; r++) total += values[r];
+
+    days.push(dayMin + d);
+    totals.push(total);
+    counts.push(end - start);
+  }
+
+  return {
+    day: Int32Array.from(days),
+    value: Float64Array.from(totals),
+    reports: Int32Array.from(counts),
+  };
+}
+
+/**
+ * The same days, as an average over the reports behind each one.
+ *
+ * A raw daily sum is not comparable across days, because the top ten is not
+ * always ten: most days carry exactly ten reports and a few carry as many as
+ * twenty-nine, so a day can out-total another by being bigger rather than by
+ * being busier. Dividing by the report count asks the honest question - how hard
+ * was the average zone in the day's top ten fought - and it is the series any
+ * comparison across the record should read.
+ *
+ * `reports` is carried through unchanged, so a caller can still weight by it.
+ */
+export function perReport(daily: DailySeries): DailySeries {
+  const value = new Float64Array(daily.value.length);
+  for (let i = 0; i < value.length; i++) value[i] = daily.value[i] / daily.reports[i];
+  return { day: daily.day, value, reports: daily.reports };
+}
+
+/** How many entries equal `value`. */
+export function countEqual(values: ArrayLike<number>, value: number): number {
+  let n = 0;
+  for (let i = 0; i < values.length; i++) if (values[i] === value) n++;
+  return n;
+}
+
+// --- outliers -----------------------------------------------------------------
+//
+// Both lists below carry `players` next to `launches`, and that is the whole
+// reason they are separate functions rather than a sort with a slice.
+//
+// The two are not the same story. The largest mapped report in the record is
+// Budapest on 2024-12-15 at 20,929 launches - from **two** active players. The
+// second largest is Chermignac at 17,885, from 201. Ranked on launches alone
+// those sit next to each other and the chart says they are the same event: one
+// is a battle and the other is two people grinding. Anything that names an
+// outlier has to show both numbers or split the lists.
+
+export interface ReportOutlier {
+  /** Row in both MAZ shards, so a caller can reach any other column. */
+  row: number;
+  idx: number;
+  day: number;
+  launches: number;
+  players: number;
+  /** QONQR's report number, for `portalReportUrl`. */
+  report: number;
+}
+
+/** Single reports at or above `threshold` launches, biggest first. */
+export function biggestReports(stats: MazStats, threshold: number): ReportOutlier[] {
+  const out: ReportOutlier[] = [];
+  const { reportIdx, reportDay, reportCount } = stats.reports;
+  for (let r = 0; r < reportCount; r++) {
+    if (stats.launches[r] < threshold) continue;
+    out.push({
+      row: r,
+      idx: reportIdx[r],
+      day: reportDay[r],
+      launches: stats.launches[r],
+      players: stats.players[r],
+      report: stats.report[r],
+    });
+  }
+  return out.sort((a, b) => b.launches - a.launches);
+}
+
+export interface DayOutlier {
+  day: number;
+  launches: number;
+  /** Active players summed over the day's reports, so a zone fought by the
+   *  same person twice counts twice. There is no player key to dedupe on. */
+  players: number;
+  reports: number;
+}
+
+/** Whole MAZ days at or above `threshold` total launches, biggest first. */
+export function biggestDays(stats: MazStats, threshold: number): DayOutlier[] {
+  const { dayMin, dayMax, dayOffset } = stats.reports;
+  const out: DayOutlier[] = [];
+
+  for (let d = 0; d <= dayMax - dayMin; d++) {
+    const start = dayOffset[d];
+    const end = dayOffset[d + 1];
+    if (end <= start) continue;
+
+    let launches = 0;
+    let players = 0;
+    for (let r = start; r < end; r++) {
+      launches += stats.launches[r];
+      players += stats.players[r];
+    }
+    if (launches >= threshold) {
+      out.push({ day: dayMin + d, launches, players, reports: end - start });
+    }
+  }
+  return out.sort((a, b) => b.launches - a.launches);
+}
+
+// --- faction share (§7.3) -----------------------------------------------------
+
+/**
+ * The dates where the per-faction split is partially populated, as day numbers.
+ *
+ * Not a preference. Inside this window the three faction columns are short of
+ * their own total on 861 reports, so a share taken across it divides by an
+ * incomplete denominator and reads as a faction going quiet. Every function
+ * below drops it by default and reports how many days it dropped, because a
+ * silently narrowed range is how a chart starts lying about its own extent.
+ */
+export const FACTION_SPLIT_BROKEN = { from: "2019-07-01", to: "2019-09-11" };
+
+export interface FactionDaily {
+  day: Int32Array;
+  legion: Float64Array;
+  swarm: Float64Array;
+  faceless: Float64Array;
+  /** Days dropped because the split is known-partial there. */
+  dropped: number;
+}
+
+/**
+ * Launches by faction, one point per MAZ day, as a share of that day's total.
+ *
+ * Shares rather than counts, because the game's overall activity moves by orders
+ * of magnitude across the record and a stacked count chart would show that and
+ * nothing else. The question §7.3 asks is whether one faction was the aggressor,
+ * which is a proportion.
+ *
+ * A day whose faction columns sum to zero is dropped rather than plotted at
+ * zero: there is no share to report, and a run of zeros draws a confident flat
+ * line through a hole.
+ */
+export function factionDaily(
+  stats: MazStats,
+  brokenFrom: number,
+  brokenTo: number,
+): FactionDaily {
+  const { dayMin, dayMax, dayOffset } = stats.reports;
+
+  const days: number[] = [];
+  const legion: number[] = [];
+  const swarm: number[] = [];
+  const faceless: number[] = [];
+  let dropped = 0;
+
+  for (let d = 0; d <= dayMax - dayMin; d++) {
+    const start = dayOffset[d];
+    const end = dayOffset[d + 1];
+    if (end <= start) continue;
+
+    const day = dayMin + d;
+    if (day >= brokenFrom && day <= brokenTo) {
+      dropped++;
+      continue;
+    }
+
+    let l = 0;
+    let s = 0;
+    let f = 0;
+    for (let r = start; r < end; r++) {
+      l += stats.legionLaunches[r];
+      s += stats.swarmLaunches[r];
+      f += stats.facelessLaunches[r];
+    }
+    const total = l + s + f;
+    if (total <= 0) continue;
+
+    days.push(day);
+    legion.push(l / total);
+    swarm.push(s / total);
+    faceless.push(f / total);
+  }
+
+  return {
+    day: Int32Array.from(days),
+    legion: Float64Array.from(legion),
+    swarm: Float64Array.from(swarm),
+    faceless: Float64Array.from(faceless),
+    dropped,
+  };
+}
+
+export interface FightShape {
+  /** The leading faction's share of the report, 0..1, one entry per report. */
+  dominance: Float64Array;
+  /** Reports where one faction launched everything. */
+  oneSided: number;
+  /** Reports with all three factions launching. */
+  threeWay: number;
+  total: number;
+}
+
+/**
+ * How lopsided each MAZ fight was, from the leading faction's share.
+ *
+ * A report at 100% is one faction launching into a zone nobody contested - a
+ * garrison being built rather than a battle - and §7.3 asks for those to be
+ * separable by name rather than averaged in. The measure is the *maximum*
+ * share and not an entropy, because the question is "did one side own this
+ * fight", which is about the leader and not about how the remainder split.
+ */
+export function fightShape(
+  stats: MazStats,
+  brokenFrom: number,
+  brokenTo: number,
+): FightShape {
+  const { reportDay, reportCount } = stats.reports;
+  const values: number[] = [];
+  let oneSided = 0;
+  let threeWay = 0;
+
+  for (let r = 0; r < reportCount; r++) {
+    const day = reportDay[r];
+    if (day >= brokenFrom && day <= brokenTo) continue;
+
+    const l = stats.legionLaunches[r];
+    const s = stats.swarmLaunches[r];
+    const f = stats.facelessLaunches[r];
+    const total = l + s + f;
+    if (total <= 0) continue;
+
+    const top = Math.max(l, s, f) / total;
+    values.push(top);
+    if (top >= 1) oneSided++;
+    if (l > 0 && s > 0 && f > 0) threeWay++;
+  }
+
+  return {
+    dominance: Float64Array.from(values),
+    oneSided,
+    threeWay,
+    total: values.length,
+  };
+}
+
+// --- appearances and streaks (§7.4) -------------------------------------------
+
+/**
+ * The longest run of consecutive days each zone spent on the board.
+ *
+ * A streak is the stricter cousin of the rolling appearance count the map's
+ * rings already use. It was rejected as a *visual* encoding for flickering,
+ * which says nothing about its value as a statistic.
+ *
+ * Relies on the shard's `(day, idx)` ordering: scanning rows in order yields
+ * each zone's days ascending, so one pass suffices and no sort is needed.
+ */
+export function longestStreaks(stats: MazStats): Map<number, number> {
+  const { reportIdx, reportDay, reportCount } = stats.reports;
+  const last = new Map<number, number>();
+  const run = new Map<number, number>();
+  const best = new Map<number, number>();
+
+  for (let r = 0; r < reportCount; r++) {
+    const idx = reportIdx[r];
+    const day = reportDay[r];
+    const previous = last.get(idx);
+    const current = previous !== undefined && day === previous + 1 ? (run.get(idx) ?? 1) + 1 : 1;
+
+    last.set(idx, day);
+    run.set(idx, current);
+    if (current > (best.get(idx) ?? 0)) best.set(idx, current);
+  }
+  return best;
+}
+
+/**
+ * Linear bins over `[0, max]`, for a quantity that is already a proportion.
+ *
+ * `logBins` is right for launches, which span five decades. A share spans one
+ * bounded range and its shape lives at the top end, so log bins would compress
+ * exactly the part worth seeing.
+ */
+export function linearBins(values: ArrayLike<number>, count: number, max = 1): Bin[] {
+  const bins: Bin[] = Array.from({ length: count }, (_, b) => ({
+    lo: (b / count) * max,
+    hi: ((b + 1) / count) * max,
+    count: 0,
+  }));
+
+  for (let i = 0; i < values.length; i++) {
+    const b = Math.min(count - 1, Math.floor((values[i] / max) * count));
+    if (b >= 0) bins[b].count++;
+  }
+  return bins;
+}
+
+/** How many times each zone appears, as `idx -> appearances`. */
+export function appearancesByZone(stats: MazStats): Map<number, number> {
+  const counts = new Map<number, number>();
+  const { reportIdx, reportCount } = stats.reports;
+  for (let r = 0; r < reportCount; r++) {
+    const idx = reportIdx[r];
+    counts.set(idx, (counts.get(idx) ?? 0) + 1);
+  }
+  return counts;
+}

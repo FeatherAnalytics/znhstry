@@ -20,6 +20,11 @@ import { loadShard, type ShardEntry } from "./format";
 export interface MazEntry extends ShardEntry {
   day_min: number;
   day_max: number;
+  /**
+   * Per-report metrics, row-aligned with this shard and carrying no key columns
+   * of its own. The map never reads it - see `lib/mazStats.ts`, which does.
+   */
+  stats?: ShardEntry;
 }
 
 export interface MazData {

@@ -96,6 +96,25 @@ export interface StateMessage {
    */
   held: number;
   /**
+   * Zones by leading faction on `day`: `[empty, legion, swarm, faceless]`.
+   *
+   * From the same pass as `held`, over bytes already in cache, so it costs one
+   * increment per zone. A plain tuple rather than a typed array: four numbers
+   * clone for nothing, while a `Uint32Array` is either a copy or another entry
+   * in a transfer list that exists to move megabytes.
+   *
+   * The faction is the *leader by bots standing*, which is what `pk` packs -
+   * never `control_state`, which goes on naming whoever captured a zone last
+   * long after their last bot is gone.
+   *
+   * `byFaction[0]` counts every zone holding nothing, and does not separate a
+   * zone fought down to empty from one never played in fourteen years. That
+   * split needs `everActive`, which is geometry the worker has never been given;
+   * the page makes it, and for the whole scope reads it off the manifest instead
+   * of counting at all.
+   */
+  byFaction: [number, number, number, number];
+  /**
    * Both **by slot**, not by idx - see `ZoneDisplay`.
    *
    * Only the slots the worker has been told about are written; the tail is left

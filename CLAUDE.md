@@ -163,6 +163,14 @@ and only a window is sensitive to a partial day. `lastCompleteDay()` treats only
 current UTC date as unfinished, so a stale export whose newest day is a week old is left
 alone.
 
+**The opening date is the newest one, and that is a load-time invariant, not a preference.**
+`paint/` answers exactly one date — the newest in the export — so opening a single day
+earlier means the first frame cannot be painted from the tiles and the worker fetches an
+anchor plus a year of `display/`, up to 3.16 MB, in front of the tiles the reader is
+watching arrive. A nightly export's newest day *is* today, so this fires on every cold load
+in production and on none locally against a stale `dist/`. `useZoneData` opens on the series'
+last day and `changeView` clamps to `lastComplete` when a window is chosen.
+
 **"Moved" means the zone had an event in the window**, not that it crossed a size bucket.
 No second state is built to answer it — it is a question about whether rows exist, and
 `display/` carries a row for every zone-day with an event precisely so the answer is exact.
@@ -226,10 +234,13 @@ list and has nothing to do with the geometry export, which keeps every zone in o
 
 Two masks, and they are deliberately different:
 
-- **`mapFilter`** — a picked area or near-me. What the map dims by. Zones outside it stay
-  on the map at alpha 26; a quarter opacity was not enough, because two million faint dots
-  still read as a wash of colour.
-- **`filter`** — the same mask plus the clicked zone. What the readouts count.
+- **`mapFilter`** — a picked area, near-me, or the circle of a flashpoint. What the map dims
+  by. Zones outside it stay on the map at alpha 26; a quarter opacity was not enough,
+  because two million faint dots still read as a wash of colour.
+- **`filter`** — the selection plus the clicked zone. What the readouts count. A flashpoint
+  is deliberately *not* in it: the coarsest series available for a circle is a one-degree
+  cell, 111 km against a 48 km ring, so scoping the panel to it would put an approximation
+  beside the exact figures the impact readout takes from the flashpoint's own payload.
 
 **Clicking a dot never changes the map.** It is a request to read about that zone, not to
 empty the world; folding a selection into `mapFilter` dims all 2.68M other zones, which at
@@ -257,6 +268,26 @@ is zones in the selection and is the denominator — deliberately not "zones dra
 with empty zones off that would read "1.6M of 1.6M occupied". `held` is zones with bots on
 the ground, never the control flag. `drawn` is what the view is showing, which is what
 "moved" means.
+
+**Every figure in the panel is exact, and the five zone categories are why.** Three faction
+counts plus Empty plus Never played sum to the total — 2,682,442 for the whole scope — and
+"422K + 625K + 514K + 34K + 1.1M" against "2.7M" is a sum nobody can check. Each row stacks
+its label, its bots and its zones rather than sharing a line, because fourteen digits will
+not sit beside a zone count and a growth delta in 268 px. The mobile sheet's peek line
+carries one exact figure for the same reason: two of them truncate mid-number, and half a
+count is worse than a rounded one.
+
+**Clicking a row isolates that category on the map**, as `EMPHASIS` bits in `lib/emphasis.ts`
+— one integer, so it can key `ZoneMap`'s incremental repaint, and the faction bits are
+`1 << faction`, the arithmetic the fill loop already does on `pk`. It dims rather than hides,
+like a picked area, but much harder: the categories are wildly unequal, 33,861 empty zones
+against 1.6M held ones, so a dimmed majority at alpha 26 still sums to more colour than the
+isolated minority. Off goes to 4, the chosen category to 255, and grey grows as well, having
+the least headroom of anything on a dark basemap. Rows stack, and clicking the last one back
+off returns to everything rather than to nothing.
+
+It is a highlight and never a selection: it does not reach `filter`, so every count keeps
+describing the same zones while the map answers "where are these".
 
 Other behaviour worth keeping:
 
@@ -406,6 +437,39 @@ the entire early timelapse with nothing to draw. See the data facts above.
 `lib/timelapse.ts` is split into two hooks for an ordering reason rather than taste:
 `useFlipStream` must hand `absorb` to `useZoneData` before that hook runs, while
 `useMazOverlays` needs the geometry and display state it returns.
+
+**The bar counts the day's changes of hands and nothing else.** A count of MAZ rings was
+there and said nothing: a ring is an appearance in a trailing 30-day window, so the number
+rises and falls with the window sliding rather than with anything happening that day.
+
+**A run's change window is its own range, never a span from the picker.** "Net change over
+all time" is a fact about the record; what the reader is watching is a period they chose, so
+`useZoneData` takes the range's first day and the panel names it — plus a small line carrying
+net bots across the run so far, which is the one number a run is about and which the two
+level-reading backdrops would otherwise leave off the screen entirely.
+
+### Flashpoints
+
+A named day, framed and dimmed. Picking one sets the range, the playhead, the camera, the
+tile focus and the pace together, and clears the area and near-me selections — a flashpoint
+is a third kind of focus, and two at once means neither.
+
+- **It opens on the All zones backdrop.** Daily draws only the zones with an event on the
+  date, and on the first frame of a 28-day baseline that is usually none of the few hundred
+  inside the circle, so the reader arrives at an empty rectangle.
+- **The board days play at a third of a day per second**, against 2.5 for the rest of the run
+  and 30 for a record-crossing playback. Those days are the reason the run exists; at the
+  surrounding pace they take the same half-second as any other day.
+- **The playhead turns amber and says so on those days.** Amber because being the flashpoint's
+  day is not a faction fact — the same rule the MAZ rings follow.
+- **Leaving the timelapse drops the flashpoint.** It owns a range, a camera and a mask that
+  the windows have no way to express; left set behind a window it keeps the map framed on one
+  neighborhood and the panel reading a viewport aggregate under a heading that says Global.
+- **The impact readout names its spans and its units in words.** Three signed numbers under
+  "before", "during" and "after" is a table only its author can read. Figures are exact and a
+  one-day total prints no daily rate, being its own. On a narrow screen it renders inside the
+  bottom sheet, where the chart it stands in for also lives; in the page's own flow it would
+  be laid out under a sheet that is fixed over the map, and the two collide.
 
 **Neither the trail nor the cumulative mask is React state updated from an effect.** Both
 live in refs, are filled from the worker's answer handler, and publish with one version bump.
@@ -709,10 +773,16 @@ against a threshold, because thresholds on upstream drift are brittle.
   discovers them because they arrive in the daily CSVs like any other change.
 - **Every input to a deck.gl binary attribute belongs in its `updateTriggers`.** `ZoneMap`
   mutates `colors` and `radii` in place, and deck.gl cannot see a mutation — only a changed
-  trigger makes it re-upload. Listing the date but not the focus mask or the empty-zone mode
-  means dimming an area silently stops repainting the map. It is invisible while anything
-  else happens to rebuild the `data` object every render, and appears the moment that is
-  memoised.
+  trigger makes it re-upload. Listing the date but not the focus mask, the empty-zone mode or
+  the emphasis means dimming an area silently stops repainting the map. It is invisible while
+  anything else happens to rebuild the `data` object every render, and appears the moment that
+  is memoised. For a binary attribute the `data` object's *identity* is the only thing deck.gl
+  watches, so the same input also belongs in that memo's dependencies: writing the fill loop
+  and forgetting the memo repaints the panel and leaves the dots alone.
+- **Format every date with `timeZone: "UTC"`.** A day is a UTC date, and `toLocaleDateString`
+  without it renders in the reader's own zone — one day earlier everywhere west of UTC, which
+  reads as the playhead disagreeing with the panel rather than as a formatting fault, and is
+  invisible to anyone developing at GMT or east of it.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.

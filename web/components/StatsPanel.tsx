@@ -1,5 +1,7 @@
 "use client";
 
+import { EMPHASIS, EMPHASIS_ALL, type EmphasisKey } from "@/lib/emphasis";
+
 // Alphabetical, so the reading order does not imply a ranking.
 const FACTIONS = [
   { key: "faceless", label: "Faceless", color: "var(--faceless)" },
@@ -86,6 +88,21 @@ interface Props {
    */
   compact?: boolean;
   /**
+   * Net bots across a run so far, shown small under the total.
+   *
+   * The timelapse's own question - what has this period done - which the rows
+   * above cannot answer while they are reporting levels for one date.
+   */
+  since?: { label: string; value: number } | null;
+  /**
+   * Which of the five categories the map is lighting, as `EMPHASIS` bits.
+   *
+   * The rows are the control for it, so the panel needs to know the state to draw
+   * itself dimmed in step with the dots.
+   */
+  emphasis?: number;
+  onEmphasis?: (key: EmphasisKey) => void;
+  /**
    * Rendered inside the panel, under the hover readout. The region breakdown
    * lives here rather than in a box of its own so there is one card with one
    * border, and so a long region list scrolls with the numbers it belongs to.
@@ -100,6 +117,22 @@ export function compactNumber(value: number): string {
   if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
   if (value >= 1e3) return `${(value / 1e3).toFixed(0)}K`;
   return String(value);
+}
+
+/**
+ * Every figure in the panel, in full.
+ *
+ * The five zone categories are meant to add up to the total, and "422K + 625K +
+ * 514K + 34K + 1.1M" cannot be checked against "2.7M" by anyone. Grouped so the
+ * eye can size it without counting digits.
+ */
+export function exactNumber(value: number): string {
+  return (value < 0 ? -value : value).toLocaleString("en-US");
+}
+
+/** Exact, and signed when the panel is reporting movement rather than a level. */
+function figure(value: number, signed: boolean): string {
+  return `${signed && value > 0 ? "+" : signed && value < 0 ? "−" : ""}${exactNumber(value)}`;
 }
 
 function Delta({ now, then }: { now: number; then: number | undefined }) {
@@ -120,38 +153,100 @@ function Delta({ now, then }: { now: number; then: number | undefined }) {
   );
 }
 
-/** A summary row: a label, a bot figure and a zone figure, no bar. */
-function Line({
+/**
+ * One row of the breakdown: a heading, then its numbers underneath.
+ *
+ * Stacked rather than in columns because the figures are exact - fourteen digits
+ * of bots will not share a 268 px line with a zone count and a growth delta, and
+ * shortening them was the thing being fixed.
+ *
+ * A row with an `onSelect` is a button: the map dims every category the reader
+ * has not asked for, so the control belongs on the row that names the category
+ * rather than in a legend somewhere else.
+ */
+function Row({
   label,
-  value,
+  swatch,
+  aside,
+  bots,
   zones,
+  bar,
   strong = false,
+  lit = true,
+  onSelect,
 }: {
   label: string;
-  value: string;
-  zones: string;
+  swatch?: string;
+  aside?: React.ReactNode;
+  bots?: string | null;
+  zones?: string | null;
+  bar?: React.ReactNode;
   strong?: boolean;
+  /** False while some other category is the one being emphasised. */
+  lit?: boolean;
+  onSelect?: () => void;
 }) {
+  const body = (
+    <>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        {swatch ? (
+          <span
+            aria-hidden
+            style={{ width: 7, height: 7, background: swatch, flexShrink: 0 }}
+          />
+        ) : (
+          // Aligns with the rows that do have a swatch.
+          <span aria-hidden style={{ width: 7, flexShrink: 0 }} />
+        )}
+        <span style={{ flex: 1, color: strong ? "var(--text)" : "var(--text-dim)" }}>{label}</span>
+        {aside}
+      </div>
+      {bots && (
+        <div
+          className="tabular"
+          style={{ marginLeft: 15, marginTop: 2, fontWeight: strong ? 600 : 500 }}
+        >
+          {bots} <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>bots</span>
+        </div>
+      )}
+      {zones && (
+        <div
+          className="tabular"
+          style={{ marginLeft: 15, marginTop: 1, color: "var(--text-dim)", fontSize: 11 }}
+        >
+          {zones} zones
+        </div>
+      )}
+      {bar}
+    </>
+  );
+
+  if (!onSelect) return <div style={{ marginBottom: 10 }}>{body}</div>;
+
   return (
-    <div
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={lit}
+      title={lit ? `Isolate ${label} on the map` : `Add ${label} back to the map`}
       style={{
-        display: "flex",
-        alignItems: "baseline",
-        gap: 8,
-        marginBottom: 6,
-        color: strong ? "var(--text)" : "var(--text-dim)",
+        display: "block",
+        width: "100%",
+        marginBottom: 10,
+        padding: 0,
+        border: "none",
+        background: "none",
+        font: "inherit",
+        color: "inherit",
+        textAlign: "left",
+        cursor: "pointer",
+        // Dimmed to match what the map does to the dots, so the row and the
+        // world it describes read as one state rather than two.
+        opacity: lit ? 1 : 0.38,
       }}
     >
-      {/* Aligns with the faction rows, which lead with a 7px swatch and an 8px gap. */}
-      <span aria-hidden style={{ width: 7, flexShrink: 0 }} />
-      <span style={{ flex: 1 }}>{label}</span>
-      <span className="tabular" style={{ fontWeight: strong ? 600 : 400 }}>
-        {value}
-      </span>
-      <span className="tabular" style={{ width: 58, textAlign: "right", fontSize: 11 }}>
-        {zones} {zones === "1" ? "zone" : "zones"}
-      </span>
-    </div>
+      {body}
+    </button>
   );
 }
 
@@ -168,6 +263,9 @@ export function StatsPanel({
   changeLabel,
   pending,
   compact = false,
+  since,
+  emphasis = EMPHASIS_ALL,
+  onEmphasis,
   children,
 }: Props) {
   // Bars are shares of the movement, so a negative faction gets no bar rather
@@ -213,24 +311,17 @@ export function StatsPanel({
           })}
         </div>
       )}
-      {/* Zones holding bots right now, against every zone on the map -
-          including the 1.09M that have never been played, which are part of
-          the world and part of the denominator. */}
+      {/* Every zone in the selection, the 1.09M never played included: they are
+          real places and part of the world the rows below break down. */}
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
         {changeLabel ? (
           <>
-            {pending ? "Reading" : `${compactNumber(totals.held)} zones moved`} &middot; {changeLabel}
+            {pending ? "Reading" : `${exactNumber(totals.held)} zones moved`} &middot; {changeLabel}
           </>
         ) : (
           <>
-            {/* `held` belongs to whatever `totals` describes. While a
-                selection's exact counts are still being read, `totals` is
-                still the global figure, and pairing it with the selection's
-                zone count reads as "1.6M of 147K occupied". Show one or the
-                other, never a mismatched pair. */}
-            {stateReady && !pending ? `${compactNumber(totals.held)} of ` : ""}
-            {compactNumber(zoneCount)} zones
-            {pending ? " · reading" : stateReady ? " occupied" : " · reading state"}
+            {exactNumber(zoneCount)} zones
+            {pending ? " · reading" : stateReady ? "" : " · reading state"}
           </>
         )}
       </div>
@@ -240,55 +331,32 @@ export function StatsPanel({
       {FACTIONS.map((faction) => {
         const value = totals[faction.key];
         return (
-          <div key={faction.key} style={{ marginBottom: 11 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span
-                aria-hidden
-                style={{ width: 7, height: 7, background: faction.color, flexShrink: 0 }}
-              />
-              <span style={{ flex: 1, color: "var(--text-dim)" }}>{faction.label}</span>
-              <span className="tabular" style={{ fontWeight: 600 }}>
-                {pending ? (
-                  <span style={{ color: "var(--text-dim)" }}>&mdash;</span>
-                ) : (
-                  <>
-                    {changeLabel && value > 0 ? "+" : ""}
-                    {compactNumber(value)}
-                  </>
-                )}
-              </span>
-              {!changeLabel && <Delta now={value} then={previous?.[faction.key]} />}
-            </div>
-            {/* Zones led, beside the bots standing. The pair is the point: a
-                faction can lead many zones thinly or one zone deeply. */}
-            {zones && !pending && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 6,
-                  marginTop: 2,
-                  marginLeft: 15,
-                  color: "var(--text-dim)",
-                  fontSize: 11,
-                }}
-              >
-                <span className="tabular">{compactNumber(zones[faction.key])}</span>
-                <span>{zones[faction.key] === 1 ? "zone" : "zones"}</span>
+          <Row
+            key={faction.key}
+            label={faction.label}
+            swatch={faction.color}
+            lit={(emphasis & EMPHASIS[faction.key]) !== 0}
+            onSelect={onEmphasis ? () => onEmphasis(faction.key) : undefined}
+            aside={!changeLabel ? <Delta now={value} then={previous?.[faction.key]} /> : undefined}
+            bots={pending ? "—" : figure(value, changeLabel !== null)}
+            /* Zones led, beside the bots standing. The pair is the point: a
+               faction can lead many zones thinly or one zone deeply. */
+            zones={zones && !pending ? exactNumber(zones[faction.key]) : null}
+            bar={
+              <div style={{ height: 3, background: "var(--hairline)", marginTop: 5 }}>
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${(Math.abs(value) / sum) * 100}%`,
+                    // A faction that shed bots over the window still gets a bar,
+                    // drawn hollow, so a loss is visible rather than absent.
+                    background: value < 0 ? "transparent" : faction.color,
+                    border: value < 0 ? `1px solid ${faction.color}` : undefined,
+                  }}
+                />
               </div>
-            )}
-            <div style={{ height: 3, background: "var(--hairline)", marginTop: 5 }}>
-              <div
-                style={{
-                  height: "100%",
-                  width: `${(Math.abs(value) / sum) * 100}%`,
-                  // A faction that shed bots over the window still gets a bar,
-                  // drawn hollow, so a loss is visible rather than absent.
-                  background: value < 0 ? "transparent" : faction.color,
-                  border: value < 0 ? `1px solid ${faction.color}` : undefined,
-                }}
-              />
-            </div>
-          </div>
+            }
+          />
         );
       })}
 
@@ -298,17 +366,50 @@ export function StatsPanel({
           {/* The number every share above is a share of. The bot side is a sum of
               approximations for a circle or the viewport; the zone side is exact
               for every selection, so the qualifier belongs on one and not both. */}
-          <Line
+          <Row
             label="Total"
-            value={compactNumber(totals.legion + totals.swarm + totals.faceless)}
-            zones={compactNumber(zoneCount)}
             strong
+            bots={figure(totals.legion + totals.swarm + totals.faceless, changeLabel !== null)}
+            zones={exactNumber(zoneCount)}
           />
-          {/* Two kinds of nothing, matching the two shades of grey on the map. */}
-          <Line label="Emptied" value="—" zones={compactNumber(zones.emptied)} />
-          <Line label="Never played" value="—" zones={compactNumber(zones.neverPlayed)} />
+          {/* Smaller than the total it hangs off: the run's movement is context for
+              the level above it, not a competing headline. */}
+          {since && (
+            <div
+              style={{
+                marginLeft: 15,
+                marginBottom: 10,
+                fontSize: 11,
+                color: "var(--text-dim)",
+              }}
+            >
+              {since.label}{" "}
+              <span className="tabular" style={{ color: "var(--text)" }}>
+                {figure(since.value, true)}
+              </span>{" "}
+              bots
+            </div>
+          )}
+          {/* Two kinds of nothing, matching the two shades of grey on the map. No
+              bot figure: there is nothing standing in either of them. */}
+          <Row
+            label="Empty"
+            lit={(emphasis & EMPHASIS.empty) !== 0}
+            onSelect={onEmphasis ? () => onEmphasis("empty") : undefined}
+            zones={exactNumber(zones.emptied)}
+          />
+          <Row
+            label="Never played"
+            lit={(emphasis & EMPHASIS.neverPlayed) !== 0}
+            onSelect={onEmphasis ? () => onEmphasis("neverPlayed") : undefined}
+            zones={exactNumber(zones.neverPlayed)}
+          />
         </>
       )}
+
+      {/* Subordinate rows - a country's regions - sit under the totals they break
+          down and above the hover, which is about one zone and belongs last. */}
+      {children}
 
       <div style={{ height: 1, background: "var(--hairline)", margin: "12px 0 10px" }} />
       <div style={{ minHeight: 46 }}>

@@ -99,6 +99,14 @@ interface Props {
   onFlashpoint: (flashpoint: Flashpoint | null) => void;
 }
 
+/**
+ * Amber, the color the recurrence rings and the board marks already use.
+ *
+ * Being the flashpoint's day is not a faction fact, so it must not borrow red,
+ * green or purple - the same rule the MAZ rings follow.
+ */
+const BOARD_ACCENT = "rgb(255, 200, 87)";
+
 const iso = (epoch: string, day: number): string =>
   dayToDate(epoch, day).toISOString().slice(0, 10);
 
@@ -125,11 +133,17 @@ export function TimelapseBar({
   onFlashpoint,
 }: Props) {
   const chosen = flashpoints.find((f) => f.id === activeFlashpoint) ?? null;
-  // A flashpoint's own note replaces the period caveat while one is picked: both
-  // describe the span on screen, and two of them at once is one too many.
-  const caveat =
-    chosen?.blurb ??
-    (activePeriod ? (PERIODS.find((p) => p.label === activePeriod)?.caveat ?? null) : null);
+  /** The playhead is standing on the days the flashpoint is named for. */
+  const onBoardDay =
+    chosen !== null && day !== null && day >= chosen.boardStart && day <= chosen.boardEnd;
+  // A picked flashpoint suppresses the period caveat rather than replacing it: the
+  // impact panel above already carries the flashpoint's own note beside its label,
+  // and the same sentence twice on one screen reads as two different claims.
+  const caveat = chosen
+    ? null
+    : activePeriod
+      ? (PERIODS.find((p) => p.label === activePeriod)?.caveat ?? null)
+      : null;
   const toDay = (value: string) =>
     value ? dateToDay(epoch, new Date(`${value}T00:00:00Z`)) : null;
 
@@ -161,15 +175,43 @@ export function TimelapseBar({
             thing that holds the track still. */}
         <span
           className="display tabular"
-          style={{ fontSize: 17, whiteSpace: "nowrap", width: 152, flexShrink: 0 }}
+          style={{
+            fontSize: 17,
+            whiteSpace: "nowrap",
+            width: 152,
+            flexShrink: 0,
+            // The date itself carries the state, so the fact that this is the day
+            // the flashpoint names cannot be missed while watching the map.
+            color: onBoardDay ? BOARD_ACCENT : undefined,
+          }}
         >
           {day !== null
             ? dayToDate(epoch, day).toLocaleDateString("en-US", {
                 day: "2-digit",
                 month: "short",
                 year: "numeric",
+                // A day is a UTC date. Rendering it in the reader's own zone puts
+                // the playhead a day behind the panel everywhere west of UTC.
+                timeZone: "UTC",
               })
             : "—"}
+        </span>
+
+        {/* Reserved only while a flashpoint is loaded, and fixed then, for the same
+            reason the date is: appearing beside the track would resize it on the
+            frames that matter most. With no flashpoint there is nothing to reserve
+            for, and on a 390 px screen the track needs every pixel. */}
+        <span
+          className="eyebrow"
+          style={{
+            width: chosen ? 108 : 0,
+            flexShrink: 0,
+            fontSize: 10,
+            color: BOARD_ACCENT,
+            visibility: onBoardDay ? "visible" : "hidden",
+          }}
+        >
+          {chosen && chosen.boardEnd > chosen.boardStart ? "Flashpoint days" : "Flashpoint day"}
         </span>
 
         {/* Nothing that changes width may sit after this. The counts used to,
@@ -242,7 +284,11 @@ export function TimelapseBar({
               onFlashpoint(flashpoints.find((f) => f.id === e.target.value) ?? null)
             }
             aria-label="Fly to a flashpoint"
-            style={{ ...control, maxWidth: 210 }}
+            // Wants 260 px, because clipping the date off the end leaves two
+            // flashpoints in the same place indistinguishable - but it yields on a
+            // narrow screen rather than overflowing the row and clipping the label
+            // from the *left*, which is worse.
+            style={{ ...control, flex: "1 1 260px", minWidth: 0 }}
           >
             <option value="">Flashpoint…</option>
             {flashpoints.map((f) => (
@@ -257,8 +303,12 @@ export function TimelapseBar({
           className="eyebrow tabular"
           style={{ fontSize: 11, color: "var(--text-dim)", whiteSpace: "nowrap" }}
         >
+          {/* The span, and how many zones changed hands on the day on screen. No
+              count of the amber rings: a MAZ ring is a trailing 30-day window, so
+              the number rises and falls with the window rather than with anything
+              happening, and it answers no question the rings do not answer better. */}
           {bounds ? `${(bounds.max - bounds.min).toLocaleString()} days · ` : ""}
-          {marks.toLocaleString()} MAZ · {flips.toLocaleString()} flips
+          {flips.toLocaleString()} changed hands
           {backdrop === "cumulative" ? ` · ${claimed.toLocaleString()} claimed` : ""}
         </span>
       </div>

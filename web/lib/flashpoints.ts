@@ -42,6 +42,15 @@ export const FRAME_RATIO = 5 / 3;
  */
 export const FLASHPOINT_DAYS_PER_SECOND = 2.5;
 
+/**
+ * Days per second while the playhead stands on the flashpoint's own days.
+ *
+ * A third of a day a second, so each board day holds the screen for three seconds. Those
+ * days are the reason the run exists, and at the surrounding pace they pass in under half a
+ * second - the same fraction of the run as any other day, which is precisely wrong.
+ */
+export const FLASHPOINT_BOARD_DAYS_PER_SECOND = 1 / 3;
+
 /** Days a flashpoint's marks keep fading for after the board window closes. */
 export const FLASHPOINT_TRAIL_DAYS = 10;
 

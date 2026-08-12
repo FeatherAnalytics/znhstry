@@ -12,6 +12,7 @@ import {
 } from "@deck.gl/core";
 import type { ZoneDisplay, ZoneGeometry } from "@/lib/geometry";
 import type { BoundaryLayer } from "@/lib/boundaries";
+import { EMPHASIS, EMPHASIS_ALL } from "@/lib/emphasis";
 
 // A 15-degree graticule, drawn dimmer than any boundary. It is orientation of
 // last resort, not decoration.
@@ -72,6 +73,7 @@ export interface RangeRing {
   radiusKm: number;
 }
 
+
 export interface ZoneMapProps {
   geometry: ZoneGeometry;
   /** What to draw. Filled by the paint files, then by the exact counts. */
@@ -106,6 +108,14 @@ export interface ZoneMapProps {
   only?: Uint8Array | null;
   /** Bumped when `only` is mutated in place, which identity alone cannot show. */
   onlyVersion?: number;
+  /**
+   * Categories to keep lit, as `EMPHASIS` bits. `EMPHASIS_ALL` lights everything.
+   *
+   * Dims rather than hides, for the same reason a picked area does: the rest of
+   * the world is what makes the lit part legible, and hiding four categories out
+   * of five at world zoom is indistinguishable from the map emptying.
+   */
+  emphasis?: number;
   ring: RangeRing | null;
   /**
    * Layers drawn over the dots and the boundaries.
@@ -133,6 +143,7 @@ export function ZoneMap({
   draw,
   only,
   onlyVersion,
+  emphasis = EMPHASIS_ALL,
   ring,
   overlays,
   onViewStateChange,
@@ -258,6 +269,8 @@ export function ZoneMap({
     const { slots, length } = membership;
     const mask = only ?? null;
     const masked = filter !== null || mask !== null;
+    /** True while the reader has singled out some of the five categories. */
+    const isolating = emphasis !== EMPHASIS_ALL;
 
     // Anything that is not the date invalidates every row, because it changes
     // how a row is drawn rather than what the zone holds.
@@ -267,7 +280,7 @@ export function ZoneMap({
     // the cumulative backdrop is the one asking, so keying on it unconditionally
     // marked every frame a full rebuild and this stayed incremental in name only.
     const maskKey = mask ? `m${onlyVersion ?? 0}` : "";
-    const key = `${length}|${draw}|${filter ? `f${filterVersion.current}` : ""}|${maskKey}`;
+    const key = `${length}|${draw}|${filter ? `f${filterVersion.current}` : ""}|${maskKey}|e${emphasis}`;
     const full = shadowKey.current !== key;
     shadowKey.current = key;
 
@@ -304,6 +317,16 @@ export function ZoneMap({
         muted = filter !== null && filter[idx] === 0;
       }
 
+      // A category the reader has not asked for is context. It is pushed further
+      // down than a zone outside a picked area, and the asked-for one is pushed up,
+      // because the categories overlap on the same dots: telling an isolated grey
+      // from a dimmed grey needs the gap to be wide at both ends.
+      //
+      // An empty zone is grey whoever nominally holds it, so it answers to the
+      // empty bit rather than to its faction bits.
+      const off = (emphasis & (1 << (magnitude === 0 ? 0 : pk >> 6))) === 0;
+      const lit = isolating && !off && !muted;
+
       if (hidden) {
         // Radius *and* alpha, because `radiusMinPixels` would otherwise still
         // put a 0.6 px dot on screen for a zone the view is hiding.
@@ -314,25 +337,34 @@ export function ZoneMap({
         colorArray[o] = palette[rgb];
         colorArray[o + 1] = palette[rgb + 1];
         colorArray[o + 2] = palette[rgb + 2];
-        colorArray[o + 3] = muted ? 26 : 215;
+        // 4, not the 26 a picked area uses. The categories are wildly unequal -
+        // 33,861 empty zones against 1.6M held ones - so a dimmed majority still
+        // sums to more color than the isolated minority unless it goes most of the
+        // way out. It stays above zero so the shape of the world is still there.
+        colorArray[o + 3] = off ? 4 : muted ? 26 : lit ? 255 : 215;
         // Counts span six orders of magnitude, so size is logarithmic and
         // capped in pixels. Color carries who holds a zone; size stays quiet.
-        radiusArray[r] = muted ? 300 : radiusFor[magnitude];
+        radiusArray[r] = off || muted ? 300 : radiusFor[magnitude];
       } else {
         // An empty zone is grey whoever nominally holds it: with no bots there
         // is nothing to own, and coloring it by faction overstates control.
         // This branch is only ever a zone that has been played and fought down
         // to nothing - part of the story. One never touched in fourteen years
         // is terrain, and is drawn by the layer below.
+        //
+        // Grey against a dark basemap has the least headroom of anything here, so
+        // isolating it takes the alpha most of the way up and grows the dot: at
+        // 110 it is deliberately quiet, which is exactly wrong once it is the
+        // subject.
         colorArray[o] = palette[0];
         colorArray[o + 1] = palette[1];
         colorArray[o + 2] = palette[2];
-        colorArray[o + 3] = muted ? 12 : 110;
-        radiusArray[r] = 400;
+        colorArray[o + 3] = off ? 4 : muted ? 12 : lit ? 255 : 110;
+        radiusArray[r] = lit ? 900 : 400;
       }
     }
     drawn.current = length;
-  }, [geometry, membership, display, radiusFor, version, filter, draw, only, maskVersion]);
+  }, [geometry, membership, display, radiusFor, version, filter, draw, only, maskVersion, emphasis]);
 
   /**
    * Terrain: built as tiles land and when the filter moves, and never per date.
@@ -348,6 +380,10 @@ export function ZoneMap({
     const pointArray = terrainPoints.current;
     const backToSlot = terrainToSlot.current;
     const { slotToIdx, everActiveBySlot, positions } = geometry;
+    // Terrain is the faintest thing on the map at 55, so isolating it has to lift
+    // it a long way to read as chosen rather than as slightly less ignored.
+    const off = (emphasis & EMPHASIS.neverPlayed) === 0;
+    const lit = !off && emphasis !== EMPHASIS_ALL;
     let n = 0;
 
     for (let slot = 0; slot < terrainCount; slot++) {
@@ -360,11 +396,11 @@ export function ZoneMap({
       colorArray[o] = palette[0];
       colorArray[o + 1] = palette[1];
       colorArray[o + 2] = palette[2];
-      colorArray[o + 3] = filter !== null && filter[idx] === 0 ? 12 : 55;
+      colorArray[o + 3] = off ? 4 : filter !== null && filter[idx] === 0 ? 12 : lit ? 200 : 55;
       n++;
     }
     terrain.current = n;
-  }, [geometry, terrainCount, filter, draw]);
+  }, [geometry, terrainCount, filter, draw, emphasis]);
 
   const terrainData = useMemo(
     () => ({
@@ -374,7 +410,7 @@ export function ZoneMap({
         getFillColor: { value: terrainColors.current, size: 4 },
       },
     }),
-    [geometry, terrainCount, filter, draw],
+    [geometry, terrainCount, filter, draw, emphasis],
   );
 
   // Full strength out to zoom 5, gone by 7. Our rings are a world-scale
@@ -426,7 +462,7 @@ export function ZoneMap({
     // Every input that can change what is in the rows. The arrays are mutated
     // in place, so identity alone would never say so. The row *count* no longer
     // moves with the date - see `membership`.
-    [membership, positionsFor, display, version, filter, draw, only, maskVersion],
+    [membership, positionsFor, display, version, filter, draw, only, maskVersion, emphasis],
   );
 
   const graticuleData = useMemo(() => graticule(), []);
@@ -497,7 +533,10 @@ export function ZoneMap({
     new ScatterplotLayer({
       id: "terrain",
       data: terrainData,
-      getRadius: 260,
+      // Grown while it is the isolated category: a 260 m dot at world zoom is a
+      // sub-pixel smudge, and alpha alone cannot carry "this is the subject".
+      getRadius:
+        emphasis !== EMPHASIS_ALL && (emphasis & EMPHASIS.neverPlayed) !== 0 ? 520 : 260,
       radiusUnits: "meters",
       radiusMinPixels: 0.6,
       radiusMaxPixels: 9,

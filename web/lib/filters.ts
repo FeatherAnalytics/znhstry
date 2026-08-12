@@ -50,7 +50,20 @@ export function areaFilter(
   return mask;
 }
 
-/** Mask of zones within `radiusKm` of a point, by great-circle distance. */
+/**
+ * Mask of zones within `radiusKm` of a point, by great-circle distance.
+ *
+ * A latitude band runs in front of the haversine, and it is worth the two lines: this
+ * walks all 2,682,442 zones on every selection, and a 30-mile circle rejects
+ * essentially all of them. One subtraction and a comparison per zone turns the trig
+ * from 2.68M calls into a few thousand.
+ *
+ * Safe because a degree of latitude is never shorter than 110.574 km, so a band of
+ * `radiusKm / 110.574` is always at least as wide as the circle and cannot exclude a
+ * zone the haversine would have kept. Longitude gets no such band - a degree of it
+ * shrinks to nothing at the poles, so the bound would have to be latitude-dependent
+ * and the band already does the work.
+ */
 export function radiusFilter(
   geometry: ZoneGeometry,
   lat: number,
@@ -58,9 +71,11 @@ export function radiusFilter(
   radiusKm: number,
 ): ZoneFilter {
   const mask = new Uint8Array(geometry.size);
+  const band = radiusKm / 110.574;
   for (let i = 0; i < geometry.size; i++) {
     const zoneLat = geometry.latitude[i];
-    if (Number.isNaN(zoneLat)) continue;
+    // NaN fails every comparison, so a zone whose tile has not landed falls out here.
+    if (!(Math.abs(zoneLat - lat) <= band)) continue;
     mask[i] = haversineKm(lat, lon, zoneLat, geometry.longitude[i]) <= radiusKm ? 1 : 0;
   }
   return mask;

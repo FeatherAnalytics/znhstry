@@ -304,8 +304,10 @@ export function StatsPanel({
         {hovered ? (
           <>
             <div style={{ fontWeight: 600 }}>{hovered.name || "Unnamed zone"}</div>
-            {/* Region is omitted, not blanked, when the upstream region_id
-                contradicts the zone's own country. */}
+            {/* Both labels are the zone's own ids, which is what the game shows.
+                For 447 zones the pair reads as nonsense - a Polish voivodeship
+                beside the Solomon Islands - and it is upstream's nonsense, kept so
+                the hover agrees with the region totals counted the same way. */}
             {(hovered.region || hovered.country) && (
               <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
                 {[hovered.region, hovered.country].filter(Boolean).join(" · ")}

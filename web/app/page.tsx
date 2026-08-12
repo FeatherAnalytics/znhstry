@@ -17,6 +17,7 @@ import { loadBoundaries, type BoundaryLayer } from "@/lib/boundaries";
 import { HistoryBar, type HistoryMode } from "@/components/HistoryBar";
 import {
   areaFilter,
+  inArea,
   radiusFilter,
   singleZoneFilter,
   viewportFilter,
@@ -270,8 +271,7 @@ export default function Page() {
       let north = -90;
       for (let slot = 0; slot < geometry.count; slot++) {
         const idx = geometry.slotToIdx[slot];
-        if (geometry.country[idx] !== next.countryId) continue;
-        if (next.regionId !== null && geometry.region[idx] !== next.regionId) continue;
+        if (!inArea(geometry, idx, next.countryId, next.regionId)) continue;
         const lat = geometry.latitude[idx];
         const lon = geometry.longitude[idx];
         if (lon < west) west = lon;

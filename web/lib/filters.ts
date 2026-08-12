@@ -52,12 +52,30 @@ export function areaFilter(
   countryId: number,
   regionId: number | null,
 ): ZoneFilter {
-  const { country, region, size } = geometry;
-  const mask = new Uint8Array(size);
-  for (let i = 0; i < size; i++) {
-    mask[i] = (regionId === null ? country[i] === countryId : region[i] === regionId) ? 1 : 0;
+  const mask = new Uint8Array(geometry.size);
+  for (let i = 0; i < geometry.size; i++) {
+    mask[i] = inArea(geometry, i, countryId, regionId) ? 1 : 0;
   }
   return mask;
+}
+
+/**
+ * Whether one zone belongs to an area, by the same rule the mask uses.
+ *
+ * Exported so the camera cannot frame a different set of zones than the map
+ * highlights. Northwest Territories is the case that exposes a second copy of
+ * this test: 198 zones, of which 63 are in Canada, so a framing pass that also
+ * required the country would fit the view to a third of what it lit up.
+ */
+export function inArea(
+  geometry: ZoneGeometry,
+  idx: number,
+  countryId: number,
+  regionId: number | null,
+): boolean {
+  return regionId === null
+    ? geometry.country[idx] === countryId
+    : geometry.region[idx] === regionId;
 }
 
 /**

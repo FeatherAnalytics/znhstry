@@ -33,7 +33,20 @@ export function viewportFilter(
   return mask;
 }
 
-/** Mask of zones in one country, or in one region of it. */
+/**
+ * Mask of zones in one country, or in one region.
+ *
+ * The two are separate questions and the game answers them from separate fields:
+ * its own site counts a country by `country_id` and a region by `region_id`, so
+ * Poland is 44,080 zones while West Pomeranian Voivodeship is 1,890 — and 155 of
+ * that region's zones are not in Poland at all. Matching that is what lets a
+ * number here be checked against the one a player is looking at.
+ *
+ * So a region ignores the country entirely. Selecting Northwest Territories draws
+ * 198 zones across Canada and the DRC, which is strange to look at and is what the
+ * game says. It also means regions do not sum to their country: Poland's total
+ * 44,235 against a country of 44,080.
+ */
 export function areaFilter(
   geometry: ZoneGeometry,
   countryId: number,
@@ -42,10 +55,7 @@ export function areaFilter(
   const { country, region, size } = geometry;
   const mask = new Uint8Array(size);
   for (let i = 0; i < size; i++) {
-    // country_id decides. A zone whose region belongs to another country is an
-    // upstream inconsistency, and the country is the side that matches the
-    // coordinates, so a region filter still requires the country to agree.
-    mask[i] = country[i] === countryId && (regionId === null || region[i] === regionId) ? 1 : 0;
+    mask[i] = (regionId === null ? country[i] === countryId : region[i] === regionId) ? 1 : 0;
   }
   return mask;
 }

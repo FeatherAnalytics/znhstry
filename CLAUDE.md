@@ -581,7 +581,7 @@ numbers it does not already have. A normal run costs one index page and stops.
   recent observations, which may be years. We recompute deltas from `changelog`.
   `TotalDelta` is also absolute (churn), never negative. Not extracted.
 - **`Description` is not unique** — many zones share a name. `ZoneId` is the only key.
-- **`zones.CountryId` is authoritative; `zones.RegionId` is the corrupt field.** For 447
+- **A region is not a subset of its country, and that is the game's own model.** For 447
   zones the region they point at belongs to a different country, and coordinates back the
   country every time: 155 zones pointing at West Pomeranian Voivodeship (Poland) sit at
   162°E, -10° in the Solomon Islands; 135 pointing at Northwest Territories (Canada) are in
@@ -598,9 +598,34 @@ numbers it does not already have. A normal run costs one index page and stops.
   Solomon Islands zones point at 2452 when that country's regions are 2746–2753, so it is
   wholesale wrong rather than off by one. Not worth a repair rule that fires once.
 
-  The data dictionary documents both join paths as equivalent. They are not. Trust
-  `CountryId`, and drop the region label when it disagrees rather than printing a
-  contradiction.
+  **QONQR's own site counts a country by `CountryId` and a region by `RegionId`,
+  independently, and we match it.** Their figures: Poland 44,080 zones, West Pomeranian
+  Voivodeship 1,890, Northwest Territories 198. The first comes from `CountryId` and the
+  other two from `RegionId` alone, contradicted zones included. So the region ids are the
+  game's real state rather than an import artifact, and its hierarchy genuinely files a
+  zone at 162°E in the Solomon Islands under a Polish voivodeship.
+
+  **The cost is that regions do not sum to their country**, and anything presenting them
+  as a partition has to say so:
+
+  | Country | By `CountryId` | Its regions by `RegionId` |
+  |---|---|---|
+  | Poland | 44,080 | 44,235 |
+  | Ukraine | 26,105 | 26,173 |
+  | Canada | 7,688 | 7,823 |
+  | Azerbaijan | 4,647 | 4,734 |
+  | Solomon Islands | 2,736 | 2,581 |
+  | DR Congo | 21,443 | 21,308 |
+
+  Selecting Northwest Territories therefore draws 198 zones across Canada and the Congo,
+  and the camera frames both. That is strange to look at and is what the game says. The
+  alternative — a total no player can reconcile against their own screen — is worse than a
+  region that reaches across an ocean.
+
+  The data dictionary documents both join paths as equivalent. They are not, and neither
+  is a correction of the other: `CountryId` answers "where is this zone", `RegionId`
+  answers "which region does the game file it under", and a query has to know which
+  question it is asking.
 - **`battlestats` column names contain spaces** and need backticks.
   `Country = 'Atlantis'` marks **tournament** zones — see below. Not test data.
 - **Battlestats is a daily leaderboard, not a log of every fight.** QONQR publishes a fixed
@@ -673,10 +698,13 @@ against a threshold, because thresholds on upstream drift are brittle.
   boundary an event lands on — the preceding event fails `next > B` and the event itself
   fails `B > observed`, so no row matches, and 19,062 checkpoints vanish.
   `tests/assert_one_checkpoint_per_zone_boundary.sql` guards it.
-- **Join regions on `region_id` *and* `country_id`.** On `region_id` alone, 447 zones read
-  "Solomon Islands / West Pomeranian Voivodeship". `dim_zone` matches both keys, so a
-  contradicted region is null rather than wrong, and
-  `tests/assert_region_label_agrees_with_country.sql` fails if one appears.
+- **Join regions on `region_id` alone, and never add `country_id` to make it tidy.** Adding
+  it drops 447 zones from their regions and puts every region total 155, 135, 87 or 68
+  below what QONQR's own site reports — a number a player can read off their screen and we
+  cannot match. The contradictory pairing it prevents ("Solomon Islands / West Pomeranian
+  Voivodeship") is upstream's, not ours.
+  `tests/assert_region_membership_matches_the_game.sql` fails if a zone with a `region_id`
+  ever loses its label.
 - **Do not hardcode a max ZoneId.** New zones appear above the previous maximum. Ingest
   discovers them because they arrive in the daily CSVs like any other change.
 - **Every input to a deck.gl binary attribute belongs in its `updateTriggers`.** `ZoneMap`

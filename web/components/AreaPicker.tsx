@@ -25,12 +25,14 @@ interface Props {
 /**
  * Countries and regions, counted from the geometry that has actually loaded.
  *
- * A region is listed under the country its own `countryid` claims, except that
- * zones are counted by their `country_id`, which is the authoritative one. The
- * two disagree for 447 zones and the coordinates side with the country every
- * time, so a region whose country is contradicted simply comes up empty rather
- * than being quietly reassigned. The upstream database is the source of truth;
- * this only declines to print a contradiction.
+ * Counted the way the game counts: a country by `country_id`, a region by
+ * `region_id`, and the two independently. QONQR's own site reports Poland at
+ * 44,080 zones and West Pomeranian Voivodeship at 1,890, and 155 of that region's
+ * zones sit in the Solomon Islands. Both numbers are theirs and this matches both.
+ *
+ * A region is listed under the country its own row claims, which is where a player
+ * would look for it. It is therefore not a subset of that country, and the picker's
+ * region counts are not expected to sum to the country above them.
  */
 function buildIndex(lookups: Lookups, geometry: ZoneGeometry): Area[] {
   const countryZones = new Map<number, number>();
@@ -41,10 +43,7 @@ function buildIndex(lookups: Lookups, geometry: ZoneGeometry): Area[] {
     const country = geometry.country[idx];
     const region = geometry.region[idx];
     countryZones.set(country, (countryZones.get(country) ?? 0) + 1);
-    // Key on the pair so a region only counts zones whose country agrees.
-    // Both ids fit well inside 1e6, and a JS number holds the product exactly.
-    const key = region * 1e6 + country;
-    regionZones.set(key, (regionZones.get(key) ?? 0) + 1);
+    regionZones.set(region, (regionZones.get(region) ?? 0) + 1);
   }
 
   const areas: Area[] = [];
@@ -59,7 +58,7 @@ function buildIndex(lookups: Lookups, geometry: ZoneGeometry): Area[] {
 
   for (const [id, [name, countryId]] of Object.entries(lookups.regions)) {
     const regionId = Number(id);
-    const zones = regionZones.get(regionId * 1e6 + countryId) ?? 0;
+    const zones = regionZones.get(regionId) ?? 0;
     if (zones > 0) {
       areas.push({
         countryId,

@@ -423,11 +423,12 @@ def _build(con: duckdb.DuckDBPyConnection, tables: Path, meta: dict[str, Any]) -
         [(int(code), name) for code, name in meta["factions"].items()],
     )
 
-    # `country_id` is authoritative and `region_id` is the corrupt field: for 447 zones
-    # the region they point at belongs to a different country, and the coordinates back
-    # the country every time. So the region label survives only where the region's own
-    # country agrees, and a contradicted one comes back null rather than reaching across
-    # an ocean. The same rule the map applies.
+    # Both labels come from the zone's own ids, which is how the game reads them: its
+    # site counts a country by `country_id` and a region by `region_id`, independently,
+    # so Poland is 44,080 zones while West Pomeranian Voivodeship is 1,890 of which 155
+    # sit in the Solomon Islands. Grouping the same way is what lets a figure here be
+    # checked against a player's screen, at the cost of regions not summing to their
+    # country - Poland's total 44,235 against 44,080.
     con.execute(f"""
         create or replace table zone as
         select z.idx,
@@ -437,8 +438,8 @@ def _build(con: duckdb.DuckDBPyConnection, tables: Path, meta: dict[str, Any]) -
                z.name,
                z.country_id,
                c.name as country,
-               case when r.country_id = z.country_id then z.region_id end as region_id,
-               case when r.country_id = z.country_id then r.name end     as region,
+               z.region_id,
+               r.name as region,
                z.ever_active
         from read_parquet('{tables / "zone.parquet"}') z
         left join country c on c.country_id = z.country_id

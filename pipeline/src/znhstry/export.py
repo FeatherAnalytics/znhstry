@@ -329,9 +329,11 @@ def _export_lookups(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]
             "countries": countries,  # id -> [iso_code, name]
             "regions": regions,  # id -> [name, country_id]
             "note": (
-                "A zone's country_id is authoritative. Where regions[region_id][1] "
-                "disagrees with it the region is wrong, not the country -- verified "
-                "against coordinates. Suppress the region label in that case."
+                "regions[region_id][1] is the region's own country. It disagrees with "
+                "the zone's country_id for 447 zones, and the game files those under "
+                "the region regardless -- its site counts regions by region_id and "
+                "countries by country_id, so a region is not a subset of its country. "
+                "Group the same way or your totals will not match a player's screen."
             ),
         },
     )
@@ -1280,12 +1282,16 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
         con,
     )
 
-    # A region only counts zones whose country agrees with it. For 447 zones the
-    # region's own country contradicts the zone's, and the coordinates side with
-    # the country every time - 155 zones filed under a Polish voivodeship sit in
-    # the Solomon Islands. The join drops those rather than charting a region
-    # that reaches across an ocean, which is the same rule the map's area filter
-    # applies.
+    # Grouped on region_id alone, which is how the game reads it: QONQR's own site
+    # reports 1,890 zones in West Pomeranian Voivodeship and 198 in Northwest
+    # Territories, both of which are the region_id counts. Country totals there come
+    # from country_id - Poland is 44,080 either way - so the two fields are read
+    # independently and a region is not a subset of its country.
+    #
+    # 447 zones make that visible, 155 of them filed under a Polish voivodeship while
+    # sitting in the Solomon Islands. Charting them under Poland is what the game does,
+    # and a series a player cannot reconcile against their own screen is worth less
+    # than one that reaches across an ocean.
     region = _write_columnar(
         out / "series" / "region.bin.br",
         f"""
@@ -1294,7 +1300,7 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
                sum(e.faceless_delta) as faceless
         from zone_events e
         join scope s on s.zone_id = e.zone_id
-        join stg_regions r on r.region_id = e.region_id and r.country_id = e.country_id
+        join stg_regions r on r.region_id = e.region_id
         group by 1, 2 {moved}
         order by 1, 2
         """,

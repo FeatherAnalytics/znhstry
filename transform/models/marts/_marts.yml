@@ -15,9 +15,8 @@ models:
       whatever gap that was - never assume a fixed window.
 
       The grain itself is guarded by
-      `assert_zone_events_unique_per_observation`, and the three zones with no
-      row in `zones` by `assert_orphan_zones_survive_the_dim_zone_join` --
-      neither is expressible as a generic test here.
+      `assert_zone_events_unique_per_observation`, which is not expressible
+      as a generic test here.
     columns:
       - name: zone_id
         description: >

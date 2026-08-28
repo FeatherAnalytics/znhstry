@@ -733,23 +733,18 @@ numbers it does not already have. A normal run costs one index page and stops.
 
 ### changelog does not perfectly reconcile to zones
 
-Cumulative deltas from `changelog` land ~0.004% above the `zones` table. The gap decomposes
-exactly, with no remainder:
+Cumulative deltas from `changelog` land slightly above the `zones` table. The gap comes
+from **~1,429 zones (0.09%)** whose last event disagrees with their `zones` row, always
+with the event higher. Both come from the same daily CSV, so this is the game's own drift
+rather than a mirror's two-step import, and it is expected to persist.
 
-| Faction | Total gap | 3 orphan zones | 1,429 divergent zones |
-|---|---|---|---|
-| Legion | 441,292 | 0 | 441,292 |
-| Swarm | 1,070,874 | 722,697 | 348,177 |
-| Faceless | 160,730 | 0 | 160,730 |
+Three zones (`2836390`, `2836391`, `2836392`) formerly existed in `changelog` but not in
+`zones`, contributing 722,697 Swarm bots to the gap. QONQR's `zones.csv` added them
+around 2026-08-25, so they now join `dim_zone` normally and the gap has narrowed.
+`fct_zone_events` still left-joins `dim_zone` so any future orphans land with a null
+`country_id` rather than being dropped.
 
-- **3 orphan zones** (`2836390`, `2836391`, `2836392`) exist in `changelog` but not in
-  `zones`. They land in `fct_zone_events` with a null `country_id`, so they count toward
-  `fct_global_daily` but not `fct_country_daily`. Do not "fix" this by inner-joining.
-- **1,429 zones (0.09%)** have a last event that disagrees with their `zones` row, always
-  with the event higher. Both come from the same daily CSV now, so this is the game's own
-  drift rather than a mirror's two-step import, and it is expected to persist.
-
-0.004% of bots is immaterial for a visualization. It is documented rather than tested
+The remaining gap is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
 ### Invariants — each one has a failure mode that is silent

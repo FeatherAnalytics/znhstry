@@ -5,8 +5,8 @@
  *
  * The definitions ride in `meta.json` because they are four kilobytes and the manifest is
  * already fetched; only the impact series costs a request, and there is one shard for all
- * of them rather than one each. Requests are the binding constraint on an `r2.dev` URL
- * with no CDN in front of it, which is the same reason the tile grid is 16 degrees.
+ * of them rather than one each. Requests are round trips, which is the same reason the
+ * tile grid is 16 degrees.
  *
  * Nothing here reaches into the zone buffers. The marks are `overlays`, the circle is the
  * existing `ring` prop, and the dimming is an ordinary focus mask.

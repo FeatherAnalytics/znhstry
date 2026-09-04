@@ -72,12 +72,11 @@ _ITEMSIZE = {"uint8": 1, "uint16": 2, "uint32": 4, "int32": 4, "float32": 4}
 # delta runs: lat+lon+idx measured 6.88 MB at 2 degrees, 6.04 at 4, 5.56 at 8.
 #
 # 16, not 8, because the binding constraint turned out to be *requests* rather
-# than bytes. A cold load was 1,659 of them, and the data is served from an
-# r2.dev URL with no CDN in front, which is rate-limited and documented as not
-# for production traffic. 16 degrees takes the world from 474 populated tiles to
-# about 150 and compresses slightly better on top. What it costs is precision in
-# the nearest-first ordering: the first tile to land is four times the area, so
-# "near the reader" is a coarser claim than it was.
+# than bytes: a cold load was 1,659 of them, each a round trip. 16 degrees takes
+# the world from 474 populated tiles to about 150 and compresses slightly better
+# on top. What it costs is precision in the nearest-first ordering: the first
+# tile to land is four times the area, so "near the reader" is a coarser claim
+# than it was.
 TILE_DEGREES = 16
 
 # Fixed-point coordinates, 1e-4 degrees ~ 11 m. A zone is about a kilometre
@@ -432,8 +431,8 @@ def _export_flashpoints(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     the manifest is fetched by every visit anyway - so folding them in costs 3% of a
     file already paid for and saves a request that would only ever follow it. The
     series are ~10 KB for all of them together, which is not worth ten objects and
-    ten possible requests: requests are the binding constraint on an `r2.dev` URL
-    with no CDN, the same reason the tile grid is 16 degrees.
+    ten possible requests: requests are round trips, the same reason the tile grid is
+    16 degrees.
 
     One shard also means there is no tree to clear. It is overwritten in place every
     run and cannot strand an orphan the way a per-flashpoint layout could.

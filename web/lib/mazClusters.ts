@@ -52,9 +52,8 @@ export interface Coord {
  * `onProgress` reports tiles finished out of the total, because this is 168
  * requests and a page that says nothing for nine megabytes reads as broken.
  *
- * Tiles are fetched a few at a time rather than all at once: the data host is an
- * `r2.dev` URL with no CDN in front of it, and requests rather than bytes are
- * the binding constraint there.
+ * Tiles are fetched a few at a time rather than all at once: 168 requests in
+ * flight together is what a browser queues, not what it sends.
  */
 export async function loadZoneCoords(
   base: string,

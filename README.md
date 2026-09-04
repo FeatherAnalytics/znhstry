@@ -90,6 +90,13 @@ The 61,517 rows of history behind that came from the community scrape at
 Report numbers are sparse across their range, so collecting them directly would have
 meant roughly 130,000 requests to a server that did not need them.
 
+The Atlantis tournament leaderboard is the third source. `portal.qonqr.com/Atlantis` is one
+page carrying each faction's launch leaderboard, the nineteen tournament zones' garrisons,
+and the month's rules. It is read once an hour while a tournament is running and not at all
+between them: the page states its own schedule, so the collector knows when the tournament
+ends and idles until the 1st of the next month. Zones are keyed by position rather than by
+the names the site gives them, because those change every month.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

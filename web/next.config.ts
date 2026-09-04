@@ -50,10 +50,10 @@ process.env.NEXT_PUBLIC_DATA_ORIGIN = dataOrigin;
 delete process.env.NEXT_PUBLIC_R2_URL;
 
 const nextConfig: NextConfig = {
-  // Static export for GitHub Pages. The payloads are not part of it - they are
-  // served from object storage, which is why NEXT_PUBLIC_DATA_ORIGIN exists.
+  // Static export, served from the domain root as Workers static assets. The
+  // payloads are not part of it - they are served from object storage, which is
+  // why NEXT_PUBLIC_DATA_ORIGIN exists.
   output: "export",
-  basePath: process.env.NEXT_PUBLIC_BASE_PATH ?? "",
   images: { unoptimized: true },
   trailingSlash: true,
   env: {

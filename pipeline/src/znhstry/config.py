@@ -113,7 +113,7 @@ EARTH_RADIUS_KM = 6371.0088
 PUBLIC_DATA_ORIGIN = (
     os.environ.get("NEXT_PUBLIC_DATA_ORIGIN")
     or os.environ.get("NEXT_PUBLIC_R2_URL")
-    or "https://pub-110a5c98bf1e495fa02397b90fd12708.r2.dev"
+    or "https://data.znhstry.com"
 )
 
 # Fetched payloads land here and are reused. ~1,480 files over an r2.dev URL with no

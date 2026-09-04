@@ -5,7 +5,7 @@ exposures:
     label: Zone History
     type: application
     maturity: high
-    url: https://www.featheranalytics.dev/znhstry/
+    url: https://znhstry.com/
     description: >
       The site itself. Not a BI tool reading the warehouse live -- `znhstry export`
       slices these marts into static binaries under `dist/data/global/`, uploads them

@@ -20,7 +20,8 @@ game. See "Where the data comes from".
   takes ~25 s over 9.88M events.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
-- **Hosting**: the site on GitHub Pages, the data in Cloudflare R2. Two deployments.
+- **Hosting**: the site at `znhstry.com` as Cloudflare Workers static assets (`wrangler.jsonc`),
+  the data in Cloudflare R2 at `data.znhstry.com`. Two deployments.
 
 ## Commands
 
@@ -389,8 +390,8 @@ across a gap is free, so there is nothing to gain by waiting.
 Every payload is stored brotli-compressed and served with `Content-Encoding: br`, so the
 browser decompresses it and **the client carries no decoding code at all** — a plain
 `fetch(...).arrayBuffer()`. `DecompressionStream` has no brotli, so this only works because
-the *host* sets the header. GitHub Pages cannot, which is why `dist/data` goes to R2 while
-the site keeps the Pages deploy.
+the *host* sets the header. A static site host cannot, which is why `dist/data` goes to R2
+while the site is deployed separately.
 
 Measured against gzip -6: geometry 10.44 MB -> 8.53 (18%), names 11.81 -> 10.10 (15%),
 boundaries 2.80 -> 1.83 (35%).

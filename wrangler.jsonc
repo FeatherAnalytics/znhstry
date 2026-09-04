@@ -1,0 +1,22 @@
+// The site, as Cloudflare Workers static assets. Nothing runs at the edge: this is the
+// Next.js static export in `web/out`, served from Cloudflare's network under the domain.
+//
+// The payloads are not here. They come from R2 at NEXT_PUBLIC_DATA_ORIGIN, because they
+// need response headers the site's host cannot set - see `upload.py`.
+{
+  "name": "znhstry",
+  "compatibility_date": "2026-09-04",
+  "assets": {
+    "directory": "./web/out",
+    // `trailingSlash: true` in next.config.ts writes `about/index.html`; this serves it
+    // at `/about/` and redirects `/about` there rather than answering 404.
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  // A custom-domain route creates the DNS record and certificate on deploy, so cutting
+  // over needs no dashboard work beyond the API token. The zone is on this account.
+  "routes": [{ "pattern": "znhstry.com", "custom_domain": true }],
+  // No workers.dev hostname. The bucket's CORS names znhstry.com alone, so a second
+  // hostname would serve the page with no data behind it.
+  "workers_dev": false
+}

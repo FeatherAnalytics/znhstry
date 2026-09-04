@@ -25,6 +25,10 @@ One statement per call, and only SELECT, WITH, DESCRIBE, SHOW, EXPLAIN, or SUMMA
 
 ## Configuration
 
-`ZNHSTRY_DATA_ORIGIN` points the server at a different published export; the default is `https://data.znhstry.com`. The manifest is read from `<origin>/marts/_meta.json` and every table from `<origin>/marts/<table>.parquet`.
+`ZNHSTRY_DATA_ORIGIN` points the server at a different published export; the default is `https://data.znhstry.com`. The manifest is read from `<origin>/marts/_meta.json` and every table from `<origin>/marts/<table>.parquet`. An MCP client starts the server with a fresh environment rather than its own, so set the variable in the client's `env` block, not in your shell:
+
+```json
+{"mcpServers": {"znhstry": {"command": "uvx", "args": ["--from", "git+https://github.com/FeatherAnalytics/znhstry#subdirectory=mcp", "znhstry-mcp"], "env": {"ZNHSTRY_DATA_ORIGIN": "http://localhost:3002"}}}}
+```
 
 `--http HOST:PORT` serves the MCP protocol over streamable HTTP at `/mcp` and exposes `GET /tables` and `GET /query?sql=...&limit=...` as plain JSON on the same port; the default is stdio. Over HTTP the server has no authentication, and a SELECT can still call `read_parquet` on any URL, so a hosted instance fetches whatever URL a caller names; that is for the hosting decision to settle before this flag is exposed to anyone but its operator.

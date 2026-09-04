@@ -52,6 +52,48 @@ sources:
           battlestats` collects forward from there, ten pages on a normal day.
         meta:
           external_location: "read_parquet('../data/raw/battlestats/battlestats.parquet')"
+      - name: atlantis_leaderboard
+        description: >
+          The monthly tournament leaderboard at `portal.qonqr.com/Atlantis`, one row per
+          player per faction per hourly pull. Launch counts reset to zero on the 1st, and a
+          player who launched for two factions in a month appears once under each, which is
+          why faction is part of the key. Rank is not stored; the site's tie-sharing rank is
+          derived downstream.
+
+          `TournamentMillionKills` is the page's `atlantis-gold` badge, 1,000,000+ kills in
+          the current tournament. `WeeklyMillionKills` is the `gold-star` badge, 1,000,000+
+          kills this week outside the tournament, with weeks starting 00:00 UTC Sunday.
+          Partitioned by year of `ObservedAtUtc`; the hive `year` column is not selected
+          downstream.
+        meta:
+          external_location: "read_parquet('../data/raw/atlantis/leaderboard/**/*.parquet', hive_partitioning = true)"
+      - name: atlantis_zones
+        description: >
+          Bot counts on the nineteen tournament zones, one row per zone per hourly pull.
+          `Zone` is a stable position key -- `Prime`, then `Legion 1`..`Legion 6`, `Swarm
+          1`..`6`, `Faceless 1`..`6`, numbered from the apex of each faction's triangle,
+          left to right, top to bottom -- because the names the site shows change monthly.
+          The month's name lives in `atlantis_zone_months`. Partitioned by year of
+          `ObservedAtUtc`.
+        meta:
+          external_location: "read_parquet('../data/raw/atlantis/zones/**/*.parquet', hive_partitioning = true)"
+      - name: atlantis_zone_months
+        description: >
+          What each tournament position was called in a given month, and whether that
+          month's rule text for it allowed refresh and recharge cubes. Positions 1-3 are
+          named after players and change every month; 4-6 are formation zones like
+          `L DEF SHOCK` whose names can also change. Rules are per position, so `Swarm 1`
+          and `Legion 1` share one.
+        meta:
+          external_location: "read_parquet('../data/raw/atlantis/zone_months/*.parquet')"
+      - name: atlantis_tournaments
+        description: >
+          One row per tournament month: the stacking and battle day counts the page states,
+          and the end they imply. A tournament starts 00:00 UTC on the 1st and ends start
+          plus stacking plus battle days, which is what the hourly job reads to decide
+          whether to run at all.
+        meta:
+          external_location: "read_parquet('../data/raw/atlantis/tournaments/*.parquet')"
       - name: countries
         description: Straight from `Countries.csv` in the drop; already the right shape.
         meta:

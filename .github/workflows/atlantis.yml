@@ -1,0 +1,148 @@
+name: Hourly Atlantis leaderboard
+
+# Data only, like nightly.yml, and a much smaller slice of it: one page from the game's
+# monthly tournament, written under `raw/atlantis/` in the bucket. Nothing here builds
+# the warehouse, exports, or uploads the site's payloads.
+#
+# ## Why hourly all month, with a gate, and not a day-of-month cron
+#
+# The tournament opens at 00:00 UTC on the 1st and runs somewhere between one and seven
+# days. A cron pinned to a day range would either miss the tail of a long tournament or
+# spend most of a short one fetching a page that says it is over. So the schedule fires
+# every hour, and the first step decides whether there is anything to do.
+#
+# The Python step writes `next_run_at` into `state.json` after every collection: the next
+# hour while the tournament is live, the 1st of the next month once it has ended. The
+# first run at or after the end time is the one that collects the final standings, and
+# the gate keeps the runner idle for the rest of the month after that.
+#
+# ## Why the gate reads the public bucket with curl
+#
+# `state.json` is archived to the bucket's public URL with `Cache-Control: no-store`, so
+# the gate can read it with no credentials, no checkout and no Python environment. An
+# idle hour costs a few seconds of runner time and one request. `--prefix atlantis/` on
+# restore and archive means a live hour moves only this folder, never the 278 MB raw
+# layer.
+#
+# ## Why the concurrency group is its own
+#
+# This job is the only writer of `raw/atlantis/`. A full `archive` with no `--prefix`
+# fences that subtree off in `upload.py`: it neither uploads nor sweeps it, so the nightly
+# cannot interleave with this job on those keys no matter when the two run. The group
+# only has to serialize this workflow with itself, so that two hourly runs delayed by
+# GitHub's scheduler do not restore and archive the same folder at once.
+#
+# ## What tells anyone it has stopped
+#
+# The same thing that can stop the nightly: GitHub disables a schedule after 60 days
+# without a commit to the repository. Nothing runs, so nothing can fail. GitHub emails
+# before it does that, and any push resets the clock.
+
+on:
+  schedule:
+    # :07 rather than :00. GitHub drifts scheduled runs, and a run that fires a little
+    # before the hour reads the previous hour's page as if it were this one.
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if state.json says the tournament is over"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlantis
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+    steps:
+      # Before checkout, on purpose: plain bash against the public bucket, so an idle
+      # hour is over in seconds.
+      #
+      # Only a 404 means "nothing has ever been collected, so run". Any other failure is
+      # a broken origin, not an empty one, and the step fails red: treating it as a first
+      # run would scrape the game's server every hour for the rest of the month. A 200
+      # with no readable `next_run_at` still runs, because a bad state file must not idle
+      # the job until the 1st.
+      #
+      # The dispatch input reaches the shell through the environment, never through
+      # `${{ }}`: an expression is pasted into the script before bash sees it.
+      - name: Is a tournament on?
+        id: gate
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ -z "$DATA_ORIGIN" ]; then
+            echo "::error::DATA_ORIGIN is not set"
+            exit 1
+          fi
+          code="$(curl -s -o "$RUNNER_TEMP/state.json" -w '%{http_code}' "$DATA_ORIGIN/raw/atlantis/state.json")"
+          next=""
+          case "$code" in
+            404) ;;
+            200) next="$(jq -r '.next_run_at // empty' "$RUNNER_TEMP/state.json" 2>/dev/null || true)" ;;
+            *)
+              echo "::error::$DATA_ORIGIN/raw/atlantis/state.json returned $code"
+              exit 1
+              ;;
+          esac
+          now="$(date -u +%s)"
+          due=""
+          if [ -n "$next" ]; then
+            due="$(date -u -d "$next" +%s 2>/dev/null || true)"
+          fi
+          if [ "$FORCE" = "true" ] || [ -z "$due" ] || [ "$now" -ge "$due" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "tournament over; next run due $next" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          enable-cache: true
+
+      # Only this folder. On the first run ever it finds nothing and returns normally.
+      - name: Restore Atlantis data
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        run: uv run python -m znhstry restore --prefix atlantis/
+
+      - name: Collect the leaderboard
+        if: steps.gate.outputs.run == 'true'
+        id: atlantis
+        working-directory: pipeline
+        run: uv run python -m znhstry atlantis
+
+      # Skipped only when the collection step fails, which a failed HTTP request does. A
+      # layout the parser cannot read is caught in Python: it writes a `state.json` with a
+      # retry time and exits 0, so that case archives and the next hour tries again.
+      - name: Archive Atlantis data
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        run: uv run python -m znhstry archive --prefix atlantis/
+
+      - name: Report
+        if: steps.gate.outputs.run == 'true'
+        env:
+          ROWS: ${{ steps.atlantis.outputs.rows }}
+        run: echo "collected ${ROWS:-0} leaderboard rows" >> "$GITHUB_STEP_SUMMARY"

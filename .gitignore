@@ -46,3 +46,6 @@ thoughts/
 # Machine-local instructions for the assistant. Ignored here rather than in
 # .git/info/exclude, which does not travel with a clone.
 CLAUDE.local.md
+
+# wrangler dev state
+.wrangler/

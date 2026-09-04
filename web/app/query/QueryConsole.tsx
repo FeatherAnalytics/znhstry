@@ -364,7 +364,7 @@ const csvNoteFor = (rows: number): string | null =>
   rows > CSV_CAP ? `CSV holds the first ${count(CSV_CAP)} of ${count(rows)} rows` : null;
 
 const BOOT_HINT =
-  "Locally, `npm run data` must be running in web/ so dist/marts is served on :3002.";
+  "Locally, `npm run data` must be running in web/ so dist/marts is served on :3002. Reload once it is.";
 
 function Errors({ bootError, error }: { bootError: string | null; error: string | null }) {
   return (

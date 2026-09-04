@@ -13,7 +13,7 @@
     "@deck.gl/geo-layers": "^9.3.8",
     "@deck.gl/layers": "^9.3.8",
     "@deck.gl/react": "^9.3.8",
-    "@duckdb/duckdb-wasm": "^1.33.1-dev57.0",
+    "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

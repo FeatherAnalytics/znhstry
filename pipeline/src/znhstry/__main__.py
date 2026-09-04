@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from . import atlantis, boundaries, config, export, hydrate, ingest, portal, upload
+from . import atlantis, boundaries, config, export, hydrate, ingest, marts, portal, upload
 
 STEPS = {
     "ingest": ingest.ingest_daily,
@@ -18,6 +18,9 @@ STEPS = {
     # it runs on the tournament's clock, not the nightly's.
     "atlantis": atlantis.scrape_atlantis,
     "export": export.export_all,
+    # The same marts as Parquet, for anything that reads the warehouse from outside the
+    # map. `upload --marts` sends them; the export's upload never sees them.
+    "marts": marts.export_marts,
     "upload": upload.upload_all,
     # Reads the published export back into a warehouse anyone can query. The only
     # route to the history that needs no credentials.
@@ -55,6 +58,11 @@ def main() -> int:
             "Archive and restore steps only. Only the part of data/raw under this relative "
             "prefix, e.g. 'atlantis/'."
         ),
+    )
+    parser.add_argument(
+        "--marts",
+        action="store_true",
+        help="Upload step only. Send dist/marts to the bucket under marts/ instead of the export.",
     )
     parser.add_argument(
         "--origin",
@@ -95,6 +103,8 @@ def main() -> int:
         _emit(reports=portal.scrape_battlestats())
     elif args.step == "atlantis":
         _emit(rows=atlantis.scrape_atlantis())
+    elif args.step == "upload":
+        (upload.upload_marts if args.marts else upload.upload_all)()
     elif args.step == "hydrate":
         hydrate.hydrate(args.origin, names=not args.no_names, offline=args.offline)
     elif args.step == "archive":

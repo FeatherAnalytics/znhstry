@@ -146,6 +146,17 @@ jobs:
         working-directory: pipeline
         run: uv run python -m znhstry upload
 
+      # The same marts as Parquet, under `marts/`, for anything that reads the warehouse
+      # from outside the map. Its own tree and its own prefix: the export's manifest and
+      # orphan sweep never see it. The ETag skip means a night sends only the tables whose
+      # bytes changed, plus the manifest.
+      - name: Publish marts as Parquet
+        if: steps.changed.outputs.any == 'true'
+        working-directory: pipeline
+        run: |
+          uv run python -m znhstry marts
+          uv run python -m znhstry upload --marts
+
       # After the export, not before: if a run gets this far the raw layer produced a
       # site, which is the only evidence that what we are about to archive is good.
       - name: Archive raw layer

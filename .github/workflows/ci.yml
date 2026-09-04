@@ -53,7 +53,7 @@ jobs:
       # rather than at 02:30 UTC in the nightly.
       - name: Import check
         working-directory: pipeline
-        run: uv run python -c "from znhstry import boundaries, config, export, ingest, schema, upload"
+        run: uv run python -c "from znhstry import boundaries, config, export, ingest, marts, schema, upload"
 
       # Pinned: an unpinned ruff turns a new release's new rule into a red build
       # on a pull request that changed nothing.

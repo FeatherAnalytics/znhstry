@@ -34,6 +34,8 @@ cd pipeline  && uv run python -m znhstry battlestats # scrape any new battle rep
 cd transform && uv run dbt build                   # rebuild the marts (~25 s)
 cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~9 min)
 cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
+cd pipeline  && uv run python -m znhstry marts     # write the marts as Parquet to dist/marts
+cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under marts/
 cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
 ```
 
@@ -1179,6 +1181,72 @@ by `ingest`, which needs the raw layer's own history to plan a slot.
 `meta.json`. Every way that can fail is silent — a wrong offset still yields numbers in
 range, a delta column accumulated in its stored width wraps into plausible coordinates —
 so `tests/test_hydrate_decode.py` round-trips them.
+
+## The marts, as Parquet
+
+`uv run python -m znhstry marts` writes every mart anything outside the map would want as
+one zstd Parquet file per table under `dist/marts/`, and `upload --marts` puts them in the
+bucket under `marts/`. This is the analytics layer: anything that queries the warehouse
+from outside — a notebook, a SQL page, an API — reads these and nothing else. **266 MB**,
+ten files, about 3 s to write. Nothing installed and no key:
+
+```sql
+select * from read_parquet('https://data.znhstry.com/marts/fct_zone_events.parquet') where country_id = 244;
+select * from read_parquet('https://data.znhstry.com/marts/dim_zone.parquet') where country_id = 244;
+select * from read_parquet('https://data.znhstry.com/marts/fct_country_daily.parquet') where country_id = 244;
+select * from read_parquet('https://data.znhstry.com/marts/fct_global_daily.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/fct_zone_battles.parquet') where battle_date >= '2026-01-01';
+select * from read_parquet('https://data.znhstry.com/marts/stg_battlestats.parquet') where is_tournament;
+select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_leaderboard.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_zones.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_zone_months.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_tournaments.parquet');
+```
+
+| Table | Rows | Size | Sorted by |
+|---|---|---|---|
+| `fct_zone_events` | 9,895,796 | 190.7 MB | `country_id, observed_at, zone_id` |
+| `dim_zone` | 2,682,442 | 63.9 MB | `country_id, zone_id` |
+| `fct_country_daily` | 1,492,728 | 7.2 MB | `country_id, activity_date` |
+| `fct_global_daily` | 6,068 | 0.2 MB | `activity_date` |
+| `fct_zone_battles` | 45,695 | 1.9 MB | `battle_date, battle_report_number` |
+| `stg_battlestats` | 61,537 | 2.4 MB | `battle_date, battle_report_number` |
+| `stg_atlantis_*` | four small tables | | their natural keys |
+
+`marts/_meta.json` names every table with its path, row count, bytes, sort key and columns,
+plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
+
+**The sort key is unique for every table, and the writer refuses one that is not.** A
+unique key makes the order total; a total order makes the file deterministic; determinism
+is what lets the upload's ETag skip send nothing on a night the warehouse did not change.
+A key with ties would re-send hundreds of MB every night, silently. `(country_id,
+observed_at)` alone is not unique, which is why `zone_id` closes it. Nulls sort last
+explicitly: 108 events belong to zones with no `dim_zone` row, and they land in the final
+row group rather than wherever the planner put them. Re-check after any change to a key:
+
+```bash
+cd pipeline && uv run python -m znhstry marts && find ../dist/marts -type f -exec md5 -r {} + | sort > /tmp/m
+uv run python -m znhstry marts && find ../dist/marts -type f -exec md5 -r {} + | sort | diff /tmp/m -
+```
+
+**The sort key is also the pruning key.** Row groups are 100,000 rows — 99 over the event
+table — and Parquet keeps min/max per group, so `where country_id = 244` reads one group of
+the 99 and, over HTTP, makes range requests for that group alone. `dim_zone` leads with
+`country_id` for the same reason, so a country filter prunes both sides of the join.
+
+**HUGEINT is cast to BIGINT on the way out.** `fct_country_daily` and `fct_global_daily`
+sum BIGINT columns, which DuckDB types as HUGEINT, and Parquet has no int128 — left alone,
+DuckDB writes the column as DOUBLE and a consumer reads bot counts as floats. `_meta.json`
+reports the types read back from the file, not the warehouse, so it says BIGINT.
+
+`stg_battlestats` is here because `fct_zone_battles` drops the 15,837 tournament reports it
+has nowhere to draw; anything counting reports needs the staging view. The four
+`stg_atlantis_*` views are published as they stand.
+
+`upload --marts` lists, sends and sweeps under `marts/` alone, and `upload_all` fences
+`marts/` off exactly as it does `raw/`. The export's determinism check,
+`_refuse_a_half_written_export` and `meta.json` are untouched; the marts have their own
+manifest and their own guard against a half-written tree.
 
 ## Performance notes
 

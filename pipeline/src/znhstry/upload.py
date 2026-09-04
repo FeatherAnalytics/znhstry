@@ -70,6 +70,10 @@ ARCHIVE = "no-store"
 # archive neither uploads nor sweeps this subtree; only a run scoped to it may write it.
 HOURLY_PREFIX = "atlantis/"
 
+# The marts as Parquet, written by `upload_marts` alone. Fenced from the export's sweep
+# for the same reason as `raw/`: it lives in this bucket and the export does not name it.
+MARTS_PREFIX = "marts/"
+
 
 def _cache_control(key: str) -> str:
     """How long this object may be trusted without asking again: never, without asking.
@@ -123,7 +127,11 @@ def _content_type(path: Path) -> str:
     # "a.json.br" is a brotli stream over JSON, so the type is the inner one;
     # the encoding header carries the rest.
     inner = path.name[:-3] if path.suffix == ".br" else path.name
-    return "application/json" if inner.endswith(".json") else "application/octet-stream"
+    if inner.endswith(".json"):
+        return "application/json"
+    if inner.endswith(".parquet"):
+        return "application/vnd.apache.parquet"
+    return "application/octet-stream"
 
 
 def _put(s3, bucket: str, path: Path, key: str) -> int:
@@ -184,6 +192,17 @@ def _hourly_only(relative: str, prefix: str) -> bool:
     return not prefix and relative.startswith(HOURLY_PREFIX)
 
 
+def _changed(files: list[Path], remote: dict[str, str], key_of: dict[Path, str]) -> list[Path]:
+    """The files whose bytes differ from the object already in the bucket.
+
+    R2's ETag for a single put is the MD5 of the body, so this is a content check with no
+    extra request. ZNHSTRY_UPLOAD_FORCE=1 returns everything, to restamp headers.
+    """
+    if os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1":
+        return list(files)
+    return [p for p in files if remote.get(key_of[p]) != md5(p.read_bytes()).hexdigest()]
+
+
 def _delete_keys(s3, bucket: str, keys: set[str]) -> None:
     batch = sorted(keys)
     for i in range(0, len(batch), 1000):
@@ -217,11 +236,7 @@ def archive_raw(bucket: str | None = None, prefix: str = "") -> None:
     files = [p for p in files if not _hourly_only(p.relative_to(config.RAW).as_posix(), prefix)]
     key_of = {p: ARCHIVE_PREFIX + p.relative_to(config.RAW).as_posix() for p in files}
     remote = _existing(s3, bucket, ARCHIVE_PREFIX + prefix)
-
-    force = os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1"
-    pending = [
-        p for p in files if force or remote.get(key_of[p]) != md5(p.read_bytes()).hexdigest()
-    ]
+    pending = _changed(files, remote, key_of)
 
     log.info(
         "archiving %s of %s files (%s MB)",
@@ -282,7 +297,9 @@ def restore_raw(bucket: str | None = None, prefix: str = "") -> None:
     log.info("restore complete: %s files, %s MB", f"{len(keys):,}", f"{total / 1e6:.1f}")
 
 
-def _refuse_a_half_written_export(source: Path, files: list[Path]) -> None:
+def _refuse_a_half_written_export(
+    source: Path, files: list[Path], manifest_name: str = "meta.json"
+) -> None:
     """Stop if any shard is newer than the manifest that has to describe it.
 
     `export_all` writes `meta.json` last, so the manifest being the newest file in
@@ -293,11 +310,9 @@ def _refuse_a_half_written_export(source: Path, files: list[Path]) -> None:
 
     Cheap, and it fails before anything is sent.
     """
-    manifests = [p for p in files if p.name == "meta.json"]
+    manifests = [p for p in files if p.name == manifest_name]
     if not manifests:
-        raise SystemExit(
-            f"no meta.json under {source} - `znhstry export` has not finished a run here."
-        )
+        raise SystemExit(f"no {manifest_name} under {source} - a run has not finished here.")
 
     for manifest in manifests:
         tree = manifest.parent
@@ -305,11 +320,47 @@ def _refuse_a_half_written_export(source: Path, files: list[Path]) -> None:
         newer = [p for p in files if p.is_relative_to(tree) and p.stat().st_mtime_ns > stamp]
         if newer:
             raise SystemExit(
-                f"{len(newer):,} file(s) under {tree} are newer than its meta.json "
-                f"(e.g. {newer[0].relative_to(tree)}). The export did not finish, so the "
-                f"manifest does not name everything on disk - re-run `znhstry export` "
-                f"before uploading."
+                f"{len(newer):,} file(s) under {tree} are newer than its {manifest_name} "
+                f"(e.g. {newer[0].relative_to(tree)}). The run did not finish, so the "
+                f"manifest does not name everything on disk - re-run it before uploading."
             )
+
+
+def upload_marts(source: Path | None = None, bucket: str | None = None) -> None:
+    """Push `dist/marts` to the bucket under `marts/`.
+
+    Same rules as the export - ETag skip, manifest last, then a sweep - but scoped to
+    its own prefix in both directions: this never lists or deletes outside `marts/`,
+    and `upload_all` never touches it. The tables are a few hundred MB, and a night on
+    which the warehouse did not change sends only the manifest.
+    """
+    source = source or config.MARTS_OUT
+    bucket = _bucket(bucket)
+    if not source.exists():
+        raise SystemExit(f"{source} does not exist - run `znhstry marts` first.")
+
+    files = sorted(p for p in source.iterdir() if p.is_file() and p.suffix != ".tmp")
+    _refuse_a_half_written_export(source, files, manifest_name="_meta.json")
+    manifest = source / "_meta.json"
+    tables = [p for p in files if p != manifest]
+    key_of = {p: MARTS_PREFIX + p.name for p in files}
+
+    s3 = _client()
+    remote = _existing(s3, bucket, MARTS_PREFIX)
+    pending = _changed(tables, remote, key_of)
+    log.info(
+        "uploading %s of %s tables (%s MB) to %s",
+        f"{len(pending):,}",
+        f"{len(tables):,}",
+        f"{sum(p.stat().st_size for p in pending) / 1e6:.1f}",
+        MARTS_PREFIX,
+    )
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        list(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
+    _put(s3, bucket, manifest, key_of[manifest])
+    # Only within `marts/`: `remote` was listed under that prefix alone.
+    _delete_keys(s3, bucket, set(remote) - set(key_of.values()))
 
 
 def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
@@ -378,10 +429,11 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     # exactly these keys, so deleting them any earlier empties the map for
     # anyone mid-load.
     #
-    # The archive prefix is excluded, not merely absent from `key_of`: it lives in
-    # this bucket and is not part of the export, so without this line publishing
-    # the site would delete the only off-machine copy of the raw layer.
-    stale = {k for k in remote if not k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
+    # The archive and marts prefixes are excluded, not merely absent from `key_of`:
+    # they live in this bucket and are not part of the export, so without this line
+    # publishing the site would delete the only off-machine copy of the raw layer.
+    fenced = (ARCHIVE_PREFIX, MARTS_PREFIX)
+    stale = {k for k in remote if not k.startswith(fenced)} - set(key_of.values())
     if stale:
         log.info("removing %s orphaned objects", f"{len(stale):,}")
         _delete_keys(s3, bucket, stale)

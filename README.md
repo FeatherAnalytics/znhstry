@@ -3,7 +3,7 @@
 A historical map of [QONQR](https://qonqr.com) zone control — where all 2,682,442 zones
 stand, what moved over any window, and how fourteen years of territory got that way.
 
-**[www.featheranalytics.dev/znhstry](https://www.featheranalytics.dev/znhstry/)**
+**[znhstry.com](https://znhstry.com/)**
 
 Most maps of this data show the present. This one shows the past: scrub to any date, pick a
 window, and watch faction control shift across a region.
@@ -42,7 +42,7 @@ QONQR's published CSV drop
   -> dbt-duckdb (staging -> marts, tested)
   -> static binary shards
   -> Cloudflare R2 (brotli, ETag-revalidated)
-  -> Next.js + deck.gl on GitHub Pages
+  -> Next.js + deck.gl as Cloudflare Workers static assets
 ```
 
 | Layer | Tool |
@@ -52,7 +52,7 @@ QONQR's published CSV drop
 | Transform | dbt-duckdb: staging, marts, data tests, unit tests, exposures, source freshness |
 | Export | Python, columnar dumps under brotli |
 | Web | Next.js static export, deck.gl |
-| Host | GitHub Pages for the site, Cloudflare R2 for the data |
+| Host | Cloudflare Workers static assets for the site at znhstry.com, Cloudflare R2 for the data at data.znhstry.com |
 
 The data lives apart from the site because it needs two response headers a static host
 cannot set. `Content-Encoding: br` lets the browser decompress, so the client ships no

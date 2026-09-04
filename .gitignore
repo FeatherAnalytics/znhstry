@@ -14,6 +14,8 @@ out/
 
 # Env
 .env
+# wrangler's local secrets for `wrangler dev`
+.dev.vars
 
 # dbt
 target/

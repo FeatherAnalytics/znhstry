@@ -39,6 +39,11 @@ name: Hourly Atlantis leaderboard
 # before it does that, and any push resets the clock.
 
 on:
+  # Two triggers for the same hour, on purpose. GitHub's scheduler drops this cron
+  # outright for hours at a time, so a Cloudflare Worker (trigger/) dispatches the
+  # workflow at :07 as well. When both fire, the gate below makes the second a no-op:
+  # `next_run_at` is the top of the hour after a collection, so a late GitHub run
+  # inside the same hour reads `run=false` and stops before checkout.
   schedule:
     # :07 rather than :00. GitHub drifts scheduled runs, and a run that fires a little
     # before the hour reads the previous hour's page as if it were this one.

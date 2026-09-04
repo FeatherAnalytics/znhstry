@@ -1,0 +1,17 @@
+// Cron triggers that dispatch the data workflows, because GitHub's own scheduler does not
+// run them on time: it dropped the hourly Atlantis cron outright for hours and runs the
+// nightly about five hours late. Cloudflare crons fire on time. The Worker does nothing
+// else - each workflow still decides for itself whether there is work.
+//
+// Deployed by .github/workflows/deploy-trigger.yml, which also sets the GITHUB_TOKEN secret
+// from the repository secret ATLANTIS_DISPATCH_TOKEN.
+{
+  "name": "znhstry-atlantis-trigger",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-04",
+  // Each line maps to one workflow in src/index.ts. :07 matches atlantis.yml, where a run
+  // firing a little before the hour would read the previous hour's page. 00:45 is for the
+  // nightly: QONQR writes the day's slot just after 00:00 UTC.
+  "triggers": { "crons": ["7 * * * *", "45 0 * * *"] },
+  "workers_dev": false
+}

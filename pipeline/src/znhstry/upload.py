@@ -66,6 +66,10 @@ REVALIDATE = "public, no-cache"
 ARCHIVE_PREFIX = "raw/"
 ARCHIVE = "no-store"
 
+# Written only by the hourly Atlantis job. Any other checkout holds a stale copy, so a full
+# archive neither uploads nor sweeps this subtree; only a run scoped to it may write it.
+HOURLY_PREFIX = "atlantis/"
+
 
 def _cache_control(key: str) -> str:
     """How long this object may be trusted without asking again: never, without asking.
@@ -138,8 +142,8 @@ def _put(s3, bucket: str, path: Path, key: str) -> int:
     return len(body)
 
 
-def _existing(s3, bucket: str) -> dict[str, str]:
-    """Every key in the bucket, mapped to its ETag with the quotes stripped.
+def _existing(s3, bucket: str, prefix: str = "") -> dict[str, str]:
+    """Every key in the bucket, or under `prefix`, mapped to its ETag with the quotes stripped.
 
     For an object written by a single `put_object` - which is all of them, the
     largest shard being a few MB - R2's ETag is the MD5 of the body in hex. That
@@ -150,6 +154,8 @@ def _existing(s3, bucket: str) -> dict[str, str]:
     token = None
     while True:
         kwargs = {"Bucket": bucket, "MaxKeys": 1000}
+        if prefix:
+            kwargs["Prefix"] = prefix
         if token:
             kwargs["ContinuationToken"] = token
         page = s3.list_objects_v2(**kwargs)
@@ -167,7 +173,26 @@ def _bucket(name: str | None = None) -> str:
     return name
 
 
-def archive_raw(bucket: str | None = None) -> None:
+def _sub_prefix(prefix: str) -> str:
+    """A path under both `data/raw` and `raw/`: no leading slash, trailing slash if non-empty."""
+    prefix = prefix.strip("/")
+    return f"{prefix}/" if prefix else ""
+
+
+def _hourly_only(relative: str, prefix: str) -> bool:
+    """Whether a run must leave this `data/raw`-relative path to the hourly job."""
+    return not prefix and relative.startswith(HOURLY_PREFIX)
+
+
+def _delete_keys(s3, bucket: str, keys: set[str]) -> None:
+    batch = sorted(keys)
+    for i in range(0, len(batch), 1000):
+        s3.delete_objects(
+            Bucket=bucket, Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]}
+        )
+
+
+def archive_raw(bucket: str | None = None, prefix: str = "") -> None:
     """Push `data/raw` to the bucket under `raw/`.
 
     This is the durable copy. Once the nightly reads Dropbox instead of the SQL
@@ -175,15 +200,23 @@ def archive_raw(bucket: str | None = None) -> None:
     solely because we kept it - an Actions cache is evictable and a laptop is a
     laptop. The ETag skip means a nightly archive sends the year partition that
     changed and the ~200 MB that did not stays put.
+
+    `prefix` scopes the run to one subtree, e.g. `atlantis/`, so the hourly scrape
+    can archive its few small files without hashing the other 278 MB every hour. A full
+    archive leaves the hourly subtree alone, because the copy it holds is older than what
+    the hourly job has already pushed.
     """
     bucket = _bucket(bucket)
-    if not config.RAW.exists():
-        raise SystemExit(f"{config.RAW} does not exist - nothing to archive.")
+    prefix = _sub_prefix(prefix)
+    root = config.RAW / prefix
+    if not root.exists():
+        raise SystemExit(f"{root} does not exist - nothing to archive.")
 
     s3 = _client()
-    files = sorted(p for p in config.RAW.rglob("*") if p.is_file() and p.suffix != ".tmp")
+    files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".tmp")
+    files = [p for p in files if not _hourly_only(p.relative_to(config.RAW).as_posix(), prefix)]
     key_of = {p: ARCHIVE_PREFIX + p.relative_to(config.RAW).as_posix() for p in files}
-    remote = _existing(s3, bucket)
+    remote = _existing(s3, bucket, ARCHIVE_PREFIX + prefix)
 
     force = os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1"
     pending = [
@@ -201,27 +234,34 @@ def archive_raw(bucket: str | None = None) -> None:
         list(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
 
     # Only within the archive's own prefix, so this can never touch the export.
-    stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
+    stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX + prefix)} - set(key_of.values())
+    stale = {k for k in stale if not _hourly_only(k[len(ARCHIVE_PREFIX) :], prefix)}
     if stale:
         log.info("removing %s stale archive objects", f"{len(stale):,}")
-        batch = sorted(stale)
-        for i in range(0, len(batch), 1000):
-            s3.delete_objects(
-                Bucket=bucket, Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]}
-            )
+        _delete_keys(s3, bucket, stale)
 
-    log.info("archive complete: %s files under %s", f"{len(files):,}", ARCHIVE_PREFIX)
+    log.info("archive complete: %s files under %s", f"{len(files):,}", ARCHIVE_PREFIX + prefix)
 
 
-def restore_raw(bucket: str | None = None) -> None:
+def restore_raw(bucket: str | None = None, prefix: str = "") -> None:
     """Pull `raw/` back down into `data/raw`.
 
     The first step on a fresh clone or a cold CI runner. The ring cannot seed a
     history it does not hold, so `ingest` refuses to run without this.
+
+    `prefix` scopes the run to one subtree, e.g. `atlantis/`, so the hourly scrape
+    pulls its few small files rather than the whole 278 MB. An empty subtree is
+    normal there - the first run has nothing to restore yet - so only the full
+    restore treats an empty archive as an error.
     """
     bucket = _bucket(bucket)
+    prefix = _sub_prefix(prefix)
     s3 = _client()
-    keys = [k for k in _existing(s3, bucket) if k.startswith(ARCHIVE_PREFIX)]
+    scope = ARCHIVE_PREFIX + prefix
+    keys = [k for k in _existing(s3, bucket, scope) if k.startswith(scope)]
+    if not keys and prefix:
+        log.info("nothing under %s in %s yet", scope, bucket)
+        return
     if not keys:
         raise SystemExit(f"nothing under {ARCHIVE_PREFIX} in {bucket} - has `archive` run?")
 
@@ -262,9 +302,7 @@ def _refuse_a_half_written_export(source: Path, files: list[Path]) -> None:
     for manifest in manifests:
         tree = manifest.parent
         stamp = manifest.stat().st_mtime_ns
-        newer = [
-            p for p in files if p.is_relative_to(tree) and p.stat().st_mtime_ns > stamp
-        ]
+        newer = [p for p in files if p.is_relative_to(tree) and p.stat().st_mtime_ns > stamp]
         if newer:
             raise SystemExit(
                 f"{len(newer):,} file(s) under {tree} are newer than its meta.json "
@@ -346,12 +384,7 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     stale = {k for k in remote if not k.startswith(ARCHIVE_PREFIX)} - set(key_of.values())
     if stale:
         log.info("removing %s orphaned objects", f"{len(stale):,}")
-        batch = sorted(stale)
-        for i in range(0, len(batch), 1000):
-            s3.delete_objects(
-                Bucket=bucket,
-                Delete={"Objects": [{"Key": k} for k in batch[i : i + 1000]]},
-            )
+        _delete_keys(s3, bucket, stale)
 
     log.info(
         "upload complete: %s sent, %s skipped, %s MB",

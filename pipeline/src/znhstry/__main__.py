@@ -7,13 +7,16 @@ import logging
 import os
 import sys
 
-from . import boundaries, config, export, hydrate, ingest, portal, upload
+from . import atlantis, boundaries, config, export, hydrate, ingest, portal, upload
 
 STEPS = {
     "ingest": ingest.ingest_daily,
     # Battle reports come from the game's live portal, not the Dropbox drop, so they are
     # their own step: the map must not fail to publish because a web page was slow.
     "battlestats": portal.scrape_battlestats,
+    # The monthly tournament page, read hourly while a battle is on. Its own step because
+    # it runs on the tournament's clock, not the nightly's.
+    "atlantis": atlantis.scrape_atlantis,
     "export": export.export_all,
     "upload": upload.upload_all,
     # Reads the published export back into a warehouse anyone can query. The only
@@ -43,6 +46,14 @@ def main() -> int:
             "Ingest step only. Comma-separated ring slots (days of the month) to read, "
             "e.g. '7' or '5,6,7'. Default is whichever days the history is missing, "
             "normally just the one that closed at midnight."
+        ),
+    )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help=(
+            "Archive and restore steps only. Only the part of data/raw under this relative "
+            "prefix, e.g. 'atlantis/'."
         ),
     )
     parser.add_argument(
@@ -82,8 +93,14 @@ def main() -> int:
         _emit(events=sum(added.values()))
     elif args.step == "battlestats":
         _emit(reports=portal.scrape_battlestats())
+    elif args.step == "atlantis":
+        _emit(rows=atlantis.scrape_atlantis())
     elif args.step == "hydrate":
         hydrate.hydrate(args.origin, names=not args.no_names, offline=args.offline)
+    elif args.step == "archive":
+        upload.archive_raw(prefix=args.prefix)
+    elif args.step == "restore":
+        upload.restore_raw(prefix=args.prefix)
     else:
         STEPS[args.step]()
     return 0

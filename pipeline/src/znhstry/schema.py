@@ -91,3 +91,46 @@ def conform(df: pl.DataFrame, dtypes: dict[str, pl.DataType]) -> pl.DataFrame:
     if missing:
         raise ValueError(f"source is missing {missing}; got {df.columns}")
     return df.select([pl.col(c).cast(dtype) for c, dtype in dtypes.items()])
+
+
+# The Atlantis tournament, read hourly from its portal page while a battle is on.
+#
+# The leaderboard is one row per player per faction per observation. A player can appear
+# under two factions in the same month, so the faction is part of the key. `Zone` is a
+# stable position key - `Prime` or `"{faction} {position}"` - because the site names each
+# faction's zones after its leading players and the month's formation rules, and those
+# names change monthly; `zone_months` records what each position was called.
+ATLANTIS_LEADERBOARD_DTYPES: dict[str, pl.DataType] = {
+    "ObservedAtUtc": pl.Datetime("us"),
+    "Faction": pl.String,
+    "PlayerName": pl.String,
+    "Launches": pl.Int64,
+    "TournamentMillionKills": pl.Boolean,
+    "WeeklyMillionKills": pl.Boolean,
+}
+ATLANTIS_LEADERBOARD_KEY: tuple[str, ...] = ("ObservedAtUtc", "Faction", "PlayerName")
+
+ATLANTIS_ZONE_DTYPES: dict[str, pl.DataType] = {
+    "ObservedAtUtc": pl.Datetime("us"),
+    "Zone": pl.String,
+    "SwarmCount": pl.Int64,
+    "LegionCount": pl.Int64,
+    "FacelessCount": pl.Int64,
+}
+ATLANTIS_ZONE_KEY: tuple[str, ...] = ("ObservedAtUtc", "Zone")
+
+ATLANTIS_ZONE_MONTH_DTYPES: dict[str, pl.DataType] = {
+    "Month": pl.Date,
+    "Zone": pl.String,
+    "ZoneName": pl.String,
+    "CubesAllowed": pl.Boolean,
+}
+ATLANTIS_ZONE_MONTH_KEY: tuple[str, ...] = ("Month", "Zone")
+
+ATLANTIS_TOURNAMENT_DTYPES: dict[str, pl.DataType] = {
+    "Month": pl.Date,
+    "StackingDays": pl.Int16,
+    "BattleDays": pl.Int16,
+    "EndsAtUtc": pl.Datetime("us"),
+}
+ATLANTIS_TOURNAMENT_KEY: tuple[str, ...] = ("Month",)

@@ -66,3 +66,23 @@ models:
         data_tests: [not_null]
       - name: radius_km
         data_tests: [not_null]
+
+  - name: stg_atlantis_leaderboard
+    description: >
+      Grain: one row per player per faction per hourly pull of the Atlantis tournament
+      page, with the site's tie-sharing rank derived and the month the counts belong to.
+
+  - name: stg_atlantis_zones
+    description: >
+      Grain: one row per tournament zone position per hourly pull, three faction counts
+      each.
+
+  - name: stg_atlantis_zone_months
+    description: >
+      Grain: one row per tournament zone position per month, carrying the name the site
+      showed and whether cubes were allowed there.
+
+  - name: stg_atlantis_tournaments
+    description: >
+      Grain: one row per tournament month, with the stacking and battle day counts and
+      the end they imply.

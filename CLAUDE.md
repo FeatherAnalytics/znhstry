@@ -41,6 +41,7 @@ Other steps:
 ```bash
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
 uv run python -m znhstry hydrate          # read the published export into a warehouse, no keys
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
@@ -534,6 +535,7 @@ Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
 | `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
+| `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | hourly, tournament days only |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
 filename says which month, so a stale slot is indistinguishable from a fresh one until it
@@ -591,6 +593,52 @@ numbers it does not already have. A normal run costs one index page and stops.
 - The parser builds column names from the page's own stat labels and each cell's CSS
   class, which is what makes new rows land in the seeded history's exact 77 columns.
   `pipeline/tests/test_portal.py` pins that contract against a real saved page.
+
+### The Atlantis tournament leaderboard
+
+`portal.qonqr.com/Atlantis` is one page: the monthly tournament's leaderboard, its nineteen
+zones, and the month's rules. `uv run python -m znhstry atlantis` reads it and writes four
+Parquet tables under `data/raw/atlantis/`, which R2 holds under `raw/atlantis/` —
+`restore --prefix atlantis/` pulls them back and `archive --prefix atlantis/` pushes them.
+
+| | Key | Holds |
+|---|---|---|
+| `leaderboard/year=YYYY/` | `(ObservedAtUtc, Faction, PlayerName)` | launches and the two badges |
+| `zones/year=YYYY/` | `(ObservedAtUtc, Zone)` | the three faction counts |
+| `zone_months/` | `(Month, Zone)` | the month's zone name and `CubesAllowed` |
+| `tournaments/` | `(Month)` | stacking days, battle days, the end |
+
+**The schedule is read off the page, not configured.** A tournament starts 00:00 UTC on the
+1st of each month and the page states `Stacking Days: N  Battle Days: M`; the end is start
+plus N+M days. The job fetches once an hour while a tournament is running and not at all
+between them. The first run at or after the end is the final pull. A `state.json` beside the
+data carries `next_run_at`, and the workflow's gate reads it from the public bucket before
+deciding whether to run, so an idle hour costs one small read and no request to the game.
+The gate fails the run when `DATA_ORIGIN` is unset or the state file returns anything but
+200 or 404, so a broken origin cannot turn into an hourly scrape between tournaments.
+
+**The hourly job is the only writer of `raw/atlantis/`.** A full `archive` with no `--prefix`
+neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy
+cannot overwrite an hour of rows or delete keys it never fetched.
+
+**Launch counts reset to zero each month, and a player can appear under more than one
+faction in a month.** That is why faction is in the leaderboard key. Rank is not stored; it
+is derived, with ties sharing a rank the way the site shows them.
+
+**`Zone` is a stable position key, never the site's name.** `Prime`, then `Legion 1`..`6`,
+`Swarm 1`..`6`, `Faceless 1`..`6`, numbered from the apex of each faction's triangle, left
+to right, top to bottom. Positions 1-3 are named after players and change monthly; 4-6 are
+formation zones like `L DEF SHOCK` whose names can also change. The site's name for the
+month is `ZoneName` in `zone_months`. The triangle's faction is read from the letter prefix
+on its formation zones, not from position.
+
+- **`TournamentMillionKills`** is the page's `atlantis-gold` badge: 1,000,000+ kills in
+  the current tournament. **`WeeklyMillionKills`** is the `gold-star` badge: 1,000,000+
+  kills this week outside the tournament, where weeks start 00:00 UTC Sunday.
+- **`CubesAllowed`** is true when the zone's rule text that month says use of refresh and
+  recharge is allowed. Rules are per position, so `Swarm 1` and `Legion 1` share one.
+- **Counts use a plain space for thousands**, the same as the battle reports.
+- **One request an hour and no retries in a run.** It is the game's live server.
 
 ## Data facts (measured, not guessed)
 

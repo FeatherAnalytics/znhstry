@@ -98,6 +98,10 @@ DUCKDB_PATH = DATA / "znhstry.duckdb"
 # entirely.
 WEB_DATA = ROOT / "dist" / "data"
 
+# The marts as Parquet, one file per table - the shape for anything that reads the
+# warehouse from outside the map. Uploaded under `marts/`, apart from the export.
+MARTS_OUT = ROOT / "dist" / "marts"
+
 EARTH_RADIUS_KM = 6371.0088
 
 # --- Hydrate: the published export, read back --------------------------------

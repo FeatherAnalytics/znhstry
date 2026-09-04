@@ -43,9 +43,8 @@ Other steps:
 
 ```bash
 cd pipeline
-uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone
+uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone, no key needed
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
-uv run python -m znhstry hydrate          # read the published export into a warehouse, no keys
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
 
@@ -132,13 +131,17 @@ arrive stretched the world from 11 s to 44 s when measured.
 
 ### Requests are the binding constraint, not bytes
 
-The data is served from an `r2.dev` URL with no CDN. R2 egress is free and 94.7 MB of
-storage is nothing, so **cost is not the issue** — `r2.dev` being rate-limited and
-documented as unsuitable for production traffic is. That is why the tile grid is 16 degrees
+The data is served from `data.znhstry.com`, a custom domain on the bucket. R2 egress is
+free and 94.7 MB of storage is nothing, so **cost is not the issue**. Requests are: every
+one is a round trip, and a cold load is 343 of them. That is why the tile grid is 16 degrees
 and names are off the load path.
 
-A custom domain on Cloudflare would put a CDN in front, so most requests never reach R2 and
-the constraint disappears.
+The custom domain removes the rate limit that `r2.dev` carries; it does not remove the
+request count. Objects are served `Cache-Control: public, no-cache`, which Cloudflare's
+edge does not cache, so every request reaches R2 and the count is what it is. For a few
+dozen readers a month that is well inside the free tier and needs no edge cache. Putting
+one in front would reopen the fresh-manifest-plus-stale-shard failure that `upload_all`'s
+ordering exists to prevent, unless the upload also purged the edge.
 
 ### One row of controls
 
@@ -1124,63 +1127,38 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
 - **`(ZoneId, LastUpdateDateUtc)` is unique across all 9.88M rows**, which is what makes the
   merge keyed rather than appended — so re-reading a slot adds nothing and a retried run is
   free. Never change this to an append.
-- **`upload_all` deletes every bucket key the export does not name.** The `raw/` prefix is
-  explicitly excluded, and the archive's own sweep is scoped to `raw/` in reverse. Remove
-  either fence and one job silently destroys the other's data.
+- **`upload_all` deletes every bucket key the export does not name.** The `raw/` and
+  `marts/` prefixes are explicitly excluded, and the archive's own sweep is scoped to
+  `raw/` in reverse. Remove either fence and one job silently destroys the other's data.
+- **`raw/_manifest.json` is written last by every archive run, and `restore` needs no key.**
+  A public bucket cannot be listed, so the manifest — every key under `raw/` with its MD5,
+  from a fresh listing after the run — is how a fresh clone or a pull-request runner learns
+  what to fetch. Without R2 credentials `restore` reads it over plain HTTP from
+  `PUBLIC_DATA_ORIGIN` and refuses any body whose MD5 does not match; a truncated Parquet
+  file decodes into plausible rows for however many arrived, and nothing downstream would
+  notice. `tests/test_restore_public.py` pins the refusal. Both the nightly and the hourly
+  Atlantis job rewrite the manifest, each from a complete listing, so whichever runs last
+  leaves it whole.
 - **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
   DuckDB reads them through one glob; a column differing in width between them makes the
   source unreadable, not merely inconsistent.
 
-### Reading the export back, without a key
+### Reading the warehouse without a key
 
-`restore` needs an R2 credential, which means only whoever holds one can get the history.
-`uv run python -m znhstry hydrate` is the other way in, and it needs nothing: **the export
-is already public** — it is exactly what the browser downloads — and `zone_history/` in it
-is the complete event stream, all 9,895,648 rows, one row per event.
+Two ways in, and neither needs a credential. `uv run python -m znhstry restore` pulls the
+raw layer over HTTP from the public bucket through `raw/_manifest.json`, and
+`cd transform && uv run dbt build` rebuilds the whole warehouse from it in ~25 s — which is
+exactly what CI does on every pull request. Or skip the warehouse: the marts are published
+as Parquet under `marts/`, and any DuckDB reads them in place:
 
-It writes `data/znhstry_public.duckdb` with `zone`, `zone_event`, `zone_day`, `maz`,
-`country`, `region` and `faction`. Its own database, deliberately: the dbt profile owns
-`znhstry.duckdb` and a `dbt build` drops what it finds there.
+```sql
+select country_name, total_bots
+from read_parquet('https://data.znhstry.com/marts/fct_country_daily.parquet')
+where activity_date = '2026-09-01'
+order by total_bots desc limit 10;
+```
 
-**`zone_event.seq` is the export's row order and it is load-bearing.** The export is
-ordered `(idx, observed_at)` but stores only `day`, so the 653,123 zone-days holding more
-than one event arrive tied — and a zone's standing for a day is the *last* of them. Without
-a sequence there is nothing to break those ties once SQL has touched the table, and "the
-state at date D" becomes whichever row the planner emitted last.
-
-`zone_day` is one row per zone-day, 9,242,525 of them, taking each day's last event as the
-standing and carrying `delta` — the step against the previous day that zone moved, not the
-calendar day before. Summing `delta` over a window is the net change across it. The
-changelog is sparse by design, so anything reading an absent day as a zero has discarded
-the 504,410 zones that last changed in 2019 or earlier.
-
-| | |
-|---|---|
-| ~1,480 requests, ~288 MB decoded | cached under `data/public/`, so a killed run resumes |
-| `--no-names` | drops 655 of those requests, and the zone names with them |
-| `--offline` | build from the cache alone, manifest included |
-| `--origin URL` | a different published export; defaults to the project's own bucket |
-
-**A cached file is trusted only at its exact expected length**, which is `rows x width`
-from the manifest. A truncated download would otherwise decode into plausible numbers for
-however many rows arrived.
-
-**The manifest is not cached like the rest.** The export writes `meta.json` last precisely
-so a client reading it finds every shard it names, and a stale one names shards that no
-longer exist. `--offline` reuses a copy on purpose, which is what makes a primed cache
-reproducible; nothing falls back to one by accident.
-
-Two things do not come back. **The grain is a day, not a timestamp** — the export stores
-`day`, not `observed_at`, so the 653,071 zone-days carrying more than one event arrive as
-several rows on the same date, in the right order but without the times between them. And
-**battlestats is only what MAZ carries**: five measures a report against the scrape's 77
-columns. So this is a warehouse to read. It cannot be uploaded, exported from, or extended
-by `ingest`, which needs the raw layer's own history to plan a slot.
-
-`_decode` must stay the exact inverse of `_pack`, and the two agree only by both following
-`meta.json`. Every way that can fail is silent — a wrong offset still yields numbers in
-range, a delta column accumulated in its stored width wraps into plausible coordinates —
-so `tests/test_hydrate_decode.py` round-trips them.
+See "The marts, as Parquet" below for every table and its sort key.
 
 ## The marts, as Parquet
 
@@ -1268,7 +1246,9 @@ manifest and their own guard against a half-written tree.
 - Testing is deliberately concentrated where failures are invisible, not spread evenly.
   dbt carries 15 generic data tests, 6 singular tests and 1 unit test; `pipeline/tests/`
   covers the ring arithmetic and the dtype contract, which decide what gets written before
-  dbt can see it. The viewer has none. `dbt source freshness` warns at 2 days stale and
+  dbt can see it. The viewer has none. **CI restores the raw layer without a key and runs
+  `dbt build` on every pull request**, so a source bound to a glob that does not exist
+  fails before merge rather than at 02:30 UTC. `dbt source freshness` warns at 2 days stale and
   errors at 7 — well inside the 31-day ring, so there is time to act before a gap becomes
   unrecoverable. **The nightly runs it right after ingest and fails red on error.** That
   step is the only alarm that fires while the missing days are still fetchable — without

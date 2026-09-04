@@ -41,7 +41,7 @@ jobs:
 
   pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -68,13 +68,20 @@ jobs:
         working-directory: pipeline
         run: uv run python -m pytest -q
 
-      - name: dbt parse
+      # The archive is public, so this needs no secret: `restore` reads the key
+      # manifest and checks every file's MD5. ~280 MB.
+      - name: Restore the raw layer
+        working-directory: pipeline
+        env:
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: uv run python -m znhstry restore
+
+      # The whole warehouse, tests included, the same way the nightly runs it. A
+      # `dbt parse` alone let a source binding to a missing glob ship green; only a
+      # build against the real raw layer catches that, and the unit tests need a
+      # built relation to infer mocked column types from.
+      - name: Build warehouse
         working-directory: transform
         env:
           DBT_PROFILES_DIR: .
-        run: uv run dbt parse
-
-      # No unit-test step here on purpose. dbt infers a mocked input's column types
-      # by introspecting the real relation, so a unit test needs a built warehouse
-      # even though every input is mocked - and CI has no data, by design. They run
-      # as part of `dbt build` in the nightly, where the warehouse exists.
+        run: uv run dbt build

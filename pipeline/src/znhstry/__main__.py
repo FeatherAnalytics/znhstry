@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from . import atlantis, boundaries, config, export, hydrate, ingest, marts, portal, upload
+from . import atlantis, boundaries, config, export, ingest, marts, portal, upload
 
 STEPS = {
     "ingest": ingest.ingest_daily,
@@ -22,11 +22,9 @@ STEPS = {
     # map. `upload --marts` sends them; the export's upload never sees them.
     "marts": marts.export_marts,
     "upload": upload.upload_all,
-    # Reads the published export back into a warehouse anyone can query. The only
-    # route to the history that needs no credentials.
-    "hydrate": hydrate.hydrate,
     # The raw layer's durable copy. `restore` is the first step on a fresh clone:
-    # the 31-slot ring cannot seed a history it does not hold.
+    # the 31-slot ring cannot seed a history it does not hold. It needs no
+    # credentials; only `archive` does.
     "archive": upload.archive_raw,
     "restore": upload.restore_raw,
     # Scope-independent and rarely rerun.
@@ -64,23 +62,6 @@ def main() -> int:
         action="store_true",
         help="Upload step only. Send dist/marts to the bucket under marts/ instead of the export.",
     )
-    parser.add_argument(
-        "--origin",
-        help=(
-            "Hydrate step only. Base URL of a published export. Defaults to the "
-            "project's own public bucket, so a fresh clone needs no configuration."
-        ),
-    )
-    parser.add_argument(
-        "--no-names",
-        action="store_true",
-        help="Hydrate step only. Skip the 655 name blocks, which are most of the requests.",
-    )
-    parser.add_argument(
-        "--offline",
-        action="store_true",
-        help="Hydrate step only. Build from the cache alone, manifest included.",
-    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -105,8 +86,6 @@ def main() -> int:
         _emit(rows=atlantis.scrape_atlantis())
     elif args.step == "upload":
         (upload.upload_marts if args.marts else upload.upload_all)()
-    elif args.step == "hydrate":
-        hydrate.hydrate(args.origin, names=not args.no_names, offline=args.offline)
     elif args.step == "archive":
         upload.archive_raw(prefix=args.prefix)
     elif args.step == "restore":

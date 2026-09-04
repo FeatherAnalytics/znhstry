@@ -26,11 +26,14 @@ content check would otherwise skip them and leave the old Cache-Control behind.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import md5
 from pathlib import Path
+
+import httpx
 
 from . import config
 
@@ -66,6 +69,11 @@ REVALIDATE = "public, no-cache"
 ARCHIVE_PREFIX = "raw/"
 ARCHIVE = "no-store"
 
+# Every key under `raw/` with its MD5, written last by every archive run. A public
+# bucket cannot be listed, so this is how a reader with no credentials - a fresh clone,
+# a pull-request runner - learns what to fetch and how to check it arrived whole.
+MANIFEST_KEY = ARCHIVE_PREFIX + "_manifest.json"
+
 # Written only by the hourly Atlantis job. Any other checkout holds a stale copy, so a full
 # archive neither uploads nor sweeps this subtree; only a run scoped to it may write it.
 HOURLY_PREFIX = "atlantis/"
@@ -91,16 +99,24 @@ def _cache_control(key: str) -> str:
 # almost pure round-trip; R2 is happy with this much concurrency.
 WORKERS = 16
 
+# For the credential-free restore. The largest raw file is a year of the changelog.
+PUBLIC_TIMEOUT = 120.0
 
-def _client():
-    """An S3 client pointed at R2, from whichever env var names are set."""
+
+def _credentials() -> tuple[str | None, str | None, str | None]:
+    """Endpoint, access key and secret, from whichever env var names are set."""
     account = os.environ.get("R2_ACCOUNT_ID")
     endpoint = os.environ.get("R2_ENDPOINT") or (
         f"https://{account}.r2.cloudflarestorage.com" if account else None
     )
     access_key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
     secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
+    return endpoint, access_key, secret_key
 
+
+def _client():
+    """An S3 client pointed at R2."""
+    endpoint, access_key, secret_key = _credentials()
     if not (endpoint and access_key and secret_key):
         raise SystemExit(
             "R2 credentials not set. Need R2_ACCOUNT_ID (or R2_ENDPOINT), "
@@ -192,6 +208,19 @@ def _hourly_only(relative: str, prefix: str) -> bool:
     return not prefix and relative.startswith(HOURLY_PREFIX)
 
 
+def _archive_files(root: Path, prefix: str) -> list[Path]:
+    """What a run scoped to `prefix` may archive: no temp files, no hourly subtree, and
+    never a manifest that a restore happened to leave on disk."""
+    files = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(config.RAW).as_posix()
+        if not path.is_file() or path.suffix == ".tmp" or _hourly_only(relative, prefix):
+            continue
+        if ARCHIVE_PREFIX + relative != MANIFEST_KEY:
+            files.append(path)
+    return files
+
+
 def _changed(files: list[Path], remote: dict[str, str], key_of: dict[Path, str]) -> list[Path]:
     """The files whose bytes differ from the object already in the bucket.
 
@@ -232,8 +261,7 @@ def archive_raw(bucket: str | None = None, prefix: str = "") -> None:
         raise SystemExit(f"{root} does not exist - nothing to archive.")
 
     s3 = _client()
-    files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix != ".tmp")
-    files = [p for p in files if not _hourly_only(p.relative_to(config.RAW).as_posix(), prefix)]
+    files = _archive_files(root, prefix)
     key_of = {p: ARCHIVE_PREFIX + p.relative_to(config.RAW).as_posix() for p in files}
     remote = _existing(s3, bucket, ARCHIVE_PREFIX + prefix)
     pending = _changed(files, remote, key_of)
@@ -251,11 +279,75 @@ def archive_raw(bucket: str | None = None, prefix: str = "") -> None:
     # Only within the archive's own prefix, so this can never touch the export.
     stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX + prefix)} - set(key_of.values())
     stale = {k for k in stale if not _hourly_only(k[len(ARCHIVE_PREFIX) :], prefix)}
+    stale.discard(MANIFEST_KEY)
     if stale:
         log.info("removing %s stale archive objects", f"{len(stale):,}")
         _delete_keys(s3, bucket, stale)
 
+    _write_archive_manifest(s3, bucket)
     log.info("archive complete: %s files under %s", f"{len(files):,}", ARCHIVE_PREFIX + prefix)
+
+
+def _write_archive_manifest(s3, bucket: str) -> None:
+    """List `raw/` after the run and publish what is there, MD5 per key.
+
+    From a fresh listing rather than from this run's files: a prefixed run knows only its
+    own subtree, and the hourly job and the nightly both write here. Either one leaves a
+    complete manifest behind, and a stale one is corrected by whichever runs next.
+    """
+    listing = _existing(s3, bucket, ARCHIVE_PREFIX)
+    files = {
+        key[len(ARCHIVE_PREFIX) :]: etag
+        for key, etag in sorted(listing.items())
+        if key != MANIFEST_KEY
+    }
+    s3.put_object(
+        Bucket=bucket,
+        Key=MANIFEST_KEY,
+        Body=json.dumps({"files": files}, indent=1).encode(),
+        ContentType="application/json",
+        CacheControl=_cache_control(MANIFEST_KEY),
+    )
+
+
+def _restore_public(prefix: str, client: httpx.Client | None = None) -> None:
+    """Pull `raw/` down over plain HTTP from the public bucket, with no credentials.
+
+    The manifest says what exists and what each file's MD5 is, and every download is
+    checked against it before it is kept. A truncated body would otherwise sit on disk as
+    a Parquet file that decodes into plausible numbers for however many rows arrived.
+    """
+    base = config.PUBLIC_DATA_ORIGIN.rstrip("/") + "/"
+    client = client or httpx.Client(
+        timeout=PUBLIC_TIMEOUT, headers={"User-Agent": config.USER_AGENT}, follow_redirects=True
+    )
+    response = client.get(base + MANIFEST_KEY)
+    if response.status_code == 404 and prefix:
+        log.info("no %s at %s yet", MANIFEST_KEY, base)
+        return
+    if response.status_code != 200:
+        raise SystemExit(f"{base}{MANIFEST_KEY} returned {response.status_code}")
+    files = {k: v for k, v in response.json()["files"].items() if k.startswith(prefix)}
+    if not files and not prefix:
+        raise SystemExit(f"{base}{MANIFEST_KEY} names no files - has `archive` run?")
+
+    log.info("restoring %s files from %s, no credentials", f"{len(files):,}", base)
+
+    def one(item: tuple[str, str]) -> int:
+        relative, expected = item
+        body = client.get(base + ARCHIVE_PREFIX + relative).raise_for_status().content
+        if md5(body).hexdigest() != expected:
+            raise SystemExit(f"{relative}: body does not match the manifest's MD5 - truncated?")
+        dest = config.RAW / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(dest)
+        return len(body)
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        total = sum(pool.map(one, files.items()))
+    log.info("restore complete: %s files, %s MB", f"{len(files):,}", f"{total / 1e6:.1f}")
 
 
 def restore_raw(bucket: str | None = None, prefix: str = "") -> None:
@@ -269,11 +361,17 @@ def restore_raw(bucket: str | None = None, prefix: str = "") -> None:
     normal there - the first run has nothing to restore yet - so only the full
     restore treats an empty archive as an error.
     """
-    bucket = _bucket(bucket)
     prefix = _sub_prefix(prefix)
+    if not all(_credentials()):
+        # A fresh clone or a pull-request runner: the archive is public, so the manifest
+        # and plain GETs are enough. Only writing needs a key.
+        _restore_public(prefix)
+        return
+
+    bucket = _bucket(bucket)
     s3 = _client()
     scope = ARCHIVE_PREFIX + prefix
-    keys = [k for k in _existing(s3, bucket, scope) if k.startswith(scope)]
+    keys = [k for k in _existing(s3, bucket, scope) if k.startswith(scope) and k != MANIFEST_KEY]
     if not keys and prefix:
         log.info("nothing under %s in %s yet", scope, bucket)
         return

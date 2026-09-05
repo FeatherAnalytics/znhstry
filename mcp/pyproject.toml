@@ -1,0 +1,29 @@
+[project]
+name = "znhstry-mcp"
+version = "0.1.0"
+description = "Query the Zone History warehouse (QONQR zone control, published as Parquet) from an MCP client."
+requires-python = ">=3.13"
+dependencies = ["mcp>=2.1", "duckdb>=1.1"]
+
+[project.scripts]
+znhstry-mcp = "znhstry_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/znhstry_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

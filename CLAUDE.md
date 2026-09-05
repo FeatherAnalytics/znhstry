@@ -1178,6 +1178,23 @@ order by total_bots desc limit 10;
 
 See "The marts, as Parquet" below for every table and its sort key.
 
+A third way in is for an LLM client rather than a person. `mcp/` is a small MCP server that
+runs DuckDB over the published Parquet, so it needs no clone, no warehouse and no key:
+
+```bash
+uvx --from "git+https://github.com/FeatherAnalytics/znhstry#subdirectory=mcp" znhstry-mcp
+```
+
+Four tools — `list_tables`, `describe_table`, `freshness` and `query` — and it is read-only by
+construction: one statement per call, admitted only if DuckDB parses it as SELECT or EXPLAIN
+(which covers WITH, DESCRIBE, SHOW and SUMMARIZE, with PRAGMA and CALL rejected by name), and
+the connection has `disabled_filesystems = 'LocalFileSystem'` under `lock_configuration`, so
+SQL cannot touch the host's disk or undo the setting. `allow_persistent_secrets` must be off
+before the lockdown: httpfs opens `~/.duckdb/stored_secrets` on its first request, and with the
+local filesystem disabled that fails and leaves every later HTTP read broken.
+`--http HOST:PORT` serves the same thing over streamable HTTP with `GET /tables` and
+`GET /query?sql=` beside it, which is the shape a hosted API would take.
+
 ## The marts, as Parquet
 
 `uv run python -m znhstry marts` writes every mart anything outside the map would want as

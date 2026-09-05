@@ -39,6 +39,11 @@ cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under
 cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
 ```
 
+**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the hourly
+Atlantis job at :07 by the same Worker.** GitHub's own `schedule:` lines stay as fallbacks;
+GitHub has been firing the 02:30 cron around 07:20 and dropping the hourly one entirely. See
+"The Atlantis tournament leaderboard" for why a doubled run is a no-op in both.
+
 Other steps:
 
 ```bash
@@ -622,6 +627,19 @@ data carries `next_run_at`, and the workflow's gate reads it from the public buc
 deciding whether to run, so an idle hour costs one small read and no request to the game.
 The gate fails the run when `DATA_ORIGIN` is unset or the state file returns anything but
 200 or 404, so a broken origin cannot turn into an hourly scrape between tournaments.
+
+**A Cloudflare Worker dispatches the hourly workflow, because GitHub's scheduler does not.**
+GitHub's cron skipped the Atlantis schedule outright for hours at a time and runs the nightly
+about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
+`scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and on `nightly.yml`
+at 00:45 UTC, deployed by `deploy-trigger.yml`. Both workflows keep their own `schedule:`
+as the fallback and a doubled run is a no-op in each: the Atlantis gate reads `next_run_at`,
+the top of the hour after a collection, so the second run of an hour reads `run=false`; the
+nightly's `plan_slots` asks only for missing days and "Anything to publish?" skips the
+rebuild when nothing is new. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
+Read and write on this repository, pushed from the repository secret
+`ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
+secret and re-running `deploy-trigger.yml`.
 
 **The hourly job is the only writer of `raw/atlantis/`.** A full `archive` with no `--prefix`
 neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy

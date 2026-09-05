@@ -21,6 +21,17 @@ name: Nightly data update
 # before the file lands does nothing, and the next night picks up both days. Nobody has
 # to re-run anything for an ordinary miss.
 #
+# ## Why a Cloudflare Worker also starts this run, at 00:45
+#
+# GitHub's scheduler has been firing the 02:30 cron around 07:20 UTC, and dropped the
+# hourly Atlantis cron outright. Cloudflare cron triggers fire on time, so the Worker in
+# `trigger/` dispatches this workflow at 00:45 UTC. The schedule below stays as the
+# fallback: the nightly has no gate, and a second run in one night is a self-correcting
+# no-op - `plan_slots` asks only for missing days and "Anything to publish?" skips the
+# rebuild when nothing is new. That fallback also covers the one risk of 00:45: QONQR's
+# dump ends at about 00:01 and how long Dropbox takes to hold it is unmeasured, so if
+# 00:45 is ever too early the run is a green no-op and 02:30 picks the day up.
+#
 # ## What tells anyone the data has stopped
 #
 # A quiet upstream is indistinguishable from a healthy no-op: `plan_slots` asks for

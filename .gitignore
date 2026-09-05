@@ -14,6 +14,8 @@ out/
 
 # Env
 .env
+# wrangler's local secrets for `wrangler dev`
+.dev.vars
 
 # dbt
 target/
@@ -44,3 +46,6 @@ thoughts/
 # Machine-local instructions for the assistant. Ignored here rather than in
 # .git/info/exclude, which does not travel with a clone.
 CLAUDE.local.md
+
+# wrangler dev state
+.wrangler/

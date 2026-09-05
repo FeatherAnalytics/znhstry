@@ -42,9 +42,13 @@ export default {
         body: JSON.stringify({ ref: "main" }),
       },
     );
-    // No retry: the next firing is the retry, and a doubled run is a no-op either way.
+    // No retry: the next firing is the retry, and a doubled run is a no-op either way. The
+    // throw is what marks the invocation failed in the Worker's cron log; a logged line
+    // alone leaves it green.
     if (response.status !== 204) {
-      console.error(`${workflow} dispatch failed: ${response.status} ${await response.text()}`);
+      const body = await response.text();
+      console.error(`${workflow} dispatch failed: ${response.status} ${body}`);
+      throw new Error(`${workflow} dispatch failed: ${response.status}`);
     }
   },
 

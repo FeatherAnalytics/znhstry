@@ -535,6 +535,8 @@ stats exist to be collected automatically rather than to be drawn. A per-*player
 is a separate job: the report pages carry a packed string of roughly 924,728 player rows
 that ingest does not unpack. See `thoughts/future-features.md`.
 
+**Each player row on the report page carries the player's faction as the `<tr>` CSS class** (`Swarm`, `Legion`, `Faceless`) and two badge spans: `<span class="atlantis-gold">` for TournamentMillionKills and `<span class="gold-star">` for WeeklyMillionKills. `parse_report` extracts these into per-player rows written to `data/raw/battlestats/players/year=YYYY/rows.parquet`, keyed on `(BattleReportNumber, Rank, PlayerName)`. The packed `players` string is unchanged. `stg_atlantis_battle_players` reads from the per-player table where available and falls back to the packed string for older reports; faction and badges are null on the fallback path until the backfill (6b) repopulates them.
+
 ### The Atlantis page
 
 `/atlantis` is a client-only route that reads the `atlantis/` export tree — `index.json.br` for the tournament list and all-time standings, one `YYYY-MM.json.br` per month for hourly series. Three tabs: Dashboard, History, All Time. URL state (`t`, `player`, `zone`, `tab`) is bookmarkable via `useSearchParams` under a `<Suspense>` boundary (required for static export).

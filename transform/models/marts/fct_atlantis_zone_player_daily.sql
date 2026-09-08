@@ -7,10 +7,13 @@ select
     bp.zone_name,
     bp.battle_date,
     bp.player_name,
+    bp.faction,
     bp.rank,
     bp.launches,
     bp.bots_killed,
     bp.bots_lost,
+    bp.tournament_million_kills,
+    bp.weekly_million_kills,
     bp.battle_report_number
 from {{ ref('stg_atlantis_battle_players') }} bp
 left join {{ ref('stg_atlantis_zone_months') }} zm

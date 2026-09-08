@@ -52,6 +52,14 @@ sources:
           battlestats` collects forward from there, ten pages on a normal day.
         meta:
           external_location: "read_parquet('../data/raw/battlestats/battlestats.parquet')"
+      - name: battlestats_players
+        description: >
+          Per-player rows from battle report pages, with faction from the row's CSS
+          class and badge booleans from the span classes. Hive-partitioned by year.
+          Populated going forward by scrape_battlestats; null for historical reports
+          until the backfill (6b).
+        meta:
+          external_location: "read_parquet('../data/raw/battlestats/players/**/*.parquet', hive_partitioning=true)"
       - name: atlantis_leaderboard
         description: >
           The monthly tournament leaderboard at `portal.qonqr.com/Atlantis`, one row per

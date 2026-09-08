@@ -76,6 +76,12 @@ jobs:
           NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
         run: uv run python -m znhstry restore
 
+      # A source bound to a glob must match at least one file, and the players
+      # table has no files until the first scrape has been archived.
+      - name: Bootstrap players table
+        working-directory: pipeline
+        run: uv run python -c "from znhstry import portal; portal.ensure_players_table()"
+
       # The whole warehouse, tests included, the same way the nightly runs it. A
       # `dbt parse` alone let a source binding to a missing glob ship green; only a
       # build against the real raw layer catches that, and the unit tests need a

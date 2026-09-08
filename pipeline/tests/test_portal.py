@@ -41,9 +41,19 @@ BROKEN_REPORT = (
 
 
 @pytest.fixture(scope="module")
-def report() -> dict:
+def parsed():
     html = (FIXTURES / "battle_report_131012.html").read_text(encoding="utf-8")
     return parse_report(131012, html)
+
+
+@pytest.fixture(scope="module")
+def report(parsed) -> dict:
+    return parsed[0]
+
+
+@pytest.fixture(scope="module")
+def player_rows(parsed) -> list:
+    return parsed[1]
 
 
 def test_the_column_contract_is_77_fields(report):
@@ -94,6 +104,42 @@ def test_faction_breakdowns_sum_to_their_total(report):
 
 def test_players_are_captured(report):
     assert report["players"].startswith("1,sethowar,")
+
+
+def test_report_dict_keys_unchanged(report):
+    assert len(report) == 77
+    assert "_player_rows" not in report
+
+
+def test_player_rows_count_matches_packed_string(report, player_rows):
+    packed = report["players"]
+    expected = (packed.count(",") + 1) // 5
+    assert len(player_rows) == expected
+
+
+def test_first_player_row(player_rows):
+    first = player_rows[0]
+    assert first["Faction"] == "Swarm"
+    assert first["Rank"] == 1
+    assert first["PlayerName"] == "sethowar"
+    assert first["WeeklyMillionKills"] is True
+    assert first["TournamentMillionKills"] is True
+
+
+def test_second_player_row_badges(player_rows):
+    second = player_rows[1]
+    assert second["Faction"] == "Faceless"
+    assert second["PlayerName"] == "LordStefo"
+    assert second["WeeklyMillionKills"] is True
+    assert second["TournamentMillionKills"] is False
+
+
+def test_third_player_row_no_badges(player_rows):
+    third = player_rows[2]
+    assert third["Faction"] == "Swarm"
+    assert third["PlayerName"] == "L0ZA"
+    assert third["TournamentMillionKills"] is False
+    assert third["WeeklyMillionKills"] is False
 
 
 def test_a_page_with_no_report_is_not_an_error():

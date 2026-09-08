@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +78,39 @@ def _number(text: str) -> int:
     return int(text.replace(_THOUSANDS, "").strip())
 
 
-def parse_report(brn: int, html: str) -> dict[str, Any]:
+def _parse_player_rows(
+    soup: BeautifulSoup, brn: int, battle_date: date, zone_name: str,
+) -> list[dict[str, Any]]:
+    table = soup.select_one("div.col-sm-6 > div.table-responsive > table.table-hover > tbody")
+    if table is None:
+        return []
+    rows: list[dict[str, Any]] = []
+    for tr in table.find_all("tr", recursive=False):
+        classes = tr.get("class", [])
+        faction = classes[0] if classes else None
+        cells = tr.find_all("td")
+        if len(cells) < 6:
+            continue
+        name_cell = cells[2]
+        link = name_cell.find("a")
+        player_name = link.get_text(strip=True) if link else name_cell.get_text(strip=True)
+        rows.append({
+            "BattleReportNumber": brn,
+            "BattleDate": battle_date,
+            "ZoneName": zone_name,
+            "Faction": faction,
+            "Rank": _number(cells[0].get_text(strip=True)),
+            "PlayerName": player_name,
+            "Launches": _number(cells[3].get_text(strip=True)),
+            "BotsKilled": _number(cells[4].get_text(strip=True)),
+            "BotsLost": _number(cells[5].get_text(strip=True)),
+            "TournamentMillionKills": name_cell.find("span", class_="atlantis-gold") is not None,
+            "WeeklyMillionKills": name_cell.find("span", class_="gold-star") is not None,
+        })
+    return rows
+
+
+def parse_report(brn: int, html: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Turn one battle report page into a row.
 
     Column names are built from the page's own text - the stat label, and the faction
@@ -127,10 +159,10 @@ def parse_report(brn: int, html: str) -> dict[str, Any]:
     players = soup.select_one("div.col-sm-6 > div.table-responsive > table > tbody")
     row["players"] = players.get_text(",", strip=True).replace(" ", "") if players else None
     if not row["players"]:
-        # The seeded history drops these, so keeping them would change the grain.
         raise ReportUnavailable(f"{brn}: no players")
 
-    return row
+    player_rows = _parse_player_rows(soup, brn, row["Date"], row["Zone Name"])
+    return row, player_rows
 
 
 def _client() -> httpx.Client:
@@ -216,6 +248,7 @@ def _targets(listed: list[int], have: set[int], checked: int = 0) -> list[int]:
 
 def scrape_battlestats() -> int:
     """Fetch any battle reports we do not have. Returns the number added."""
+    ensure_players_table()
     current = existing()
     have = set(current[BATTLESTATS_KEY].to_list()) if current is not None else set()
 
@@ -230,6 +263,7 @@ def scrape_battlestats() -> int:
 
         log.info("battlestats: fetching %d report(s)", len(targets))
         rows: list[dict[str, Any]] = []
+        all_player_rows: list[dict[str, Any]] = []
         missing = 0
         unparsed = 0
         reached = 0
@@ -239,14 +273,14 @@ def scrape_battlestats() -> int:
                 response = client.get(REPORT_URL.format(brn=brn))
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                # Stop rather than hammer a server that is already unhappy. Whatever was
-                # parsed so far is still worth keeping, and the rest resumes next run.
                 log.warning("portal request failed at %s (%s); stopping here", brn, exc)
                 break
 
             reached = brn
             try:
-                rows.append(parse_report(brn, response.text))
+                report, player_rows = parse_report(brn, response.text)
+                rows.append(report)
+                all_player_rows.extend(player_rows)
             except ReportUnavailable as exc:
                 missing += 1
                 log.debug("skipped %s", exc)
@@ -271,7 +305,10 @@ def scrape_battlestats() -> int:
     if not rows:
         return 0
 
-    return merge_battlestats(pl.DataFrame(rows))
+    added = merge_battlestats(pl.DataFrame(rows))
+    if all_player_rows:
+        _merge_player_rows(pl.DataFrame(all_player_rows))
+    return added
 
 
 def merge_battlestats(incoming: pl.DataFrame) -> int:
@@ -300,3 +337,55 @@ def merge_battlestats(incoming: pl.DataFrame) -> int:
         merged["Date"].max(),
     )
     return added
+
+
+_PLAYER_KEY = ["BattleReportNumber", "Rank", "PlayerName"]
+
+_PLAYER_SCHEMA = {
+    "BattleReportNumber": pl.Int64,
+    "BattleDate": pl.Date,
+    "ZoneName": pl.Utf8,
+    "Faction": pl.Utf8,
+    "Rank": pl.Int16,
+    "PlayerName": pl.Utf8,
+    "Launches": pl.Int64,
+    "BotsKilled": pl.Int64,
+    "BotsLost": pl.Int64,
+    "TournamentMillionKills": pl.Boolean,
+    "WeeklyMillionKills": pl.Boolean,
+}
+
+
+def ensure_players_table() -> None:
+    """Create an empty players Parquet if none exists.
+
+    A dbt source bound to a glob must match at least one file, and a fresh
+    clone or a PR runner has none until the first scrape has been archived.
+    """
+    root = config.RAW / "battlestats" / "players"
+    if any(root.rglob("*.parquet")):
+        return
+    year = datetime.now().year
+    path = root / f"year={year}" / "rows.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(schema=_PLAYER_SCHEMA).write_parquet(path, compression="zstd")
+
+
+def _merge_player_rows(incoming: pl.DataFrame) -> None:
+    for (year_val,), group in incoming.group_by(incoming["BattleDate"].dt.year()):
+        path = config.RAW / "battlestats" / "players" / f"year={year_val}" / "rows.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if path.exists():
+            existing = pl.read_parquet(path)
+            group = pl.concat([existing, group], how="diagonal_relaxed")
+
+        merged = group.unique(
+            subset=_PLAYER_KEY, keep="last", maintain_order=True,
+        ).sort(_PLAYER_KEY)
+
+        tmp = path.with_name(path.name + ".tmp")
+        merged.write_parquet(tmp, compression="zstd")
+        tmp.replace(path)
+
+    log.info("battle players: %d rows written", incoming.height)

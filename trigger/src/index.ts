@@ -18,10 +18,6 @@ interface Env {
 const WORKFLOW_FOR_CRON: Record<string, string> = {
   "7 * * * *": "atlantis.yml",
   "45 0 * * *": "nightly.yml",
-  "15 1 * * *": "backfill.yml",
-  "15 7 * * *": "backfill.yml",
-  "15 13 * * *": "backfill.yml",
-  "15 19 * * *": "backfill.yml",
 };
 
 const REPO = "FeatherAnalytics/znhstry";

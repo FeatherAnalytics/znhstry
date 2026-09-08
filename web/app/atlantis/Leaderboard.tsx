@@ -19,14 +19,13 @@ interface Row {
   faction: string;
   name: string;
   launches: number;
-  gained: number;
   bestHr: number;
   tm: boolean;
   wm: boolean;
   qredits: number;
 }
 
-type SortCol = "launches" | "gained" | "bestHr" | "qredits";
+type SortCol = "launches" | "bestHr" | "qredits";
 
 const cellStyle: CSSProperties = {
   padding: "12px 10px",
@@ -61,7 +60,6 @@ function playerToRow(faction: string, name: string, data: MonthPayload["players"
     faction,
     name,
     launches,
-    gained: intervals.reduce((s, iv) => s + iv.gained, 0),
     bestHr: intervals.reduce((m, iv) => Math.max(m, iv.perHour), 0),
     tm: lastBool(data.tm, lastIdx),
     wm: lastBool(data.wm, lastIdx),
@@ -133,7 +131,6 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Faction</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("gained")} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gained in coverage{arrow("gained")}</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("bestHr")}>Best /hr{arrow("bestHr")}</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Tournament Million Kills: 1,000,000+ kills in the current tournament (atlantis-gold badge)">Tournament 1M</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Weekly Million Kills: 1,000,000+ kills this week outside the tournament, weeks start 00:00 UTC Sunday (gold-star badge)">Weekly 1M</th>
@@ -151,7 +148,6 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
                   </span>
                 </td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.gained.toLocaleString()}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{Math.round(r.bestHr).toLocaleString()}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.tm ? "★" : ""}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.wm ? "★" : ""}</td>

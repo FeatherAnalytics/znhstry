@@ -541,7 +541,7 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 
 **The coverage line exists because a partial month must never read as a quiet one.** September 2026's coverage is the last 27 hours of a five-day tournament, and without the line a reader sees placements and a leaderboard and assumes they describe the whole battle. The line names the observation window with times, not just dates.
 
-**"Gained in coverage" is never "Gained".** The column sums launches gained between the first and last observation we hold for the month, which is the coverage window, not the tournament total. A player who launched 2,000 in stacking and 500 in our coverage window shows 500. The label, its title attribute, and the player detail's gains bars all say "in coverage" for the same reason the line exists: a partial window must not imply a complete picture.
+**The player detail's gains bars cover only the observations we hold**, not the tournament total. A player who launched 2,000 in stacking and 500 in our coverage window shows 500 in the gains bars. The title attribute says so for the same reason the coverage line exists: a partial window must not imply a complete picture.
 
 **Rates are per hour because observations are hourly.** The payload's `launches_gained` is per interval and the early intervals in a collection run are two hours long, so plotting raw values shows a false burst where the observation gap was wider. Dividing by the interval's minutes and showing launches per hour normalizes this. The same computation drives the leaderboard's "Best /hr" and the player detail's top-3 interval labels.
 

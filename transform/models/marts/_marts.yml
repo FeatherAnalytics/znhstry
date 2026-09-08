@@ -142,3 +142,78 @@ models:
         data_tests: [not_null]
       - name: changelog_covered
         data_tests: [not_null]
+
+  - name: fct_atlantis_player_interval
+    description: >
+      Grain: one row per player, faction, and pair of consecutive observations
+      within one tournament month. A player's first observation yields no row.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless']
+      - name: player_name
+        data_tests: [not_null]
+      - name: observed_at
+        data_tests: [not_null]
+
+  - name: fct_atlantis_faction_hourly
+    description: >
+      Grain: one row per tournament month, faction, and observation that has at
+      least one interval ending at it.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless']
+      - name: observed_at
+        data_tests: [not_null]
+
+  - name: fct_atlantis_zone_interval
+    description: >
+      Grain: one row per zone and pair of consecutive observations within one
+      tournament month.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: zone
+        data_tests: [not_null]
+      - name: observed_at
+        data_tests: [not_null]
+      - name: holder
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless']
+
+  - name: dim_atlantis_tournament
+    description: >
+      Grain: one row per tournament month. Placements, pools, coverage, and
+      per-faction top players at the last observation.
+    columns:
+      - name: tournament_month
+        data_tests: [unique, not_null]
+
+  - name: fct_atlantis_payout
+    description: >
+      Grain: one row per tournament month, faction, and player on the board at
+      the last observation. Each player's share of their placement's pool.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless']
+      - name: player_name
+        data_tests: [not_null]

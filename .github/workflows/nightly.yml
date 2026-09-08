@@ -60,8 +60,13 @@ on:
 permissions:
   contents: read
 
+# Both the nightly (which runs scrape_battlestats -> _merge_player_rows) and the
+# backfill write raw/battlestats/players/. The shared group serializes them;
+# cancel-in-progress is false so a nightly firing during a backfill window waits
+# rather than canceling hours of progress. The 19:15 backfill cut-off makes that
+# rare: it ends by 00:15, clear of the 00:45 nightly dispatch.
 concurrency:
-  group: nightly
+  group: battlestats-players
   cancel-in-progress: false
 
 jobs:

@@ -184,8 +184,8 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
   return (
     <aside
       style={{
-        width: 280,
-        flexShrink: 0,
+        flex: "0 0 280px",
+        maxWidth: "100%",
         overflowY: "auto",
         borderRight: "1px solid var(--hairline)",
         padding: "12px 16px",
@@ -399,9 +399,9 @@ export default function QueryConsole() {
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
       <Header meta={meta} loading={meta === null && bootError === null} />
-      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "hidden" }}>
         <TableList meta={meta} onPick={(name) => setSql(`select * from ${name} limit 100`)} />
-        <section style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <section style={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexDirection: "column" }}>
           <Editor
             sql={sql}
             onChange={setSql}

@@ -45,6 +45,7 @@ select
     swarm_delta,
     faceless_delta,
     event_count,
-    capture_count
+    capture_count,
+    activity_date = max(activity_date) over () as is_latest
 from filled
 window w as (order by activity_date rows between unbounded preceding and current row)

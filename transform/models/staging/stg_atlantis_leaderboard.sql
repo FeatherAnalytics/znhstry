@@ -18,5 +18,10 @@ select
         partition by "ObservedAtUtc", "Faction"
         order by "Launches" desc
     )                                            as launch_rank,
-    cast(date_trunc('month', "ObservedAtUtc") as date) as tournament_month
+    cast(date_trunc('month', "ObservedAtUtc") as date) as tournament_month,
+    -- Per month: a finished tournament marks its final standings, a running one its
+    -- current board.
+    "ObservedAtUtc" = max("ObservedAtUtc") over (
+        partition by date_trunc('month', "ObservedAtUtc")
+    )                                            as is_latest
 from {{ source('raw', 'atlantis_leaderboard') }}

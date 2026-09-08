@@ -68,7 +68,10 @@ select
     f.swarm_delta,
     f.faceless_delta,
     f.event_count,
-    f.capture_count
+    f.capture_count,
+    -- The spine ends on the same day for every country, so this marks one row per
+    -- country and a reader needs no subquery to reach the newest standings.
+    f.activity_date = max(f.activity_date) over () as is_latest
 from filled f
 left join {{ ref('stg_countries') }} c on c.country_id = f.country_id
 window w as (

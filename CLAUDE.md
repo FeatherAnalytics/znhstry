@@ -1180,7 +1180,7 @@ as Parquet under `marts/`, and any DuckDB reads them in place:
 ```sql
 select country_name, total_bots
 from read_parquet('https://data.znhstry.com/marts/fct_country_daily.parquet')
-where activity_date = '2026-09-01'
+where is_latest
 order by total_bots desc limit 10;
 ```
 
@@ -1236,6 +1236,13 @@ select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_tourname
 
 `marts/_meta.json` names every table with its path, row count, bytes, sort key and columns,
 plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
+
+**`is_latest` is how a reader reaches the newest rows without a subquery.** On
+`fct_country_daily` and `fct_global_daily` it is true on the newest day in the record; on
+`stg_atlantis_leaderboard` and `stg_atlantis_zones` it is true on the newest pull of each
+tournament month, so a finished month marks its final standings and a running one its current
+board. Computed in dbt with a window function, so the page, the MCP server and any DuckDB
+agree on it. Not on `fct_zone_events` or `dim_zone`.
 
 **The sort key is unique for every table, and the writer refuses one that is not.** A
 unique key makes the order total; a total order makes the file deterministic; determinism

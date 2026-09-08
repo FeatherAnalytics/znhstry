@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { DATA_ROOT } from "@/lib/dataOrigin";
 import { openDuckDB, type MartsMeta, type ResultTable, type Warehouse } from "@/lib/duckdbWasm";
 
 const DISPLAY_CAP = 1_000;
@@ -363,8 +364,11 @@ const statusFor = (result: QueryResult | null, csvNote: string | null): string |
 const csvNoteFor = (rows: number): string | null =>
   rows > CSV_CAP ? `CSV holds the first ${count(CSV_CAP)} of ${count(rows)} rows` : null;
 
-const BOOT_HINT =
-  "Locally, `npm run data` must be running in web/ so dist/marts is served on :3002. Reload once it is.";
+// Only a developer's build points at localhost; a visitor to the site must not be
+// told to start a dev server.
+const BOOT_HINT = DATA_ROOT.startsWith("http://localhost")
+  ? "Locally, `npm run data` must be running in web/ so dist/marts is served on :3002. Reload once it is."
+  : undefined;
 
 function Errors({ bootError, error }: { bootError: string | null; error: string | null }) {
   return (

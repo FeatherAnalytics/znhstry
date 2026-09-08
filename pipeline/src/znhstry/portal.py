@@ -248,6 +248,7 @@ def _targets(listed: list[int], have: set[int], checked: int = 0) -> list[int]:
 
 def scrape_battlestats() -> int:
     """Fetch any battle reports we do not have. Returns the number added."""
+    ensure_players_table()
     current = existing()
     have = set(current[BATTLESTATS_KEY].to_list()) if current is not None else set()
 
@@ -339,6 +340,35 @@ def merge_battlestats(incoming: pl.DataFrame) -> int:
 
 
 _PLAYER_KEY = ["BattleReportNumber", "Rank", "PlayerName"]
+
+_PLAYER_SCHEMA = {
+    "BattleReportNumber": pl.Int64,
+    "BattleDate": pl.Date,
+    "ZoneName": pl.Utf8,
+    "Faction": pl.Utf8,
+    "Rank": pl.Int16,
+    "PlayerName": pl.Utf8,
+    "Launches": pl.Int64,
+    "BotsKilled": pl.Int64,
+    "BotsLost": pl.Int64,
+    "TournamentMillionKills": pl.Boolean,
+    "WeeklyMillionKills": pl.Boolean,
+}
+
+
+def ensure_players_table() -> None:
+    """Create an empty players Parquet if none exists.
+
+    A dbt source bound to a glob must match at least one file, and a fresh
+    clone or a PR runner has none until the first scrape has been archived.
+    """
+    root = config.RAW / "battlestats" / "players"
+    if any(root.rglob("*.parquet")):
+        return
+    year = datetime.now().year
+    path = root / f"year={year}" / "rows.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(schema=_PLAYER_SCHEMA).write_parquet(path, compression="zstd")
 
 
 def _merge_player_rows(incoming: pl.DataFrame) -> None:

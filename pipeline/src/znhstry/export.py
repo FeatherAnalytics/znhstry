@@ -1402,7 +1402,7 @@ def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
     total_bytes = 0
 
     for row in tournaments:
-        t = dict(zip(tournament_cols, row))
+        t = dict(zip(tournament_cols, row, strict=True))
         month_str = t["tournament_month"].strftime("%Y-%m")
         payload = _build_month_payload(con, t, month_str)
         path = tree / f"{month_str}.json.br"
@@ -1625,7 +1625,7 @@ def _build_atlantis_index(
 ) -> dict:
     tournament_list = []
     for row in tournaments:
-        t = dict(zip(cols, row))
+        t = dict(zip(cols, row, strict=True))
         placements = []
         for rank_col, zone_col, pool_col in (
             ("first_place", "first_zones", "first_pool"),

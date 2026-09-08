@@ -289,6 +289,7 @@ def _clear_shards(out: Path) -> None:
         "tiles",
         "paint",
         "names",
+        "atlantis",
     ):
         shutil.rmtree(out / name, ignore_errors=True)
     # Layouts this replaced. Left behind, they are dead weight that an upload
@@ -1377,6 +1378,352 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
     }
 
 
+_ZONE_PYRAMID_ORDER = [
+    "Prime",
+    "Legion 1", "Legion 2", "Legion 3", "Legion 4", "Legion 5", "Legion 6",
+    "Swarm 1", "Swarm 2", "Swarm 3", "Swarm 4", "Swarm 5", "Swarm 6",
+    "Faceless 1", "Faceless 2", "Faceless 3", "Faceless 4", "Faceless 5", "Faceless 6",
+]
+
+_FACTION_ORDER = ("Legion", "Swarm", "Faceless")
+
+
+def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
+    tree = out / "atlantis"
+    tree.mkdir(parents=True, exist_ok=True)
+
+    result = con.execute(
+        "select * from dim_atlantis_tournament order by tournament_month"
+    )
+    tournament_cols = [d[0] for d in result.description]
+    tournaments = result.fetchall()
+
+    months_written: list[str] = []
+    total_bytes = 0
+
+    for row in tournaments:
+        t = dict(zip(tournament_cols, row))
+        month_str = t["tournament_month"].strftime("%Y-%m")
+        payload = _build_month_payload(con, t, month_str)
+        path = tree / f"{month_str}.json.br"
+        total_bytes += _write_json(path, payload)
+        months_written.append(f"atlantis/{month_str}.json.br")
+
+    index = _build_atlantis_index(con, tournaments, tournament_cols)
+    total_bytes += _write_json(tree / "index.json.br", index)
+
+    log.info(
+        "atlantis: %s tournaments, %s KB",
+        len(tournaments),
+        total_bytes // 1024,
+    )
+    return {
+        "path": "atlantis/",
+        "index": "atlantis/index.json.br",
+        "months": months_written,
+        "bytes": total_bytes,
+    }
+
+
+def _build_month_payload(
+    con: duckdb.DuckDBPyConnection, t: dict, month_str: str,
+) -> dict:
+    month = t["tournament_month"]
+
+    observations = [
+        ts.isoformat() + "Z"
+        for (ts,) in con.execute(
+            """
+            select distinct observed_at from (
+                select observed_at from stg_atlantis_leaderboard
+                where tournament_month = $1
+                union
+                select observed_at from stg_atlantis_zones
+                where tournament_month = $1
+            ) order by 1
+            """,
+            [month],
+        ).fetchall()
+    ]
+    obs_index = {ts: i for i, ts in enumerate(observations)}
+
+    players = _build_players_dict(con, month, obs_index, len(observations))
+    factions = _build_factions_dict(con, month, obs_index, len(observations))
+    zones = _build_zones_dict(con, month, obs_index, len(observations))
+
+    placements = []
+    for rank_col, zone_col, pool_col in (
+        ("first_place", "first_zones", "first_pool"),
+        ("second_place", "second_zones", "second_pool"),
+        ("third_place", "third_zones", "third_pool"),
+    ):
+        if t[rank_col]:
+            placements.append([t[rank_col], int(t[zone_col]), int(t[pool_col])])
+
+    return {
+        "month": month_str,
+        "observations": observations,
+        "placements": placements,
+        "is_finished": t["is_finished"],
+        "players": players,
+        "factions": factions,
+        "zones": zones,
+    }
+
+
+def _new_player_entry(n_obs: int) -> dict:
+    return {"launches": [None] * n_obs, "tm": [None] * n_obs, "wm": [None] * n_obs}
+
+
+def _coerce(val: Any, to_type: type) -> Any:
+    return to_type(val) if val is not None else None
+
+
+def _build_players_dict(
+    con: duckdb.DuckDBPyConnection,
+    month,
+    obs_index: dict[str, int],
+    n_obs: int,
+) -> dict:
+    rows = con.execute(
+        """
+        select l.faction, l.player_name, l.observed_at, l.launches,
+               l.tournament_million_kills, l.weekly_million_kills,
+               p.qredits
+        from stg_atlantis_leaderboard l
+        left join fct_atlantis_payout p
+            on  p.tournament_month = l.tournament_month
+            and p.faction          = l.faction
+            and p.player_name      = l.player_name
+        where l.tournament_month = $1
+        order by l.faction, l.player_name, l.observed_at
+        """,
+        [month],
+    ).fetchall()
+
+    result: dict[str, dict] = {f: {} for f in _FACTION_ORDER}
+    qredits_map: dict[tuple[str, str], float] = {}
+
+    for faction, player, obs_at, launches, tm, wm, qr in rows:
+        idx = obs_index.get(obs_at.isoformat() + "Z")
+        if idx is None:
+            continue
+        entry = result.setdefault(faction, {}).setdefault(
+            player, _new_player_entry(n_obs),
+        )
+        entry["launches"][idx] = _coerce(launches, int)
+        entry["tm"][idx] = _coerce(tm, bool)
+        entry["wm"][idx] = _coerce(wm, bool)
+        if qr is not None:
+            qredits_map[(faction, player)] = float(qr)
+
+    for faction in _FACTION_ORDER:
+        players = result.get(faction, {})
+        for player, entry in players.items():
+            qr = qredits_map.get((faction, player))
+            if qr is not None:
+                entry["qredits"] = round(qr, 1)
+        result[faction] = dict(sorted(players.items()))
+
+    return {f: result[f] for f in _FACTION_ORDER if result.get(f)}
+
+
+def _build_factions_dict(
+    con: duckdb.DuckDBPyConnection,
+    month,
+    obs_index: dict[str, int],
+    n_obs: int,
+) -> dict:
+    rows = con.execute(
+        """
+        select faction, observed_at, launches_gained, active_players,
+               players_on_board, launches_total
+        from fct_atlantis_faction_hourly
+        where tournament_month = $1
+        order by faction, observed_at
+        """,
+        [month],
+    ).fetchall()
+
+    result: dict[str, dict] = {}
+    for faction in _FACTION_ORDER:
+        result[faction] = {
+            "launches_gained": [None] * n_obs,
+            "active_players": [None] * n_obs,
+            "players_on_board": [None] * n_obs,
+            "launches_total": [None] * n_obs,
+        }
+
+    for faction, obs_at, lg, ap, pob, lt in rows:
+        key = obs_at.isoformat() + "Z"
+        idx = obs_index.get(key)
+        if idx is None or faction not in result:
+            continue
+        result[faction]["launches_gained"][idx] = int(lg)
+        result[faction]["active_players"][idx] = int(ap)
+        result[faction]["players_on_board"][idx] = int(pob)
+        result[faction]["launches_total"][idx] = int(lt)
+
+    return {f: result[f] for f in _FACTION_ORDER if result.get(f)}
+
+
+def _build_zones_dict(
+    con: duckdb.DuckDBPyConnection,
+    month,
+    obs_index: dict[str, int],
+    n_obs: int,
+) -> dict:
+    zone_meta = {
+        zone: (name, bool(ca))
+        for zone, name, ca in con.execute(
+            "select zone, zone_name, cubes_allowed from stg_atlantis_zone_months "
+            "where tournament_month = $1",
+            [month],
+        ).fetchall()
+    }
+
+    rows = con.execute(
+        """
+        select zone, observed_at, swarm_count, legion_count, faceless_count
+        from stg_atlantis_zones
+        where tournament_month = $1
+        order by zone, observed_at
+        """,
+        [month],
+    ).fetchall()
+
+    data: dict[str, dict] = {}
+    for zone, obs_at, sw, lg, fc in rows:
+        key = obs_at.isoformat() + "Z"
+        idx = obs_index.get(key)
+        if idx is None:
+            continue
+        if zone not in data:
+            meta = zone_meta.get(zone, (zone, False))
+            data[zone] = {
+                "name": meta[0],
+                "cubes_allowed": meta[1],
+                "swarm": [None] * n_obs,
+                "legion": [None] * n_obs,
+                "faceless": [None] * n_obs,
+            }
+        data[zone]["swarm"][idx] = int(sw)
+        data[zone]["legion"][idx] = int(lg)
+        data[zone]["faceless"][idx] = int(fc)
+
+    result = {}
+    for zone in _ZONE_PYRAMID_ORDER:
+        if zone in data:
+            result[zone] = data[zone]
+    return result
+
+
+def _build_atlantis_index(
+    con: duckdb.DuckDBPyConnection,
+    tournaments: list[tuple],
+    cols: list[str],
+) -> dict:
+    tournament_list = []
+    for row in tournaments:
+        t = dict(zip(cols, row))
+        placements = []
+        for rank_col, zone_col, pool_col in (
+            ("first_place", "first_zones", "first_pool"),
+            ("second_place", "second_zones", "second_pool"),
+            ("third_place", "third_zones", "third_pool"),
+        ):
+            if t[rank_col]:
+                placements.append([t[rank_col], int(t[zone_col]), int(t[pool_col])])
+
+        top = {}
+        for faction, player_col, launches_col in (
+            ("Swarm", "swarm_top_player", "swarm_top_launches"),
+            ("Legion", "legion_top_player", "legion_top_launches"),
+            ("Faceless", "faceless_top_player", "faceless_top_launches"),
+        ):
+            if t[player_col]:
+                top[faction] = [t[player_col], int(t[launches_col])]
+
+        tournament_list.append({
+            "month": t["tournament_month"].strftime("%Y-%m"),
+            "stacking_days": int(t["stacking_days"]),
+            "battle_days": int(t["battle_days"]),
+            "starts_at": t["starts_at"].isoformat() + "Z",
+            "ends_at": t["ends_at"].isoformat() + "Z",
+            "winner": t["winner"],
+            "is_finished": t["is_finished"],
+            "observations": int(t["observations"]),
+            "players": int(t["players"]),
+            "launches_total": int(t["launches_total"]),
+            "first_observed_at": t["first_observed_at"].isoformat() + "Z",
+            "last_observed_at": t["last_observed_at"].isoformat() + "Z",
+            "placements": placements,
+            "top": top,
+        })
+
+    all_time = _build_all_time(con)
+
+    return {
+        "tournaments": tournament_list,
+        "all_time": all_time,
+    }
+
+
+def _build_all_time(con: duckdb.DuckDBPyConnection) -> dict:
+    player_rows = con.execute("""
+        with finished as (
+            select tournament_month, first_place, second_place, third_place,
+                   first_pool, second_pool, third_pool
+            from dim_atlantis_tournament
+            where is_finished
+        ),
+        final_board as (
+            select p.tournament_month, p.faction, p.player_name, p.launches, p.qredits
+            from fct_atlantis_payout p
+            join finished f on f.tournament_month = p.tournament_month
+            where not p.is_estimate
+        )
+        select player_name, faction, sum(launches) as total_launches,
+               count(distinct tournament_month) as appearances,
+               round(sum(qredits), 1) as total_qredits
+        from final_board
+        group by 1, 2
+        order by total_qredits desc, player_name
+    """).fetchall()
+
+    players = [
+        [name, faction, int(launches), int(apps), float(qr)]
+        for name, faction, launches, apps, qr in player_rows
+    ]
+
+    faction_rows = con.execute("""
+        with finished as (
+            select tournament_month, winner from dim_atlantis_tournament where is_finished
+        ),
+        payouts as (
+            select p.faction, p.tournament_month, sum(p.qredits) as faction_qredits
+            from fct_atlantis_payout p
+            join finished f on f.tournament_month = p.tournament_month
+            where not p.is_estimate
+            group by 1, 2
+        )
+        select p.faction,
+               count(distinct f.tournament_month) filter (where f.winner = p.faction) as wins,
+               round(sum(p.faction_qredits), 0) as total_qredits
+        from payouts p
+        join finished f on f.tournament_month = p.tournament_month
+        group by 1
+        order by total_qredits desc
+    """).fetchall()
+
+    factions = {
+        faction: {"wins": int(wins), "qredits": int(qr)}
+        for faction, wins, qr in faction_rows
+    }
+
+    return {"players": players, "factions": factions}
+
+
 def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
     scope = config.SCOPES[scope_name or config.DEFAULT_SCOPE]
     out = out or (config.WEB_DATA / scope.name)
@@ -1421,6 +1768,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         area_series = _export_area_series(con, out)
         maz = _export_maz(con, out)
         flashpoints = _export_flashpoints(con, out)
+        atlantis = _export_atlantis(con, out)
 
         span = con.execute(
             "select min(activity_date), max(activity_date) from zone_events e "
@@ -1477,6 +1825,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
             "zone_history": zone_history,
             "maz": maz,
             "flashpoints": flashpoints,
+            "atlantis": atlantis,
             "series": series,
             "area_series": area_series,
             "encoding": {

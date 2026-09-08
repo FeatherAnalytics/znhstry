@@ -132,5 +132,7 @@ ATLANTIS_TOURNAMENT_DTYPES: dict[str, pl.DataType] = {
     "StackingDays": pl.Int16,
     "BattleDays": pl.Int16,
     "EndsAtUtc": pl.Datetime("us"),
+    # Null until the page's banner names a winner, which it does only after the end.
+    "Winner": pl.String,
 }
 ATLANTIS_TOURNAMENT_KEY: tuple[str, ...] = ("Month",)

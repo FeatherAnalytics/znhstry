@@ -84,5 +84,6 @@ models:
 
   - name: stg_atlantis_tournaments
     description: >
-      Grain: one row per tournament month, with the stacking and battle day counts and
-      the end they imply.
+      Grain: one row per tournament month, with the stacking and battle day counts, the
+      end they imply, and the winning faction once the page's banner names one (null
+      while the battle is on).

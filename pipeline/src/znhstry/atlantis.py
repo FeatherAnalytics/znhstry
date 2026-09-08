@@ -57,6 +57,10 @@ FACTIONS = ("Swarm", "Legion", "Faceless")
 
 _SCHEDULE = re.compile(r"Stacking Days:\s*(\d+)\s+Battle Days:\s*(\d+)")
 
+# The banner's h1 during a battle is "The battle for Atlantis is under way."; after the end
+# it names the winner, and keeps naming them until the next tournament starts.
+_WINNER = re.compile(r"The (Swarm|Legion|Faceless) are victorious!")
+
 # Prime, then the six positions of every faction's triangle: three player zones and three
 # formation zones. The rules block lists exactly one rule per position, in this order.
 _POSITIONS = 6
@@ -128,6 +132,23 @@ def _schedule(soup: BeautifulSoup, month: date) -> tuple[Schedule, Tag]:
         if match:
             return Schedule(month, int(match.group(1)), int(match.group(2))), strong
     raise LayoutChanged("schedule: no 'Stacking Days / Battle Days' on the page")
+
+
+def _winner(soup: BeautifulSoup) -> str | None:
+    banner = soup.select_one("div.main-banner h1")
+    match = _WINNER.fullmatch(banner.get_text(strip=True)) if banner else None
+    return match.group(1) if match else None
+
+
+def _tournament(schedule: Schedule, winner: str | None) -> pl.DataFrame:
+    row = {
+        "Month": schedule.month,
+        "StackingDays": schedule.stacking_days,
+        "BattleDays": schedule.battle_days,
+        "EndsAtUtc": schedule.ends_at,
+        "Winner": winner,
+    }
+    return pl.DataFrame([row], schema=ATLANTIS_TOURNAMENT_DTYPES)
 
 
 def _rules(schedule_tag: Tag) -> list[str]:
@@ -264,19 +285,26 @@ def parse_page(html: str, observed_at: datetime) -> ParsedPage:
     except LayoutChanged as exc:
         log.warning("atlantis: leaderboard did not parse (%s); writing none", exc)
 
-    tournament = {
-        "Month": month,
-        "StackingDays": schedule.stacking_days,
-        "BattleDays": schedule.battle_days,
-        "EndsAtUtc": schedule.ends_at,
-    }
     return ParsedPage(
         leaderboard=pl.DataFrame(leaderboard, schema=ATLANTIS_LEADERBOARD_DTYPES),
         zones=pl.DataFrame(counts, schema=ATLANTIS_ZONE_DTYPES),
         zone_months=pl.DataFrame(months, schema=ATLANTIS_ZONE_MONTH_DTYPES),
-        tournament=pl.DataFrame([tournament], schema=ATLANTIS_TOURNAMENT_DTYPES),
+        tournament=_tournament(schedule, _winner(soup)),
         schedule=schedule,
     )
+
+
+def parse_outcome(html: str, observed_at: datetime) -> pl.DataFrame:
+    """The tournaments row alone: schedule and winner, from a page read after the end.
+
+    The board and zone counts on that page are the final standings again, already held
+    from the final pull, so only the row that can have gained a winner is worth writing.
+    Raises `LayoutChanged` like `parse_page` when the schedule cannot be read.
+    """
+    soup = BeautifulSoup(html, features="lxml")
+    with _section("schedule"):
+        schedule, _ = _schedule(soup, _month_start(observed_at))
+    return _tournament(schedule, _winner(soup))
 
 
 # --- storage ----------------------------------------------------------------
@@ -337,13 +365,17 @@ def _store(page: ParsedPage, observed_at: datetime) -> tuple[int, int]:
         ATLANTIS_ZONE_MONTH_KEY,
         ATLANTIS_ZONE_MONTH_DTYPES,
     )
+    _store_tournament(page.tournament)
+    return leaderboard, zones
+
+
+def _store_tournament(tournament: pl.DataFrame) -> None:
     _merge(
-        page.tournament,
-        root / "tournaments" / "rows.parquet",
+        tournament,
+        _root() / "tournaments" / "rows.parquet",
         ATLANTIS_TOURNAMENT_KEY,
         ATLANTIS_TOURNAMENT_DTYPES,
     )
-    return leaderboard, zones
 
 
 def _state_path() -> Path:
@@ -385,6 +417,25 @@ def _observed_at(date_header: str | None) -> datetime:
 # --- the run ----------------------------------------------------------------
 
 
+def _record_outcome(html: str, observed_at: datetime, previous: dict[str, Any]) -> None:
+    """A run after the final pull: keep the winner, discard the rest.
+
+    The post-tournament board must not be recorded as part of the battle. The one thing
+    that page has which the final pull did not is the banner naming the winner, so only
+    the tournaments row is written.
+    """
+    month = _month_start(observed_at)
+    log.info("atlantis: tournament for %s already finished", month)
+    try:
+        outcome = parse_outcome(html, observed_at)
+    except LayoutChanged as exc:
+        log.warning("atlantis: outcome did not parse (%s)", exc)
+    else:
+        _store_tournament(outcome)
+        log.info("atlantis: %s winner: %s", month, outcome["Winner"][0])
+    _write_state({**previous, "next_run_at": _stamp(_next_month(month))})
+
+
 def scrape_atlantis() -> int:
     """Read the page once and fold it into the raw layer. Returns leaderboard rows added."""
     previous = _read_state()
@@ -397,10 +448,7 @@ def scrape_atlantis() -> int:
 
     month = _month_start(observed_at)
     if previous.get("month") == month.isoformat() and previous.get("final_pull_done"):
-        # A manual re-run after the final pull would record a post-tournament page as if
-        # it were part of the battle.
-        log.info("atlantis: tournament for %s already finished", month)
-        _write_state({**previous, "next_run_at": _stamp(_next_month(month))})
+        _record_outcome(html, observed_at, previous)
         return 0
 
     try:

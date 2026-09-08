@@ -645,6 +645,14 @@ secret and re-running `deploy-trigger.yml`.
 neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy
 cannot overwrite an hour of rows or delete keys it never fetched.
 
+**The banner names the winner, and only after the end.** During the battle the page's
+`main-banner` h1 reads "The battle for Atlantis is under way."; afterwards it reads "The
+Swarm are victorious!" over "The battle for Atlantis has ended.", and the page keeps the
+final board and the schedule under that banner until the next tournament starts. `Winner`
+in `tournaments/` is parsed from it and is null on every row written during the battle. A
+forced run after the final pull writes only the tournaments row, so it backfills the winner
+without recording the post-tournament board as part of the battle.
+
 **Launch counts reset to zero each month, and a player can appear under more than one
 faction in a month.** That is why faction is in the leaderboard key. Rank is not stored; it
 is derived, with ties sharing a rank the way the site shows them.

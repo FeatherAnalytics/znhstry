@@ -1081,6 +1081,12 @@ rather than reaching across an ocean.
 
 `global_daily` and `scope_daily` stay sparse JSON, ~56 KB each.
 
+### `atlantis/` — tournament payloads
+
+`atlantis/index.json.br` carries the tournament list and all-time standings. `atlantis/YYYY-MM.json.br` carries one month's detail: player launch arrays, faction hourly series, and zone count arrays, all positional over an `observations` timestamp list. JSON, brotli-compressed like everything else, ~10 KB total for one month.
+
+Series in the month payload are positional over `observations` with `null` where a player, faction, or zone has no row at that observation. Intervals and per-hour rates are derived on the client from consecutive non-null values and the observation timestamps. Zones are keyed in pyramid order (`Prime`, then `Legion 1`..`6`, `Swarm 1`..`6`, `Faceless 1`..`6`); players sorted by name within each faction; factions in Legion, Swarm, Faceless order. The tree is cleared and rewritten each run; determinism is verified by the md5 recipe.
+
 ### Immutability and nightly updates
 
 `dist/` is gitignored and the nightly run uploads it. A bucket has no history, so git bloat

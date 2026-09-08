@@ -535,6 +535,22 @@ stats exist to be collected automatically rather than to be drawn. A per-*player
 is a separate job: the report pages carry a packed string of roughly 924,728 player rows
 that ingest does not unpack. See `thoughts/future-features.md`.
 
+### The Atlantis page
+
+`/atlantis` is a client-only route that reads the `atlantis/` export tree — `index.json.br` for the tournament list and all-time standings, one `YYYY-MM.json.br` per month for hourly series. Three tabs: Dashboard, History, All Time. URL state (`t`, `player`, `zone`, `tab`) is bookmarkable via `useSearchParams` under a `<Suspense>` boundary (required for static export).
+
+**The coverage line exists because a partial month must never read as a quiet one.** September 2026's coverage is the last 27 hours of a five-day tournament, and without the line a reader sees placements and a leaderboard and assumes they describe the whole battle. The line names the observation window with times, not just dates.
+
+**"Gained in coverage" is never "Gained".** The column sums launches gained between the first and last observation we hold for the month, which is the coverage window, not the tournament total. A player who launched 2,000 in stacking and 500 in our coverage window shows 500. The label, its title attribute, and the player detail's gains bars all say "in coverage" for the same reason the line exists: a partial window must not imply a complete picture.
+
+**Rates are per hour because observations are hourly.** The payload's `launches_gained` is per interval and the early intervals in a collection run are two hours long, so plotting raw values shows a false burst where the observation gap was wider. Dividing by the interval's minutes and showing launches per hour normalizes this. The same computation drives the leaderboard's "Best /hr" and the player detail's top-3 interval labels.
+
+**Zone detail has no player list.** The hourly Atlantis source (`stg_atlantis_zones`) carries faction counts per zone but never names who launched there. The battle reports (`stg_battlestats`) are the source that names zones and players together, and they are a daily top-10, not a census — using them here would imply completeness the data does not have.
+
+**Placements are computed by the game's rule**, ranking factions by zones held at the last observation, with Prime as the first tiebreaker and total faction bots as the second (see "Atlantis marts" above). The label says "Final" on finished months and "If standings held" while one runs, because standings can change until the end and the label must say so.
+
+**Qredits are labeled "estimated" while a month runs.** The payout mart computes each player's share of their placement's pool, but placement is not settled until the last observation. A running month's qredits use the current standings, so the figure moves until the tournament ends.
+
 ## Where the data comes from
 
 QONQR publishes its own data to a public Dropbox folder. That is the only live source.

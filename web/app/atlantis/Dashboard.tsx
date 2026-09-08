@@ -21,6 +21,7 @@ interface Props {
   month: MonthPayload;
   tournament: TournamentSummary;
   onPlayerClick: (faction: string, name: string) => void;
+  onZoneClick: (key: string) => void;
 }
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
@@ -105,7 +106,7 @@ function FactionCharts({ month }: { month: MonthPayload }) {
   );
 }
 
-export default function Dashboard({ month, tournament, onPlayerClick }: Props) {
+export default function Dashboard({ month, tournament, onPlayerClick, onZoneClick }: Props) {
   const obsTs = useMemo(() => parseObsTimestamps(month.observations), [month.observations]);
 
   return (
@@ -119,7 +120,7 @@ export default function Dashboard({ month, tournament, onPlayerClick }: Props) {
       </div>
       <hr style={divider} />
       <div style={section}>
-        <ZoneCards month={month} obsTimestamps={obsTs} />
+        <ZoneCards month={month} obsTimestamps={obsTs} onZoneClick={onZoneClick} />
       </div>
     </>
   );

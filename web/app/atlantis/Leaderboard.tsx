@@ -133,10 +133,10 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Faction</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("gained")}>Gained{arrow("gained")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("gained")} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gained in coverage{arrow("gained")}</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("bestHr")}>Best /hr{arrow("bestHr")}</th>
-              <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }}>TM</th>
-              <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }}>WM</th>
+              <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Tournament Million Kills: 1,000,000+ kills in the current tournament (atlantis-gold badge)">Tournament 1M</th>
+              <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Weekly Million Kills: 1,000,000+ kills this week outside the tournament, weeks start 00:00 UTC Sunday (gold-star badge)">Weekly 1M</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}{!month.is_finished ? " (est.)" : ""}</th>
             </tr>
           </thead>

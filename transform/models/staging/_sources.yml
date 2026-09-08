@@ -89,9 +89,9 @@ sources:
       - name: atlantis_tournaments
         description: >
           One row per tournament month: the stacking and battle day counts the page states,
-          and the end they imply. A tournament starts 00:00 UTC on the 1st and ends start
-          plus stacking plus battle days, which is what the hourly job reads to decide
-          whether to run at all.
+          the end they imply, and the winner the banner names after the end. A tournament
+          starts 00:00 UTC on the 1st and ends start plus stacking plus battle days, which
+          is what the hourly job reads to decide whether to run at all.
         meta:
           external_location: "read_parquet('../data/raw/atlantis/tournaments/*.parquet')"
       - name: countries

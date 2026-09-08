@@ -12,6 +12,6 @@
   // Each line maps to one workflow in src/index.ts. :07 matches atlantis.yml, where a run
   // firing a little before the hour would read the previous hour's page. 00:45 is for the
   // nightly: QONQR writes the day's slot just after 00:00 UTC.
-  "triggers": { "crons": ["7 * * * *", "45 0 * * *", "15 1 * * *", "15 7 * * *", "15 13 * * *", "15 19 * * *"] },
+  "triggers": { "crons": ["7 * * * *", "45 0 * * *"] },
   "workers_dev": false
 }

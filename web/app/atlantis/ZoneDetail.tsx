@@ -140,6 +140,61 @@ export default function ZoneDetail({ zoneKey, month, obsTimestamps, onClose }: P
           </div>
         </>
       ) : null}
+
+      <ZoneBattleReports zoneKey={zoneKey} month={month} />
+    </div>
+  );
+}
+
+const btCell: CSSProperties = { padding: "12px 10px", borderBottom: "1px solid var(--hairline)", whiteSpace: "nowrap" as const };
+const btDateFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+function ZoneBattleReports({ zoneKey, month }: { zoneKey: string; month: MonthPayload }) {
+  if (!month.battles) return null;
+
+  const rows: { day: string; rank: number; player: string; launches: number; killed: number; lost: number }[] = [];
+  for (const [day, zones] of Object.entries(month.battles)) {
+    const players = zones[zoneKey];
+    if (!players) continue;
+    for (let i = 0; i < players.length; i++) {
+      const [player, launches, killed, lost] = players[i];
+      rows.push({ day, rank: i + 1, player, launches, killed, lost });
+    }
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="display" style={{ fontSize: 11, marginBottom: 6 }}>Battle reports</div>
+      <div style={{ color: "var(--text-dim)", fontSize: 10, marginBottom: 6 }}>
+        {"QONQR's daily battle reports, top 50 players per zone"}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+          <thead>
+            <tr>
+              <th className="eyebrow" style={{ ...btCell, textAlign: "left" }}>Date</th>
+              <th className="eyebrow tabular" style={{ ...btCell, textAlign: "right" }}>Rank</th>
+              <th className="eyebrow" style={{ ...btCell, textAlign: "left" }}>Player</th>
+              <th className="eyebrow tabular" style={{ ...btCell, textAlign: "right" }}>Launches</th>
+              <th className="eyebrow tabular" style={{ ...btCell, textAlign: "right" }}>Killed</th>
+              <th className="eyebrow tabular" style={{ ...btCell, textAlign: "right" }}>Lost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.day}:${r.rank}:${r.player}`}>
+                <td style={btCell}>{btDateFmt.format(new Date(r.day + "T00:00:00Z"))}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.rank}</td>
+                <td style={btCell}>{r.player}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString()}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

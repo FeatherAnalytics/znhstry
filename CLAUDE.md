@@ -545,7 +545,7 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 
 **Rates are per hour because observations are hourly.** The payload's `launches_gained` is per interval and the early intervals in a collection run are two hours long, so plotting raw values shows a false burst where the observation gap was wider. Dividing by the interval's minutes and showing launches per hour normalizes this. The same computation drives the leaderboard's "Best /hr" and the player detail's top-3 interval labels.
 
-**Zone detail has no player list.** The hourly Atlantis source (`stg_atlantis_zones`) carries faction counts per zone but never names who launched there. The battle reports (`stg_battlestats`) are the source that names zones and players together, and they are a daily top-10, not a census — using them here would imply completeness the data does not have.
+**Zone detail and player detail carry battle report tables.** The hourly source (`stg_atlantis_zones`) names no players, so `fct_atlantis_zone_player_daily` unpacks the per-report player string from `stg_battlestats` for tournament zones. The list is QONQR's daily top 50, not a census, and the header says so. September 2026 has battle reports for days 1-6 while the hourly collector covers days 4-6 only, so days 1-3 are battle-report-only coverage. The stable zone position key (`zone`) is filled by joining `stg_atlantis_zone_months` and is null for months before September 2026; the report's own zone name is always present.
 
 **Placements are computed by the game's rule**, ranking factions by zones held at the last observation, with Prime as the first tiebreaker and total faction bots as the second (see "Atlantis marts" above). The label says "Final" on finished months and "If standings held" while one runs, because standings can change until the end and the label must say so.
 
@@ -699,6 +699,7 @@ Five marts built from the four staging views above. All materialized as tables.
 | `fct_atlantis_zone_interval` | zone + pair of consecutive observations | `(tournament_month, zone, observed_at)` |
 | `dim_atlantis_tournament` | one row per tournament month | `(tournament_month)` |
 | `fct_atlantis_payout` | player + faction at the last observation | `(tournament_month, faction, player_name)` |
+| `fct_atlantis_zone_player_daily` | player + zone + day from battle reports | `(battle_date, battle_report_number, rank, player_name)` |
 
 **Placement rule (the game's own).** Rank the three factions by zones held at the last observation, where a zone's holder is the faction with the largest count (ties break Legion > Swarm > Faceless, matching `export.py`'s `_leader`; a tie has not occurred in the data and cannot be resolved from it). When two factions hold the same number of zones, the one holding Prime ranks higher; if neither holds Prime, total bots across all nineteen zones breaks it.
 
@@ -1101,7 +1102,7 @@ rather than reaching across an ocean.
 
 `atlantis/index.json.br` carries the tournament list and all-time standings. `atlantis/YYYY-MM.json.br` carries one month's detail: player launch arrays, faction hourly series, and zone count arrays, all positional over an `observations` timestamp list. JSON, brotli-compressed like everything else, ~10 KB total for one month.
 
-Series in the month payload are positional over `observations` with `null` where a player, faction, or zone has no row at that observation. Intervals and per-hour rates are derived on the client from consecutive non-null values and the observation timestamps. Zones are keyed in pyramid order (`Prime`, then `Legion 1`..`6`, `Swarm 1`..`6`, `Faceless 1`..`6`); players sorted by name within each faction; factions in Legion, Swarm, Faceless order. The tree is cleared and rewritten each run; determinism is verified by the md5 recipe.
+Series in the month payload are positional over `observations` with `null` where a player, faction, or zone has no row at that observation. Intervals and per-hour rates are derived on the client from consecutive non-null values and the observation timestamps. Zones are keyed in pyramid order (`Prime`, then `Legion 1`..`6`, `Swarm 1`..`6`, `Faceless 1`..`6`); players sorted by name within each faction; factions in Legion, Swarm, Faceless order. The `battles` block carries per-day per-zone player rows from the battle reports (`fct_atlantis_zone_player_daily`), keyed by date then zone position, each player as `[name, launches, bots_killed, bots_lost]` sorted by rank; the list is capped at 50 per report. The tree is cleared and rewritten each run; determinism is verified by the md5 recipe.
 
 ### Immutability and nightly updates
 
@@ -1267,6 +1268,7 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_faction_
 select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_interval.parquet') where tournament_month = '2026-09-01';
 select * from read_parquet('https://data.znhstry.com/marts/dim_atlantis_tournament.parquet');
 select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_payout.parquet') where tournament_month = '2026-09-01';
+select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_player_daily.parquet') where battle_date >= '2026-09-01';
 ```
 
 | Table | Rows | Size | Sorted by |
@@ -1283,6 +1285,7 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_payout.p
 | `fct_atlantis_zone_interval` | 456 | 0.0 MB | `tournament_month, zone, observed_at` |
 | `dim_atlantis_tournament` | 1 | 0.0 MB | `tournament_month` |
 | `fct_atlantis_payout` | 170 | 0.0 MB | `tournament_month, faction, player_name` |
+| `fct_atlantis_zone_player_daily` | 532,969 | 3.5 MB | `battle_date, battle_report_number, rank, player_name` |
 
 `marts/_meta.json` names every table with its path, row count, bytes, sort key and columns,
 plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.

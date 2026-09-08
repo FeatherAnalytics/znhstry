@@ -89,3 +89,14 @@ models:
       Grain: one row per tournament month, with the stacking and battle day counts, the
       end they imply, and the winning faction once the page's banner names one (null
       while the battle is on).
+
+  - name: stg_atlantis_battle_players
+    description: >
+      Grain: one row per player per battle report for Atlantis tournament zones.
+      Unpacked from the comma-separated players string: groups of five fields
+      (rank, player_name, launches, bots_killed, bots_lost), capped at 50 per report.
+    columns:
+      - name: battle_report_number
+        data_tests: [not_null]
+      - name: player_name
+        data_tests: [not_null]

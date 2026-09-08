@@ -217,3 +217,18 @@ models:
                 values: ['Legion', 'Swarm', 'Faceless']
       - name: player_name
         data_tests: [not_null]
+
+  - name: fct_atlantis_zone_player_daily
+    description: >
+      Grain: one row per player per battle report for Atlantis tournament zones.
+      The stable zone position key is nullable for months before September 2026
+      when zone_months has no names.
+    columns:
+      - name: battle_date
+        data_tests: [not_null]
+      - name: battle_report_number
+        data_tests: [not_null]
+      - name: rank
+        data_tests: [not_null]
+      - name: player_name
+        data_tests: [not_null]

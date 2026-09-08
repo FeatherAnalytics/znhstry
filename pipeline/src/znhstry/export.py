@@ -1460,6 +1460,8 @@ def _build_month_payload(
         if t[rank_col]:
             placements.append([t[rank_col], int(t[zone_col]), int(t[pool_col])])
 
+    battles = _build_battles_dict(con, month)
+
     return {
         "month": month_str,
         "observations": observations,
@@ -1468,7 +1470,44 @@ def _build_month_payload(
         "players": players,
         "factions": factions,
         "zones": zones,
+        "battles": battles,
     }
+
+
+def _build_battles_dict(
+    con: duckdb.DuckDBPyConnection, month: Any,
+) -> dict[str, dict[str, list]]:
+    rows = con.execute(
+        """
+        select battle_date, coalesce(zone, zone_name) as zone_key,
+               player_name, launches, bots_killed, bots_lost
+        from fct_atlantis_zone_player_daily
+        where tournament_month = $1
+        order by battle_date, zone_key, rank, player_name
+        """,
+        [month],
+    ).fetchall()
+
+    result: dict[str, dict[str, list]] = {}
+    for battle_date, zone_key, player_name, launches, killed, lost in rows:
+        day = battle_date.isoformat()
+        if day not in result:
+            result[day] = {}
+        if zone_key not in result[day]:
+            result[day][zone_key] = []
+        result[day][zone_key].append([player_name, int(launches), int(killed), int(lost)])
+
+    for day in result:
+        ordered: dict[str, list] = {}
+        for zone in _ZONE_PYRAMID_ORDER:
+            if zone in result[day]:
+                ordered[zone] = result[day][zone]
+        for zone in result[day]:
+            if zone not in ordered:
+                ordered[zone] = result[day][zone]
+        result[day] = ordered
+
+    return result
 
 
 def _new_player_entry(n_obs: int) -> dict:

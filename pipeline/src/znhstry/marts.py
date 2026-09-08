@@ -54,6 +54,11 @@ TABLES = (
     Table("stg_atlantis_zones", ("observed_at", "zone")),
     Table("stg_atlantis_zone_months", ("tournament_month", "zone")),
     Table("stg_atlantis_tournaments", ("tournament_month",)),
+    Table("fct_atlantis_player_interval", ("tournament_month", "faction", "player_name", "observed_at")),
+    Table("fct_atlantis_faction_hourly", ("tournament_month", "faction", "observed_at")),
+    Table("fct_atlantis_zone_interval", ("tournament_month", "zone", "observed_at")),
+    Table("dim_atlantis_tournament", ("tournament_month",)),
+    Table("fct_atlantis_payout", ("tournament_month", "faction", "player_name")),
 )
 
 # Rows per row group. ~100 groups over the 9.9M-row event table: small enough that a

@@ -672,6 +672,24 @@ on its formation zones, not from position.
 - **Counts use a plain space for thousands**, the same as the battle reports.
 - **One request an hour and no retries in a run.** It is the game's live server.
 
+### Atlantis marts
+
+Five marts built from the four staging views above. All materialized as tables.
+
+| | Grain | Sort key |
+|---|---|---|
+| `fct_atlantis_player_interval` | player + faction + pair of consecutive observations | `(tournament_month, faction, player_name, observed_at)` |
+| `fct_atlantis_faction_hourly` | faction + observation with at least one interval | `(tournament_month, faction, observed_at)` |
+| `fct_atlantis_zone_interval` | zone + pair of consecutive observations | `(tournament_month, zone, observed_at)` |
+| `dim_atlantis_tournament` | one row per tournament month | `(tournament_month)` |
+| `fct_atlantis_payout` | player + faction at the last observation | `(tournament_month, faction, player_name)` |
+
+**Placement rule (the game's own).** Rank the three factions by zones held at the last observation, where a zone's holder is the faction with the largest count (ties break Legion > Swarm > Faceless, matching `export.py`'s `_leader`; a tie has not occurred in the data and cannot be resolved from it). When two factions hold the same number of zones, the one holding Prime ranks higher; if neither holds Prime, total bots across all nineteen zones breaks it.
+
+**Payout rule.** The game divides each placement's pool across the faction proportionally to launches. Pool amounts live in the `atlantis_pools` seed as an as-of table keyed by `effective_from`; a month with different pools is one appended row. The current pools are 10,000,000 / 4,000,000 / 1,000,000 for first / second / third.
+
+**Interval grain.** A player's first observation in a month yields no interval row. `launches_gained` is never negative in the data; it is kept as is, not clamped. `launches_per_hour` is `launches_gained / minutes * 60`, where `minutes` is the gap between consecutive observations. The page says "per hour" and never "per minute".
+
 ## Data facts (measured, not guessed)
 
 - **The record starts at release, 2012-07-30.** `config.RECORD_START`. Everything before
@@ -1222,6 +1240,11 @@ select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_leaderbo
 select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_zones.parquet');
 select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_zone_months.parquet');
 select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_tournaments.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_player_interval.parquet') where tournament_month = '2026-09-01';
+select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_faction_hourly.parquet') where tournament_month = '2026-09-01';
+select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_interval.parquet') where tournament_month = '2026-09-01';
+select * from read_parquet('https://data.znhstry.com/marts/dim_atlantis_tournament.parquet');
+select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_payout.parquet') where tournament_month = '2026-09-01';
 ```
 
 | Table | Rows | Size | Sorted by |
@@ -1233,6 +1256,11 @@ select * from read_parquet('https://data.znhstry.com/marts/stg_atlantis_tourname
 | `fct_zone_battles` | 45,695 | 1.9 MB | `battle_date, battle_report_number` |
 | `stg_battlestats` | 61,537 | 2.4 MB | `battle_date, battle_report_number` |
 | `stg_atlantis_*` | four small tables | | their natural keys |
+| `fct_atlantis_player_interval` | 4,036 | 0.0 MB | `tournament_month, faction, player_name, observed_at` |
+| `fct_atlantis_faction_hourly` | 72 | 0.0 MB | `tournament_month, faction, observed_at` |
+| `fct_atlantis_zone_interval` | 456 | 0.0 MB | `tournament_month, zone, observed_at` |
+| `dim_atlantis_tournament` | 1 | 0.0 MB | `tournament_month` |
+| `fct_atlantis_payout` | 170 | 0.0 MB | `tournament_month, faction, player_name` |
 
 `marts/_meta.json` names every table with its path, row count, bytes, sort key and columns,
 plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.

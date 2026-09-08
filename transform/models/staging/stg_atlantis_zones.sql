@@ -9,5 +9,8 @@ select
     "SwarmCount"                                 as swarm_count,
     "LegionCount"                                as legion_count,
     "FacelessCount"                              as faceless_count,
-    cast(date_trunc('month', "ObservedAtUtc") as date) as tournament_month
+    cast(date_trunc('month', "ObservedAtUtc") as date) as tournament_month,
+    "ObservedAtUtc" = max("ObservedAtUtc") over (
+        partition by date_trunc('month', "ObservedAtUtc")
+    )                                            as is_latest
 from {{ source('raw', 'atlantis_zones') }}

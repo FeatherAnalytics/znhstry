@@ -71,11 +71,13 @@ models:
     description: >
       Grain: one row per player per faction per hourly pull of the Atlantis tournament
       page, with the site's tie-sharing rank derived and the month the counts belong to.
+      `is_latest` marks the newest pull of each month: the final standings once it has
+      ended, the current board while it runs.
 
   - name: stg_atlantis_zones
     description: >
       Grain: one row per tournament zone position per hourly pull, three faction counts
-      each.
+      each. `is_latest` marks the newest pull of each month.
 
   - name: stg_atlantis_zone_months
     description: >

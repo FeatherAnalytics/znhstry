@@ -11,7 +11,7 @@ const CSV_CAP = 100_000;
 const STARTER_SQL = `-- Bots on the ground per faction, by country, on the newest day in the record
 select country_name, legion_bots, swarm_bots, faceless_bots, total_bots
 from fct_country_daily
-where activity_date = (select max(activity_date) from fct_country_daily)
+where is_latest
 order by total_bots desc
 limit 25`;
 

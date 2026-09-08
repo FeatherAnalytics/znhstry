@@ -77,12 +77,34 @@ async function instantiate(): Promise<Connection> {
 const quoteIdent = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const quoteString = (text: string): string => `'${text.replaceAll("'", "''")}'`;
 
+/**
+ * Name the stage a failure came from. DuckDB-WASM reports a failed HTTP request
+ * inside `read_parquet` as a bare WebAssembly trap ("table index is out of
+ * bounds"), which says nothing about which file or which step, so the stage has
+ * to be put back by hand.
+ */
+async function stage<T>(label: string, work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: ${message}`);
+  }
+}
+
 async function open(): Promise<Warehouse> {
-  const [conn, meta] = await Promise.all([instantiate(), readMeta()]);
+  const [conn, meta] = await Promise.all([
+    stage("loading DuckDB", instantiate()),
+    stage(`reading ${MARTS}/_meta.json`, readMeta()),
+  ]);
   for (const [name, table] of Object.entries(meta.tables)) {
-    await conn.query(
-      `create or replace view ${quoteIdent(name)} as ` +
-        `select * from read_parquet(${quoteString(`${MARTS}/${table.path}`)})`,
+    const url = `${MARTS}/${table.path}`;
+    await stage(
+      `binding ${name} from ${url}`,
+      conn.query(
+        `create or replace view ${quoteIdent(name)} as ` +
+          `select * from read_parquet(${quoteString(url)})`,
+      ),
     );
   }
   return { conn, meta };

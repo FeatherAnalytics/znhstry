@@ -37,6 +37,7 @@ export interface MonthPayload {
   players: Record<string, Record<string, PlayerData>>;
   factions: Record<string, FactionData>;
   zones: Record<string, ZoneData>;
+  battles?: Record<string, Record<string, [string, number, number, number][]>>;
 }
 
 export interface PlayerData {

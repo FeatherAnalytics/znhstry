@@ -32,9 +32,10 @@ a batch of dead numbers is re-walked every night forever.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -389,3 +390,122 @@ def _merge_player_rows(incoming: pl.DataFrame) -> None:
         tmp.replace(path)
 
     log.info("battle players: %d rows written", incoming.height)
+
+
+def _skip_path() -> Path:
+    return config.RAW / "battlestats" / "players" / "skipped.txt"
+
+
+def _read_skipped() -> set[int]:
+    path = _skip_path()
+    if not path.exists():
+        return set()
+    result: set[int] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.strip().split()
+        if parts and parts[0].isdigit():
+            result.add(int(parts[0]))
+    return result
+
+
+def _record_skip(brn: int, reason: str) -> None:
+    path = _skip_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{brn} {reason}\n")
+
+
+def _backfill_targets() -> list[int]:
+    raw = pl.read_parquet(config.RAW / "battlestats" / "battlestats.parquet")
+    atlantis_brns = set(
+        raw.filter(pl.col("Country") == "Atlantis")["Battle Report Number"].to_list()
+    )
+
+    have: set[int] = set()
+    root = config.RAW / "battlestats" / "players"
+    for pq in root.rglob("*.parquet"):
+        df = pl.read_parquet(pq, columns=["BattleReportNumber"])
+        have.update(df["BattleReportNumber"].to_list())
+
+    skipped = _read_skipped()
+    return sorted(atlantis_brns - have - skipped, reverse=True)
+
+
+def _write_backfill_state(remaining: int, skipped: int) -> None:
+    have_total = 0
+    root = config.RAW / "battlestats" / "players"
+    for pq in root.rglob("*.parquet"):
+        have_total += pl.read_parquet(pq).height
+
+    targets = _backfill_targets()
+    state = {
+        "remaining": remaining,
+        "skipped": skipped,
+        "fetched_total": have_total,
+        "next_number": max(targets) if targets else 0,
+        "last_run": datetime.now(UTC).isoformat(),
+    }
+    path = root / "backfill_state.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    tmp.replace(path)
+
+
+def backfill_players(dry_run: bool = False) -> int:
+    ensure_players_table()
+    targets = _backfill_targets()
+    skipped_count = len(_read_skipped())
+
+    if dry_run:
+        log.info("backfill dry run: %d targets, first 10: %s", len(targets), targets[:10])
+        return 0
+
+    if not targets:
+        log.info("backfill: nothing to do")
+        _write_backfill_state(0, skipped_count)
+        return 0
+
+    log.info("backfill: %d reports to fetch", len(targets))
+    start = time.monotonic()
+    collected: list[dict[str, Any]] = []
+    fetched = 0
+
+    with _client() as client:
+        for brn in targets:
+            if time.monotonic() - start > config.BACKFILL_BUDGET:
+                log.info("backfill: budget exhausted after %d pages", fetched)
+                break
+
+            while datetime.now(UTC).minute == 7:
+                time.sleep(10)
+
+            time.sleep(config.BACKFILL_INTERVAL)
+
+            try:
+                response = client.get(REPORT_URL.format(brn=brn))
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                log.warning("backfill: HTTP error at %s (%s); stopping", brn, exc)
+                break
+
+            fetched += 1
+            try:
+                _, player_rows = parse_report(brn, response.text)
+                collected.extend(player_rows)
+            except ReportUnavailable:
+                _record_skip(brn, "unavailable")
+                skipped_count += 1
+                log.debug("backfill: skipped %s (unavailable)", brn)
+            except (ValueError, IndexError, KeyError) as exc:
+                _record_skip(brn, "unparsed")
+                skipped_count += 1
+                log.warning("backfill: skipped %s (%s: %s)", brn, type(exc).__name__, exc)
+
+    if collected:
+        _merge_player_rows(pl.DataFrame(collected))
+
+    remaining = len(_backfill_targets())
+    _write_backfill_state(remaining, skipped_count)
+    log.info("backfill: fetched %d pages, %d remaining", fetched, remaining)
+    return fetched

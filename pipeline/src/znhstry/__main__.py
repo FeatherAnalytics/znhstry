@@ -14,6 +14,7 @@ STEPS = {
     # Battle reports come from the game's live portal, not the Dropbox drop, so they are
     # their own step: the map must not fail to publish because a web page was slow.
     "battlestats": portal.scrape_battlestats,
+    "backfill": portal.backfill_players,
     # The monthly tournament page, read hourly while a battle is on. Its own step because
     # it runs on the tournament's clock, not the nightly's.
     "atlantis": atlantis.scrape_atlantis,
@@ -62,6 +63,11 @@ def main() -> int:
         action="store_true",
         help="Upload step only. Send dist/marts to the bucket under marts/ instead of the export.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Backfill step only. Print targets without fetching.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -72,27 +78,35 @@ def main() -> int:
     # httpx logs every request at INFO, which drowns out progress.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    if args.step == "export":
-        export.export_all(args.scope)
-    elif args.step == "ingest":
-        slots = [int(s) for s in args.slots.split(",")] if args.slots else None
-        added = ingest.ingest_daily(slots)
-        # A night with nothing new should not spend 26 minutes rebuilding an identical
-        # export. The count goes out as a step output so the workflow can stop here.
-        _emit(events=sum(added.values()))
-    elif args.step == "battlestats":
-        _emit(reports=portal.scrape_battlestats())
-    elif args.step == "atlantis":
-        _emit(rows=atlantis.scrape_atlantis())
-    elif args.step == "upload":
-        (upload.upload_marts if args.marts else upload.upload_all)()
-    elif args.step == "archive":
-        upload.archive_raw(prefix=args.prefix)
-    elif args.step == "restore":
-        upload.restore_raw(prefix=args.prefix)
-    else:
-        STEPS[args.step]()
+    _run_step(args)
     return 0
+
+
+def _run_ingest(args: argparse.Namespace) -> None:
+    slots = [int(s) for s in args.slots.split(",")] if args.slots else None
+    _emit(events=sum(ingest.ingest_daily(slots).values()))
+
+
+def _run_upload(args: argparse.Namespace) -> None:
+    (upload.upload_marts if args.marts else upload.upload_all)()
+
+
+_DISPATCH = {
+    "export": lambda a: export.export_all(a.scope),
+    "ingest": _run_ingest,
+    "battlestats": lambda _: _emit(reports=portal.scrape_battlestats()),
+    "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),
+    "atlantis": lambda _: _emit(rows=atlantis.scrape_atlantis()),
+    "upload": _run_upload,
+    "archive": lambda a: upload.archive_raw(prefix=a.prefix),
+    "restore": lambda a: upload.restore_raw(prefix=a.prefix),
+    "boundaries": lambda _: boundaries.export_boundaries(),
+    "marts": lambda _: marts.export_marts(),
+}
+
+
+def _run_step(args: argparse.Namespace) -> None:
+    _DISPATCH[args.step](args)
 
 
 def _emit(**values: object) -> None:

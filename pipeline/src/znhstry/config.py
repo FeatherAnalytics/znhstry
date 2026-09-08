@@ -76,6 +76,9 @@ PORTAL_MIN_INTERVAL = 2.0
 # crawl of thousands of pages in one. Four days' worth.
 PORTAL_MAX_PER_RUN = 40
 
+BACKFILL_INTERVAL = 10.0
+BACKFILL_BUDGET = 5 * 3600
+
 # Identify ourselves. QONQR's Dropbox is public, but a request with a name on it
 # is the least we can do for someone publishing data for free.
 USER_AGENT = "znhstry/0.1 (personal analytics project; github.com/FeatherAnalytics/znhstry)"

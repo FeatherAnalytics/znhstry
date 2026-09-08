@@ -1,0 +1,89 @@
+name: Backfill battle players
+
+# Re-fetches historical Atlantis battle report pages for per-player rows with
+# faction and badges that the original scrape did not capture. Newest first,
+# paced at 10 s, with a 5-hour budget per run.
+#
+# Both the nightly and the backfill write raw/battlestats/players/. The shared
+# concurrency group serializes them; cancel-in-progress is false because a
+# 5-hour backfill run must not be killed by a nightly kicking off.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run even if remaining is 0
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: battlestats-players
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        working-directory: pipeline
+        run: uv python install
+
+      - name: Restore battlestats
+        working-directory: pipeline
+        env:
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: uv run python -m znhstry restore --prefix battlestats/
+
+      - name: Bootstrap players table
+        working-directory: pipeline
+        run: uv run python -c "from znhstry import portal; portal.ensure_players_table()"
+
+      - name: Gate
+        id: gate
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          STATUS=$(curl -s -o /tmp/backfill_state.json -w "%{http_code}" "${DATA_ORIGIN}/raw/battlestats/players/backfill_state.json")
+          if [ "$STATUS" = "404" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$STATUS" = "200" ]; then
+            REMAINING=$(jq -r '.remaining' /tmp/backfill_state.json)
+            if [ "$REMAINING" = "0" ]; then
+              echo "Backfill complete"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Unexpected status $STATUS"
+            exit 1
+          fi
+
+      - name: Backfill
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        run: uv run python -m znhstry backfill
+
+      - name: Archive players
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        env:
+          ZNHSTRY_R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          ZNHSTRY_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          ZNHSTRY_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ZNHSTRY_BUCKET: ${{ vars.R2_BUCKET }}
+        run: uv run python -m znhstry archive --prefix battlestats/players/

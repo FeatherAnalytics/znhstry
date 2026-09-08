@@ -6,6 +6,7 @@ import { factionColor, holderOf, compact, type MonthPayload } from "./lib";
 interface Props {
   month: MonthPayload;
   obsTimestamps: number[];
+  onZoneClick?: (key: string) => void;
 }
 
 const card: CSSProperties = {
@@ -51,7 +52,7 @@ function ZoneCard({ zoneKey, month, lastIdx }: { zoneKey: string; month: MonthPa
   );
 }
 
-export default function ZoneCards({ month }: Props) {
+export default function ZoneCards({ month, onZoneClick }: Props) {
   const lastIdx = month.observations.length - 1;
 
   return (
@@ -64,7 +65,9 @@ export default function ZoneCards({ month }: Props) {
           ) : null}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {keys.map((k) => (
-              <ZoneCard key={k} zoneKey={k} month={month} lastIdx={lastIdx} />
+              <div key={k} onClick={() => onZoneClick?.(k)} style={onZoneClick ? { cursor: "pointer" } : undefined}>
+                <ZoneCard zoneKey={k} month={month} lastIdx={lastIdx} />
+              </div>
             ))}
           </div>
         </div>

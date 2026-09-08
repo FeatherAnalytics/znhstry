@@ -162,7 +162,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Launches</div>
       <LaunchesCurve data={data.launches} obsTs={obsTimestamps} color={color} />
 
-      <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }}>Gains per interval</div>
+      <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval (in coverage)</div>
       <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />
 
       <BadgeMarkers data={data} obsTimestamps={obsTimestamps} />
@@ -174,20 +174,28 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
   );
 }
 
+interface Badge { label: string; title: string }
+
 function BadgeMarkers({ data, obsTimestamps }: { data: { tm: (boolean | null)[]; wm: (boolean | null)[] }; obsTimestamps: number[] }) {
-  const badges: string[] = [];
+  const badges: Badge[] = [];
   for (let i = 0; i < data.tm.length; i++) {
     if (data.tm[i] === true && (i === 0 || data.tm[i - 1] !== true)) {
-      badges.push(`Tournament Million Kills at ${formatObs(obsTimestamps[i])}`);
+      badges.push({
+        label: `Tournament 1M at ${formatObs(obsTimestamps[i])}`,
+        title: "Tournament Million Kills: 1,000,000+ kills in the current tournament (atlantis-gold badge)",
+      });
     }
     if (data.wm[i] === true && (i === 0 || data.wm[i - 1] !== true)) {
-      badges.push(`Weekly Million Kills at ${formatObs(obsTimestamps[i])}`);
+      badges.push({
+        label: `Weekly 1M at ${formatObs(obsTimestamps[i])}`,
+        title: "Weekly Million Kills: 1,000,000+ kills this week outside the tournament, weeks start 00:00 UTC Sunday (gold-star badge)",
+      });
     }
   }
   if (badges.length === 0) return null;
   return (
     <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
-      {badges.map((b) => <div key={b}>★ {b}</div>)}
+      {badges.map((b) => <div key={b.label} title={b.title}>★ {b.label}</div>)}
     </div>
   );
 }

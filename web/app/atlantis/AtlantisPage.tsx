@@ -14,6 +14,9 @@ import {
 } from "./lib";
 import Dashboard from "./Dashboard";
 import PlayerDetail from "./PlayerDetail";
+import ZoneDetail from "./ZoneDetail";
+import History from "./History";
+import AllTime from "./AllTime";
 
 const panel: CSSProperties = {
   borderBottom: "1px solid var(--hairline)",
@@ -87,6 +90,8 @@ export default function AtlantisPage() {
 
   const obsTimestamps = month ? parseObsTimestamps(month.observations) : [];
 
+  const zoneParam = searchParams.get("zone");
+
   const playerParts = playerParam?.split(":") ?? null;
   const playerFaction = playerParts?.[0] ?? null;
   const playerName = playerParts?.slice(1).join(":") ?? null;
@@ -94,6 +99,8 @@ export default function AtlantisPage() {
   const onPlayerClick = (faction: string, name: string) =>
     setParam("player", `${faction}:${name}`);
   const onPlayerClose = () => setParam("player", null);
+  const onZoneClick = (key: string) => setParam("zone", key);
+  const onZoneClose = () => setParam("zone", null);
 
   return (
     <main style={{ height: "100dvh", overflow: "auto", background: "var(--ink)", color: "var(--text)" }}>
@@ -146,6 +153,7 @@ export default function AtlantisPage() {
             month={month}
             tournament={tournament}
             onPlayerClick={onPlayerClick}
+            onZoneClick={onZoneClick}
           />
           {playerFaction && playerName && month.players[playerFaction]?.[playerName] ? (
             <PlayerDetail
@@ -156,11 +164,19 @@ export default function AtlantisPage() {
               onClose={onPlayerClose}
             />
           ) : null}
+          {zoneParam && month.zones[zoneParam] ? (
+            <ZoneDetail
+              zoneKey={zoneParam}
+              month={month}
+              obsTimestamps={obsTimestamps}
+              onClose={onZoneClose}
+            />
+          ) : null}
         </>
-      ) : tabParam === "history" ? (
-        <div style={{ padding: 16, color: "var(--text-dim)" }}>History — coming in phase 4.</div>
-      ) : tabParam === "alltime" ? (
-        <div style={{ padding: 16, color: "var(--text-dim)" }}>All Time — coming in phase 4.</div>
+      ) : tabParam === "history" && index ? (
+        <History index={index} onMonthClick={(m) => { setParam("t", m); setParam("tab", null); }} />
+      ) : tabParam === "alltime" && index ? (
+        <AllTime index={index} />
       ) : !month ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading month…</div>
       ) : null}

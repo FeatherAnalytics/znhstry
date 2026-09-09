@@ -92,13 +92,20 @@ def _run_upload(args: argparse.Namespace) -> None:
     (upload.upload_marts if args.marts else upload.upload_all)()
 
 
+def _run_wayback() -> None:
+    missing = wayback.ingest_wayback()
+    _emit(missing=missing)
+    if missing:
+        raise SystemExit(1)
+
+
 _DISPATCH = {
     "export": lambda a: export.export_all(a.scope),
     "ingest": _run_ingest,
     "battlestats": lambda _: _emit(reports=portal.scrape_battlestats()),
     "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),
     "atlantis": lambda _: _emit(rows=atlantis.scrape_atlantis()),
-    "wayback": lambda _: _emit(missing=wayback.ingest_wayback()),
+    "wayback": lambda _: _run_wayback(),
     "upload": _run_upload,
     "archive": lambda a: upload.archive_raw(prefix=a.prefix),
     "restore": lambda a: upload.restore_raw(prefix=a.prefix),

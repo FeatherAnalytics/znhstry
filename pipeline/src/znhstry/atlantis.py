@@ -140,13 +140,16 @@ def _winner(soup: BeautifulSoup) -> str | None:
     return match.group(1) if match else None
 
 
-def _tournament(schedule: Schedule, winner: str | None) -> pl.DataFrame:
+def _tournament(
+    schedule: Schedule, winner: str | None, source: str = "portal",
+) -> pl.DataFrame:
     row = {
         "Month": schedule.month,
         "StackingDays": schedule.stacking_days,
         "BattleDays": schedule.battle_days,
         "EndsAtUtc": schedule.ends_at,
         "Winner": winner,
+        "Source": source,
     }
     return pl.DataFrame([row], schema=ATLANTIS_TOURNAMENT_DTYPES)
 
@@ -164,7 +167,9 @@ def _badges(link: Tag) -> tuple[bool, bool]:
     return "atlantis-gold" in classes, "gold-star" in classes
 
 
-def _leaderboard(soup: BeautifulSoup, observed_at: datetime) -> list[dict[str, Any]]:
+def _leaderboard(
+    soup: BeautifulSoup, observed_at: datetime, source: str = "portal",
+) -> list[dict[str, Any]]:
     heading = soup.find("h1", string=re.compile(r"Atlantis Leaderboard"))
     if heading is None:
         raise LayoutChanged("leaderboard: no 'Atlantis Leaderboard' heading")
@@ -184,6 +189,7 @@ def _leaderboard(soup: BeautifulSoup, observed_at: datetime) -> list[dict[str, A
                 "Launches": _number(score),
                 "TournamentMillionKills": tournament,
                 "WeeklyMillionKills": weekly,
+                "Source": source,
             }
         )
 
@@ -203,16 +209,45 @@ def _leaderboard(soup: BeautifulSoup, observed_at: datetime) -> list[dict[str, A
     return rows
 
 
-def _triangle_faction(names: list[str]) -> str | None:
+def _formation_faction(name: str) -> str | None:
+    faction = _FORMATION_PREFIX.get(name[:2])
+    if faction:
+        return faction
+    for prefix in ("Legion", "Swarm", "Faceless"):
+        if name.startswith(prefix + " "):
+            return prefix
+    return None
+
+
+def _triangle_faction(
+    names: list[str],
+    factions_by_player: dict[str, set[str]] | None = None,
+) -> str | None:
     for name in names[len(names) - 3 :]:
-        faction = _FORMATION_PREFIX.get(name[:2])
+        faction = _formation_faction(name)
         if faction:
             return faction
+
+    # Zones are named after players, and a triangle's zones are named after
+    # its own faction's players, so the page's leaderboard says which
+    # triangle it is when no formation zone does.
+    if factions_by_player:
+        votes: dict[str, int] = {}
+        for name in names:
+            factions = factions_by_player.get(name.lower())
+            if factions and len(factions) == 1:
+                faction = next(iter(factions))
+                votes[faction] = votes.get(faction, 0) + 1
+        if len(votes) == 1 and next(iter(votes.values())) >= 3:
+            return next(iter(votes))
+
     return None
 
 
 def _zones(
-    soup: BeautifulSoup, observed_at: datetime, month: date, rules: list[str]
+    soup: BeautifulSoup, observed_at: datetime, month: date, rules: list[str],
+    source: str = "portal",
+    factions_by_player: dict[str, set[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     items = soup.select("div#carousel-example-generic div.item")
     if len(items) != _ZONE_COUNT:
@@ -222,7 +257,7 @@ def _zones(
     names = [item.select_one("h2.pull-left").get_text(strip=True) for item in items]
     keys = ["Prime"]
     for start in range(1, _ZONE_COUNT, _POSITIONS):
-        faction = _triangle_faction(names[start : start + _POSITIONS])
+        faction = _triangle_faction(names[start : start + _POSITIONS], factions_by_player)
         if faction is None:
             log.warning("atlantis: no faction letter on %s; writing no zones", names[start:])
             return [], []
@@ -241,6 +276,7 @@ def _zones(
                     )
                     for faction in FACTIONS
                 },
+                "Source": source,
             }
         )
         rule = rules[0] if index == 0 else rules[(index - 1) % _POSITIONS + 1]
@@ -255,7 +291,7 @@ def _zones(
     return counts, months
 
 
-def parse_page(html: str, observed_at: datetime) -> ParsedPage:
+def parse_page(html: str, observed_at: datetime, source: str = "portal") -> ParsedPage:
     """Turn the page into the four frames and the schedule.
 
     Raises `LayoutChanged` only when the schedule cannot be read: it decides `next_run_at`,
@@ -268,28 +304,35 @@ def parse_page(html: str, observed_at: datetime) -> ParsedPage:
     with _section("schedule"):
         schedule, schedule_tag = _schedule(soup, month)
 
+    leaderboard: list[dict[str, Any]] = []
+    try:
+        with _section("leaderboard"):
+            leaderboard = _leaderboard(soup, observed_at, source=source)
+    except LayoutChanged as exc:
+        log.warning("atlantis: leaderboard did not parse (%s); writing none", exc)
+
+    factions_by_player: dict[str, set[str]] = {}
+    for row in leaderboard:
+        factions_by_player.setdefault(row["PlayerName"].lower(), set()).add(row["Faction"])
+
     counts: list[dict[str, Any]] = []
     months: list[dict[str, Any]] = []
     try:
         with _section("rules"):
             rules = _rules(schedule_tag)
         with _section("zones"):
-            counts, months = _zones(soup, observed_at, month, rules)
+            counts, months = _zones(
+                soup, observed_at, month, rules,
+                source=source, factions_by_player=factions_by_player,
+            )
     except LayoutChanged as exc:
         log.warning("atlantis: zones did not parse (%s); writing none", exc)
-
-    leaderboard: list[dict[str, Any]] = []
-    try:
-        with _section("leaderboard"):
-            leaderboard = _leaderboard(soup, observed_at)
-    except LayoutChanged as exc:
-        log.warning("atlantis: leaderboard did not parse (%s); writing none", exc)
 
     return ParsedPage(
         leaderboard=pl.DataFrame(leaderboard, schema=ATLANTIS_LEADERBOARD_DTYPES),
         zones=pl.DataFrame(counts, schema=ATLANTIS_ZONE_DTYPES),
         zone_months=pl.DataFrame(months, schema=ATLANTIS_ZONE_MONTH_DTYPES),
-        tournament=_tournament(schedule, _winner(soup)),
+        tournament=_tournament(schedule, _winner(soup), source=source),
         schedule=schedule,
     )
 
@@ -452,7 +495,7 @@ def scrape_atlantis() -> int:
         return 0
 
     try:
-        page = parse_page(html, observed_at)
+        page = parse_page(html, observed_at, source="portal")
     except LayoutChanged as exc:
         log.warning("atlantis: page did not parse (%s); trying again in an hour", exc)
         _write_state(

@@ -4,5 +4,6 @@ select
     "StackingDays" as stacking_days,
     "BattleDays"   as battle_days,
     "EndsAtUtc"    as ends_at,
-    "Winner"       as winner
+    "Winner"       as winner,
+    coalesce("Source", 'portal') as source
 from {{ source('raw', 'atlantis_tournaments') }}

@@ -9,7 +9,7 @@ headings, and prose. The slug is for the repo, URL, and package only.
 
 **This repo is self-contained.** It reads QONQR's own published data and nothing else — no
 third-party mirror, no other repository, no server that belongs to a person rather than the
-game. See "Where the data comes from".
+game — with one exception: the Internet Archive's cached copies of QONQR's own Atlantis page, which are that page verbatim rather than a mirror's reprocessing. See "Where the data comes from".
 
 ## Tech Stack
 
@@ -567,6 +567,7 @@ Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 | `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | hourly, tournament days only |
+| `web.archive.org` | cached copies of the Atlantis page | one-off, 31 snapshots 2019-07 to 2026-06 |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
 filename says which month, so a stale slot is indistinguishable from a fresh one until it
@@ -661,9 +662,7 @@ Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.
 
-**The hourly job is the only writer of `raw/atlantis/`.** A full `archive` with no `--prefix`
-neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy
-cannot overwrite an hour of rows or delete keys it never fetched.
+**The hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite an hour of rows or delete keys it never fetched.
 
 **The banner names the winner, and only after the end.** During the battle the page's
 `main-banner` h1 reads "The battle for Atlantis is under way."; afterwards it reads "The
@@ -691,6 +690,8 @@ on its formation zones, not from position.
   recharge is allowed. Rules are per position, so `Swarm 1` and `Legion 1` share one.
 - **Counts use a plain space for thousands**, the same as the battle reports.
 - **One request an hour and no retries in a run.** It is the game's live server.
+
+**`Source` is `'portal'` for rows from the live page and `'wayback'` for rows from the Internet Archive.** The `wayback` command is rerunnable; the merge is keyed so re-ingesting a snapshot is a no-op. Formation zones in 2021-era snapshots were named `Swarm Grunt`, `Legion Melee` etc. rather than `S DEF SHOCK`; `_triangle_faction` recognizes both the letter prefix and the full faction-word prefix. When a triangle has no formation zone (every December so far, and 2021-01) the faction is read from the page's own leaderboard, unanimously over at least three of its six names. A wayback month has one observation per snapshot, so it has no intervals.
 
 ### Atlantis marts
 

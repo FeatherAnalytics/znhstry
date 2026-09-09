@@ -137,7 +137,9 @@ def ingest_wayback() -> int:
             failed += 1
 
     on_disk = {p.stem for p in _snap_dir().glob("*.html")} if _snap_dir().exists() else set()
-    still_missing = len(set(timestamps) - on_disk)
+    missing_ts = sorted(set(timestamps) - on_disk)
 
-    log.info("wayback: parsed %d, failed %d, missing %d", parsed, failed, still_missing)
-    return still_missing + failed
+    log.info("wayback: parsed %d, failed %d, missing %d", parsed, failed, len(missing_ts))
+    if missing_ts:
+        log.warning("wayback: missing timestamps: %s", ", ".join(missing_ts))
+    return len(missing_ts) + failed

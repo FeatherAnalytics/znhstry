@@ -73,11 +73,17 @@ models:
       page, with the site's tie-sharing rank derived and the month the counts belong to.
       `is_latest` marks the newest pull of each month: the final standings once it has
       ended, the current board while it runs.
+    columns:
+      - name: source
+        description: "'portal' for live scrapes, 'wayback' for Internet Archive snapshots."
 
   - name: stg_atlantis_zones
     description: >
       Grain: one row per tournament zone position per hourly pull, three faction counts
       each. `is_latest` marks the newest pull of each month.
+    columns:
+      - name: source
+        description: "'portal' for live scrapes, 'wayback' for Internet Archive snapshots."
 
   - name: stg_atlantis_zone_months
     description: >
@@ -89,6 +95,9 @@ models:
       Grain: one row per tournament month, with the stacking and battle day counts, the
       end they imply, and the winning faction once the page's banner names one (null
       while the battle is on).
+    columns:
+      - name: source
+        description: "'portal' for live scrapes, 'wayback' for Internet Archive snapshots."
 
   - name: stg_atlantis_battle_players
     description: >

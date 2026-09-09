@@ -1,0 +1,49 @@
+name: Ingest Wayback Atlantis snapshots
+
+# One-off, rerunnable. Fetches Internet Archive snapshots of QONQR's Atlantis
+# page and stores them as historical observations. Shares the atlantis
+# concurrency group because both write raw/atlantis/.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlantis
+  cancel-in-progress: false
+
+jobs:
+  wayback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        working-directory: pipeline
+        run: uv python install
+
+      - name: Restore Atlantis raw
+        working-directory: pipeline
+        env:
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: uv run python -m znhstry restore --prefix atlantis/
+
+      - name: Ingest Wayback snapshots
+        working-directory: pipeline
+        run: uv run python -m znhstry wayback
+
+      - name: Archive Atlantis
+        if: ${{ !cancelled() }}
+        working-directory: pipeline
+        env:
+          ZNHSTRY_R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          ZNHSTRY_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          ZNHSTRY_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ZNHSTRY_BUCKET: ${{ vars.R2_BUCKET }}
+        run: uv run python -m znhstry archive --prefix atlantis/

@@ -107,6 +107,7 @@ ATLANTIS_LEADERBOARD_DTYPES: dict[str, pl.DataType] = {
     "Launches": pl.Int64,
     "TournamentMillionKills": pl.Boolean,
     "WeeklyMillionKills": pl.Boolean,
+    "Source": pl.String,
 }
 ATLANTIS_LEADERBOARD_KEY: tuple[str, ...] = ("ObservedAtUtc", "Faction", "PlayerName")
 
@@ -116,6 +117,7 @@ ATLANTIS_ZONE_DTYPES: dict[str, pl.DataType] = {
     "SwarmCount": pl.Int64,
     "LegionCount": pl.Int64,
     "FacelessCount": pl.Int64,
+    "Source": pl.String,
 }
 ATLANTIS_ZONE_KEY: tuple[str, ...] = ("ObservedAtUtc", "Zone")
 
@@ -134,5 +136,6 @@ ATLANTIS_TOURNAMENT_DTYPES: dict[str, pl.DataType] = {
     "EndsAtUtc": pl.Datetime("us"),
     # Null until the page's banner names a winner, which it does only after the end.
     "Winner": pl.String,
+    "Source": pl.String,
 }
 ATLANTIS_TOURNAMENT_KEY: tuple[str, ...] = ("Month",)

@@ -167,7 +167,8 @@ select
     lg.player_name  as legion_top_player,
     lg.launches     as legion_top_launches,
     fc.player_name  as faceless_top_player,
-    fc.launches     as faceless_top_launches
+    fc.launches     as faceless_top_launches,
+    t.source
 from {{ ref('stg_atlantis_tournaments') }} t
 join last_obs lo on lo.tournament_month = t.tournament_month
 join pools po on po.tournament_month = t.tournament_month

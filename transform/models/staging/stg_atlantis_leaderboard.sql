@@ -14,6 +14,7 @@ select
     "Launches"                                   as launches,
     "TournamentMillionKills"                     as tournament_million_kills,
     "WeeklyMillionKills"                         as weekly_million_kills,
+    coalesce("Source", 'portal')                 as source,
     rank() over (
         partition by "ObservedAtUtc", "Faction"
         order by "Launches" desc

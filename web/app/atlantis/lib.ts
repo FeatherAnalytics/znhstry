@@ -20,6 +20,7 @@ export interface TournamentSummary {
   last_observed_at: string;
   placements: [string, number, number][];
   top: Record<string, [string, number]>;
+  source?: string;
 }
 
 export type AllTimePlayer = [string, string, number, number, number];
@@ -38,6 +39,7 @@ export interface MonthPayload {
   factions: Record<string, FactionData>;
   zones: Record<string, ZoneData>;
   battles?: Record<string, Record<string, [string, number, number, number][]>>;
+  source?: string;
 }
 
 export interface PlayerData {

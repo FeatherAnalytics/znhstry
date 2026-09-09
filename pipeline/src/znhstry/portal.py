@@ -452,6 +452,17 @@ def _write_backfill_state(remaining: int, skipped: int) -> None:
     tmp.replace(path)
 
 
+def _backfill_deadline() -> tuple[float, float]:
+    """Seconds until the 5-hour budget or 00:30 UTC, whichever is sooner."""
+    now = datetime.now(UTC)
+    minutes_into_day = now.hour * 60 + now.minute
+    cutoff = (
+        (30 - minutes_into_day) * 60 if minutes_into_day < 30
+        else (24 * 60 + 30 - minutes_into_day) * 60
+    )
+    return min(config.BACKFILL_BUDGET, cutoff), cutoff
+
+
 def backfill_players(dry_run: bool = False) -> int:
     ensure_players_table()
     targets = _backfill_targets()
@@ -468,13 +479,24 @@ def backfill_players(dry_run: bool = False) -> int:
 
     log.info("backfill: %d reports to fetch", len(targets))
     start = time.monotonic()
+
+    # The nightly shares the battlestats-players concurrency group and must
+    # never wait on history, so a window that would straddle midnight stops
+    # early and resumes at the next one.
+    deadline, cutoff_seconds = _backfill_deadline()
+    log.info(
+        "backfill: deadline %.0f s (budget %d, midnight cutoff %d)",
+        deadline, config.BACKFILL_BUDGET, cutoff_seconds,
+    )
+
     collected: list[dict[str, Any]] = []
     fetched = 0
 
     with _client() as client:
         for brn in targets:
-            if time.monotonic() - start > config.BACKFILL_BUDGET:
-                log.info("backfill: budget exhausted after %d pages", fetched)
+            if time.monotonic() - start > deadline:
+                reason = "midnight cutoff" if cutoff_seconds < config.BACKFILL_BUDGET else "budget"
+                log.info("backfill: %s after %d pages", reason, fetched)
                 break
 
             while datetime.now(UTC).minute == 7:

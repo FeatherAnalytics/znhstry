@@ -7,8 +7,18 @@ name: Backfill battle players
 # Both the nightly and the backfill write raw/battlestats/players/. The shared
 # concurrency group serializes them; cancel-in-progress is false because a
 # 5-hour backfill run must not be killed by a nightly kicking off.
+#
+# Scheduled three times a day; the gate runs before the restore so a scheduled
+# run after completion costs a checkout and one request. GitHub fires these
+# hours late (the nightly's 02:30 cron has landed 07:04-09:18 UTC on the last
+# 12 days), which is fine for a backfill because only resumption matters, and
+# the deadline in backfill_players keeps any window clear of the 00:45 nightly.
 
 on:
+  schedule:
+    - cron: "0 2 * * *"
+    - cron: "0 9 * * *"
+    - cron: "0 15 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -37,16 +47,6 @@ jobs:
         working-directory: pipeline
         run: uv python install
 
-      - name: Restore battlestats
-        working-directory: pipeline
-        env:
-          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
-        run: uv run python -m znhstry restore --prefix battlestats/
-
-      - name: Bootstrap players table
-        working-directory: pipeline
-        run: uv run python -c "from znhstry import portal; portal.ensure_players_table()"
-
       - name: Gate
         id: gate
         env:
@@ -72,6 +72,18 @@ jobs:
             echo "Unexpected status $STATUS"
             exit 1
           fi
+
+      - name: Restore battlestats
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        env:
+          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: uv run python -m znhstry restore --prefix battlestats/
+
+      - name: Bootstrap players table
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        run: uv run python -c "from znhstry import portal; portal.ensure_players_table()"
 
       - name: Backfill
         if: steps.gate.outputs.run == 'true'

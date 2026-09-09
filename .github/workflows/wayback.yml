@@ -18,6 +18,11 @@ jobs:
   wayback:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,9 +46,4 @@ jobs:
       - name: Archive Atlantis
         if: ${{ !cancelled() }}
         working-directory: pipeline
-        env:
-          ZNHSTRY_R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          ZNHSTRY_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          ZNHSTRY_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          ZNHSTRY_BUCKET: ${{ vars.R2_BUCKET }}
         run: uv run python -m znhstry archive --prefix atlantis/

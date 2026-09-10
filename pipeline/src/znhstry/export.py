@@ -1786,25 +1786,45 @@ def _build_zones_dict(
 def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
     """Per-player month rows from both collected and derived marts."""
     rows = con.execute("""
-        with derived_totals as (
-            select tournament_month, player_name,
+        with by_faction as (
+            select tournament_month, player_name, faction,
                    sum(bots_killed) as bots_killed,
                    sum(bots_lost) as bots_lost
+            from fct_atlantis_player_month_derived
+            group by 1, 2, 3
+        ),
+        by_player as (
+            select tournament_month, player_name,
+                   sum(bots_killed) as bots_killed,
+                   sum(bots_lost) as bots_lost,
+                   bool_and(faction = 'Unconfirmed') as all_unconfirmed
             from fct_atlantis_player_month_derived
             group by 1, 2
         ),
         board as (
             select p.player_name, t.tournament_month, p.faction,
                    p.launches,
-                   coalesce(d.bots_killed, 0) as bots_killed,
-                   coalesce(d.bots_lost, 0) as bots_lost,
+                   coalesce(
+                       bf.bots_killed,
+                       case when bp.all_unconfirmed then bp.bots_killed end,
+                       0
+                   ) as bots_killed,
+                   coalesce(
+                       bf.bots_lost,
+                       case when bp.all_unconfirmed then bp.bots_lost end,
+                       0
+                   ) as bots_lost,
                    cast(null as smallint) as rank_in_faction,
                    p.qredits, 'board' as source
             from fct_atlantis_payout p
             join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
-            left join derived_totals d
-                on d.tournament_month = p.tournament_month
-                and d.player_name = p.player_name
+            left join by_faction bf
+                on bf.tournament_month = p.tournament_month
+                and bf.player_name = p.player_name
+                and bf.faction = p.faction
+            left join by_player bp
+                on bp.tournament_month = p.tournament_month
+                and bp.player_name = p.player_name
             where t.is_finished and not p.is_estimate
         ),
         derived as (

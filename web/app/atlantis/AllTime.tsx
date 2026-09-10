@@ -141,7 +141,97 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
         name={name} factions={factions} factionFilter={factionFilter}
         onFilterChange={setFactionFilter} onClose={onClose}
       />
+      <PlayerCharts rows={data} />
       <PlayerDetailTable rows={sorted} dthStyle={dthStyle} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
+    </div>
+  );
+}
+
+function Sparkline({ data, color, label }: { data: { month: string; value: number }[]; color: string; label: string }) {
+  if (data.length === 0) return null;
+  const maxV = Math.max(...data.map(d => d.value), 1);
+  const w = 280;
+  const h = 40;
+  const barW = Math.max(2, Math.min(6, (w - 4) / data.length));
+  const best = data.reduce((a, b) => b.value > a.value ? b : a);
+  return (
+    <div style={{ minWidth: 200 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
+      <svg width={w} height={h} style={{ display: "block" }}>
+        {data.map((d, i) => (
+          <rect key={d.month} x={i * barW} y={h - (d.value / maxV) * (h - 4)} width={barW - 1} height={(d.value / maxV) * (h - 4)}
+            fill={color} opacity={0.7}>
+            <title>{d.month}: {d.value.toLocaleString()}</title>
+          </rect>
+        ))}
+      </svg>
+      <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {best.month} ({compact(best.value)})</div>
+    </div>
+  );
+}
+
+function YearBars({ data }: { data: { year: string; count: number }[] }) {
+  if (data.length === 0) return null;
+  const maxC = Math.max(...data.map(d => d.count), 1);
+  return (
+    <div style={{ minWidth: 200 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Appearances per year</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 40 }}>
+        {data.map(d => (
+          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: 16, height: (d.count / maxC) * 32, background: "var(--text-dim)", borderRadius: 1 }}
+              title={`${d.year}: ${d.count}`} />
+            <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{d.year.slice(2)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
+  const byMonth = useMemo(() => {
+    const map: Record<string, { launches: number; kills: number }> = {};
+    for (const r of rows) {
+      const m = r[0];
+      const prev = map[m] ?? { launches: 0, kills: 0 };
+      map[m] = { launches: prev.launches + r[2], kills: prev.kills + r[3] };
+    }
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => ({ month: m, ...v }));
+  }, [rows]);
+
+  const yearCounts = useMemo(() => {
+    const yrs: Record<string, number> = {};
+    for (const d of byMonth) {
+      const y = d.month.slice(0, 4);
+      yrs[y] = (yrs[y] ?? 0) + 1;
+    }
+    return Object.entries(yrs).sort(([a], [b]) => a.localeCompare(b)).map(([y, c]) => ({ year: y, count: c }));
+  }, [byMonth]);
+
+  if (byMonth.length === 0) return null;
+
+  const showSparklines = byMonth.length >= 2;
+  const launchData = byMonth.map(d => ({ month: d.month, value: d.launches }));
+  const killData = byMonth.filter(d => d.kills > 0).map(d => ({ month: d.month, value: d.kills }));
+  const bestLaunches = launchData.reduce((a, b) => b.value > a.value ? b : a);
+  const bestKills = killData.length > 0 ? killData.reduce((a, b) => b.value > a.value ? b : a) : null;
+
+  return (
+    <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
+      {showSparklines ? (
+        <>
+          <Sparkline data={launchData} color="var(--text-dim)" label="Launches" />
+          {killData.length >= 2 ? <Sparkline data={killData} color="var(--text-dim)" label="Kills" /> : null}
+        </>
+      ) : null}
+      {!showSparklines ? (
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          <div>Peak launches: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
+          {bestKills ? <div>Peak kills: {bestKills.month} ({compact(bestKills.value)})</div> : null}
+        </div>
+      ) : null}
+      <YearBars data={yearCounts} />
     </div>
   );
 }
@@ -285,6 +375,70 @@ export default function AllTime({ index }: Props) {
   );
 }
 
+function TotalRow({ r, onClick }: { r: AllTimePlayer & { rank: number }; onClick: () => void }) {
+  const multi = Object.keys(r.factions).length >= 2;
+  const title = !multi && r.unattributed > 0 ? `+ ${r.unattributed.toLocaleString()} unattributed` : undefined;
+  return (
+    <tr>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
+      <td style={{ ...cellStyle, cursor: "pointer", fontWeight: multi ? 600 : 400 }} onClick={onClick}>{r.name}</td>
+      <td style={cellStyle} title={title}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>{r.launches.toLocaleString()}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>{r.tournaments}</td>
+      <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.first_month}</td>
+      <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.last_month}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>
+        {r.qredits != null && r.qredits > 0 ? compact(r.qredits) : "—"}
+      </td>
+    </tr>
+  );
+}
+
+function FactionRow({ name, faction, detail, onClick }: { name: string; faction: string; detail: FactionDetail; onClick: () => void }) {
+  return (
+    <tr>
+      <td style={cellStyle} />
+      <td style={{ ...cellStyle, cursor: "pointer", paddingLeft: 24, color: "var(--text-dim)" }} onClick={onClick}>{name}</td>
+      <td style={cellStyle}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(faction) }} />
+          <span style={{ fontSize: 11 }}>{faction}</span>
+        </span>
+      </td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{detail.launches.toLocaleString()}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{detail.tournaments}</td>
+      <td style={cellStyle} />
+      <td style={cellStyle} />
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>
+        {detail.qredits > 0 ? compact(detail.qredits) : "—"}
+      </td>
+    </tr>
+  );
+}
+
+function renderPlayerRows(r: AllTimePlayer & { rank: number }, onPlayerClick: (name: string) => void): React.ReactNode[] {
+  const factionEntries = Object.entries(r.factions);
+  const multi = factionEntries.length >= 2;
+  const click = () => onPlayerClick(r.name);
+  const rows: React.ReactNode[] = [<TotalRow key={r.name} r={r} onClick={click} />];
+  if (multi) {
+    for (const [f, d] of factionEntries) {
+      rows.push(<FactionRow key={`${r.name}:${f}`} name={r.name} faction={f} detail={d} onClick={click} />);
+    }
+    if (r.unattributed > 0) {
+      rows.push(
+        <tr key={`${r.name}:unconfirmed`}>
+          <td style={cellStyle} />
+          <td style={{ ...cellStyle, paddingLeft: 24, color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }} colSpan={2}>Unconfirmed</td>
+          <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.unattributed.toLocaleString()}</td>
+          <td style={cellStyle} /><td style={cellStyle} /><td style={cellStyle} /><td style={cellStyle} />
+        </tr>,
+      );
+    }
+  }
+  return rows;
+}
+
 function PlayersTable({
   filtered, filter, onFilterChange, sortCol, sortAsc, toggleSort, arrow, onPlayerClick,
 }: {
@@ -339,20 +493,7 @@ function PlayersTable({
             </tr>
           </thead>
           <tbody>
-            {filtered.map(r => (
-              <tr key={r.name}>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
-                <td style={{ ...cellStyle, cursor: "pointer", color: "var(--text)" }} onClick={() => onPlayerClick(r.name)}>{r.name}</td>
-                <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
-                <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.first_month}</td>
-                <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.last_month}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>
-                  {r.qredits != null && r.qredits > 0 ? compact(r.qredits) : "—"}
-                </td>
-              </tr>
-            ))}
+            {filtered.flatMap(r => renderPlayerRows(r, onPlayerClick))}
           </tbody>
         </table>
         <div style={{ color: "var(--text-dim)", fontSize: 10, marginTop: 4 }}>

@@ -82,6 +82,10 @@ jobs:
         working-directory: pipeline
         run: uv run python -c "from znhstry import portal; portal.ensure_players_table()"
 
+      - name: Attribute player factions
+        working-directory: pipeline
+        run: uv run python -m znhstry attribute
+
       # The whole warehouse, tests included, the same way the nightly runs it. A
       # `dbt parse` alone let a source binding to a missing glob ship green; only a
       # build against the real raw layer catches that, and the unit tests need a

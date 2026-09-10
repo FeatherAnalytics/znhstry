@@ -145,6 +145,11 @@ jobs:
             echo "no new events or battle reports since the last run" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Attribute player factions
+        if: steps.changed.outputs.any == 'true'
+        working-directory: pipeline
+        run: uv run python -m znhstry attribute
+
       - name: Build warehouse
         if: steps.changed.outputs.any == 'true'
         working-directory: transform

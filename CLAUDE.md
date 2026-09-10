@@ -695,7 +695,7 @@ on its formation zones, not from position.
 
 ### Atlantis marts
 
-Five marts built from the four staging views above. All materialized as tables.
+Five marts built from the four staging views above, plus three derived-history marts from battle reports. All materialized as tables.
 
 | | Grain | Sort key |
 |---|---|---|
@@ -705,10 +705,15 @@ Five marts built from the four staging views above. All materialized as tables.
 | `dim_atlantis_tournament` | one row per tournament month | `(tournament_month)` |
 | `fct_atlantis_payout` | player + faction at the last observation | `(tournament_month, faction, player_name)` |
 | `fct_atlantis_zone_player_daily` | player + zone + day from battle reports | `(battle_date, battle_report_number, rank, player_name)` |
+| `dim_atlantis_tournament_derived` | one row per report month | `(tournament_month)` |
+| `fct_atlantis_player_month_derived` | player + attributed faction per month | `(tournament_month, faction, player_name)` |
+| `fct_atlantis_zone_month_derived` | zone name + triangle per month | `(tournament_month, triangle, zone_name)` |
 
 **Placement rule (the game's own).** Rank the three factions by zones held at the last observation, where a zone's holder is the faction with the largest count (ties break Legion > Swarm > Faceless, matching `export.py`'s `_leader`; a tie has not occurred in the data and cannot be resolved from it). When two factions hold the same number of zones, the one holding Prime ranks higher; if neither holds Prime, total bots across all nineteen zones breaks it.
 
 **Payout rule.** The game divides each placement's pool across the faction proportionally to launches. Pool amounts live in the `atlantis_pools` seed as an as-of table keyed by `effective_from`; a month with different pools is one appended row. The current pools are 10,000,000 / 4,000,000 / 1,000,000 for first / second / third.
+
+**Faction attribution (`znhstry attribute`).** A pipeline step that writes `data/raw/battlestats/player_factions/rows.parquet`, keyed `(Month, PlayerName)`, with `Faction`, `FactionSource`, `IsMercenary`, `MercenaryEvidence`. Runs in the nightly after `battlestats` and before `dbt build`. The solve is a per-month greedy reconciliation: start every player at their scraped (current) faction, then move players (single moves, then pairs within a still-failing report) while the number of exactly reconciling untruncated reports rises. Board evidence from the archived leaderboard trumps the solve (`FactionSource = 'board'`); zone-name evidence from the next month's triangle complements it (`FactionSource = 'zone-name'`). Confirmed = not moved, in a reconciling report, unique; reconciled = was moved, same conditions; none = everything else. Mercenary evidence: `same-month` (two factions in one month's reports), `zone-names` (named a zone in another faction's triangle), `across-months` (different confirmed factions in consecutive months). Players without an attribution row get `Unconfirmed` in the mart.
 
 **Interval grain.** A player's first observation in a month yields no interval row. `launches_gained` is never negative in the data; it is kept as is, not clamped. `launches_per_hour` is `launches_gained / minutes * 60`, where `minutes` is the gap between consecutive observations. The page says "per hour" and never "per minute".
 

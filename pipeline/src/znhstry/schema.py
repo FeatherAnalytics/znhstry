@@ -139,3 +139,13 @@ ATLANTIS_TOURNAMENT_DTYPES: dict[str, pl.DataType] = {
     "Source": pl.String,
 }
 ATLANTIS_TOURNAMENT_KEY: tuple[str, ...] = ("Month",)
+
+ATLANTIS_PLAYER_FACTION_DTYPES: dict[str, pl.DataType] = {
+    "Month": pl.Date,
+    "PlayerName": pl.String,
+    "Faction": pl.String,
+    "FactionSource": pl.String,
+    "IsMercenary": pl.Boolean,
+    "MercenaryEvidence": pl.String,
+}
+ATLANTIS_PLAYER_FACTION_KEY: tuple[str, ...] = ("Month", "PlayerName")

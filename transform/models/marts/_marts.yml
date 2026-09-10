@@ -232,3 +232,45 @@ models:
         data_tests: [not_null]
       - name: player_name
         data_tests: [not_null]
+
+  - name: dim_atlantis_tournament_derived
+    description: >
+      Grain: one row per tournament month, derived from battle reports.
+      Schedule, placements by ending bots, and aggregate counts.
+    columns:
+      - name: tournament_month
+        data_tests: [unique, not_null]
+
+  - name: fct_atlantis_player_month_derived
+    description: >
+      Grain: one row per tournament month, player, and attributed faction.
+      Launches, kills, losses, rank within faction, share, and qredits estimate.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless', 'Unconfirmed']
+      - name: player_name
+        data_tests: [not_null]
+      - name: faction_source
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['board', 'zone-name', 'confirmed', 'reconciled', 'none']
+
+  - name: fct_atlantis_zone_month_derived
+    description: >
+      Grain: one row per tournament month, triangle, and zone name.
+      Per-zone report counts, launches, ending bots, and holder.
+    columns:
+      - name: tournament_month
+        data_tests: [not_null]
+      - name: triangle
+        data_tests: [not_null]
+      - name: zone_name
+        data_tests: [not_null]

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type CSSProperties } from "react";
+import { FACTIONS as FACTION_DEFS } from "@/components/charts/palette";
 import {
   factionColor,
   factionHex,
@@ -8,6 +9,7 @@ import {
   mergedTournaments,
   type AtlantisIndex,
   type AnyTournament,
+  type FactionAllTime,
 } from "./lib";
 
 interface Props {
@@ -21,14 +23,7 @@ const cellStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 const FACTIONS = ["Legion", "Swarm", "Faceless"] as const;
-
-const CAVEAT =
-  "Derived months estimated from battle reports. " +
-  "Faction launches from 2019-07 to 2019-09-11 are understated (861 partial reports). " +
-  "Kills from attributed top-50 rows, Unconfirmed excluded; " +
-  "a same-month multi-faction player's kills sit under one faction. " +
-  "Qredits assume 10M/4M/1M throughout.";
-
+const FACTION_NAMES = FACTION_DEFS.map(f => f.label);
 const SHORTFALL_START = "2019-07";
 const SHORTFALL_END = "2019-09";
 
@@ -69,17 +64,16 @@ function buildFactionMonths(tournaments: AnyTournament[]): FactionMonth[] {
   }).sort((a, b) => a.month.localeCompare(b.month));
 }
 
-function yearMarkers(data: FactionMonth[], w: number): { lines: number[]; labels: { x: number; label: string }[] } {
-  const step = w / data.length;
-  const lines: number[] = [];
-  const labels: { x: number; label: string }[] = [];
+function yearMarkers(data: FactionMonth[]): { indices: number[]; labels: { idx: number; label: string }[] } {
+  const indices: number[] = [];
+  const labels: { idx: number; label: string }[] = [];
   for (let i = 0; i < data.length; i++) {
     if (data[i].month.endsWith("-01")) {
-      lines.push(i * step);
-      labels.push({ x: i * step, label: data[i].month.slice(0, 4) });
+      indices.push(i);
+      labels.push({ idx: i, label: data[i].month.slice(0, 4) });
     }
   }
-  return { lines, labels };
+  return { indices, labels };
 }
 
 function factionVal(d: FactionMonth, field: "launches" | "kills" | "qredits", f: string, perDay: boolean, divideBy: "length" | "battle"): number | null {
@@ -98,12 +92,13 @@ function OverTimeLines({ data, field, perDay, label, divideBy }: {
   label: string;
   divideBy: "length" | "battle";
 }) {
-  const w = 280;
-  const h = 80;
+  const h = 100;
   const pad = { top: 4, bottom: 16 };
   const ph = h - pad.top - pad.bottom;
-  const step = w / Math.max(data.length - 1, 1);
-  const { lines: yearLines, labels: yearLabels } = yearMarkers(data, w);
+  const n = data.length;
+  const vbW = n * 2;
+  const step = vbW / Math.max(n - 1, 1);
+  const { indices: yearIdx, labels: yearLabels } = yearMarkers(data);
 
   const maxV = Math.max(
     ...FACTIONS.flatMap(f => data.map(d => factionVal(d, field, f, perDay, divideBy) ?? 0)),
@@ -111,9 +106,9 @@ function OverTimeLines({ data, field, perDay, label, divideBy }: {
   );
 
   return (
-    <div style={{ flex: 1, minWidth: 200 }}>
+    <div style={{ marginBottom: 12 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}{perDay ? " /day" : ""}</div>
-      <svg width={w} height={h} style={{ display: "block" }}>
+      <svg width="100%" height={h} viewBox={`0 0 ${vbW} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
         {data.some(d => d.inShortfall) && field === "launches" ? (
           <rect
             x={data.findIndex(d => d.inShortfall) * step}
@@ -123,18 +118,18 @@ function OverTimeLines({ data, field, perDay, label, divideBy }: {
             fill="var(--text-dim)" opacity={0.08}
           />
         ) : null}
-        {yearLines.map(x => (
-          <line key={x} x1={x} x2={x} y1={0} y2={h - pad.bottom} stroke="var(--hairline)" strokeWidth={0.5} />
+        {yearIdx.map(i => (
+          <line key={i} x1={i * step} x2={i * step} y1={0} y2={h - pad.bottom} stroke="var(--hairline)" strokeWidth={0.3} />
         ))}
         {FACTIONS.map(f => {
           const segments: string[] = [];
           let current = "";
-          for (let i = 0; i < data.length; i++) {
+          for (let i = 0; i < n; i++) {
             const v = factionVal(data[i], field, f, perDay, divideBy);
-            const x = i * step;
-            const y = v != null ? pad.top + ph - (v / maxV) * ph : -1;
             if (v != null) {
-              current += (current ? " L" : "M") + `${x},${y}`;
+              const x = i * step;
+              const y = pad.top + ph - (v / maxV) * ph;
+              current += (current ? " " : "") + `${x},${y}`;
             } else if (current) {
               segments.push(current);
               current = "";
@@ -142,13 +137,17 @@ function OverTimeLines({ data, field, perDay, label, divideBy }: {
           }
           if (current) segments.push(current);
           return segments.map((seg, si) => (
-            <polyline key={`${f}:${si}`} points={seg} fill="none" stroke={factionHex(f)} strokeWidth={1.5} opacity={0.8} />
+            <polyline key={`${f}:${si}`} points={seg} fill="none" stroke={factionHex(f)} strokeWidth={0.8} opacity={0.8} vectorEffect="non-scaling-stroke" />
           ));
         })}
-        {yearLabels.map(({ x, label: yr }) => (
-          <text key={yr + x} x={x + 2} y={h - 2} fontSize={8} fill="var(--text-dim)">{yr}</text>
-        ))}
       </svg>
+      <div style={{ display: "flex", position: "relative", height: 12 }}>
+        {yearLabels.map(({ idx, label: yr }) => (
+          <span key={yr + idx} className="tabular"
+            style={{ position: "absolute", left: `${(idx / Math.max(n - 1, 1)) * 100}%`, fontSize: 9, color: "var(--text-dim)" }}
+          >{yr}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -164,11 +163,9 @@ function OverTime({ data }: { data: FactionMonth[] }) {
           per day
         </label>
       </div>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <OverTimeLines data={data} field="launches" perDay={perDay} label="Launches" divideBy="length" />
-        <OverTimeLines data={data} field="kills" perDay={perDay} label="Kills" divideBy="battle" />
-        <OverTimeLines data={data} field="qredits" perDay={perDay} label="Qredits" divideBy="length" />
-      </div>
+      <OverTimeLines data={data} field="launches" perDay={perDay} label="Launches" divideBy="length" />
+      <OverTimeLines data={data} field="kills" perDay={perDay} label="Kills" divideBy="battle" />
+      <OverTimeLines data={data} field="qredits" perDay={perDay} label="Qredits" divideBy="length" />
     </div>
   );
 }
@@ -276,6 +273,42 @@ function Distributions({ data }: { data: FactionMonth[] }) {
   );
 }
 
+function PlacementCounts({ tournaments }: { tournaments: AnyTournament[] }) {
+  const counts: Record<string, [number, number, number]> = {};
+  for (const f of FACTION_NAMES) counts[f] = [0, 0, 0];
+  for (const t of tournaments) {
+    for (let i = 0; i < 3; i++) {
+      const p = t.placements[i];
+      if (p && counts[p[0]]) counts[p[0]][i]++;
+    }
+  }
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div className="eyebrow" style={{ marginBottom: 4 }}>Placements</div>
+      <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>1st</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>2nd</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>3rd</th>
+          </tr>
+        </thead>
+        <tbody>
+          {FACTION_NAMES.map(f => (
+            <tr key={f}>
+              <td style={{ ...cellStyle, color: factionColor(f), fontWeight: 600 }}>{f}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][0]}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][1]}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][2]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Streaks({ data }: { data: FactionMonth[] }) {
   const streaks: Record<string, Record<string, { current: number; longest: number }>> = {};
   for (const f of FACTIONS) {
@@ -296,26 +329,31 @@ function Streaks({ data }: { data: FactionMonth[] }) {
   }
   return (
     <div style={{ marginBottom: 24 }}>
-      <div className="eyebrow" style={{ marginBottom: 8 }}>Placement streaks</div>
+      <div className="eyebrow" style={{ marginBottom: 8 }}>Streaks</div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
-              {["1st", "2nd", "3rd"].map(p => [
-                <th key={`${p}c`} className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>{p} cur</th>,
-                <th key={`${p}l`} className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>{p} best</th>,
-              ])}
+              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }} rowSpan={2}>Faction</th>
+              <th className="eyebrow" style={{ ...cellStyle, textAlign: "center" }} colSpan={3}>Current</th>
+              <th className="eyebrow" style={{ ...cellStyle, textAlign: "center" }} colSpan={3}>Best</th>
+            </tr>
+            <tr>
+              {["1st", "2nd", "3rd", "1st", "2nd", "3rd"].map((p, i) => (
+                <th key={`${p}${i}`} className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>{p}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {FACTIONS.map(f => (
               <tr key={f}>
                 <td style={{ ...cellStyle, color: factionColor(f), fontWeight: 600 }}>{f}</td>
-                {["1st", "2nd", "3rd"].map(p => [
-                  <td key={`${p}c`} className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{streaks[f][p].current}</td>,
-                  <td key={`${p}l`} className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{streaks[f][p].longest}</td>,
-                ])}
+                {["1st", "2nd", "3rd"].map(p => (
+                  <td key={`c${p}`} className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{streaks[f][p].current}</td>
+                ))}
+                {["1st", "2nd", "3rd"].map(p => (
+                  <td key={`l${p}`} className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{streaks[f][p].longest}</td>
+                ))}
               </tr>
             ))}
           </tbody>
@@ -325,11 +363,44 @@ function Streaks({ data }: { data: FactionMonth[] }) {
   );
 }
 
+function DayHistograms({ data }: { data: FactionMonth[] }) {
+  const stackingDays = data.map(d => d.stacking);
+  const battleDays = data.map(d => d.battle);
+  return (
+    <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 24 }}>
+      <Histogram values={stackingDays} label="Stacking days" rangeMin={0} />
+      <Histogram values={battleDays} label="Battle days" rangeMin={1} />
+    </div>
+  );
+}
+
+function Histogram({ values, label, rangeMin }: { values: number[]; label: string; rangeMin: number }) {
+  const counts: Record<number, number> = {};
+  for (const v of values) counts[v] = (counts[v] ?? 0) + 1;
+  const lo = Math.min(rangeMin, ...values);
+  const hi = Math.max(...values);
+  const max = Math.max(...Object.values(counts), 1);
+  const keys: number[] = [];
+  for (let k = lo; k <= hi; k++) keys.push(k);
+  return (
+    <div style={{ flex: 1, minWidth: 120 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 40 }}>
+        {keys.map(k => (
+          <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <div style={{ width: 16, height: ((counts[k] ?? 0) / max) * 32, background: "var(--text-dim)", borderRadius: 1 }}
+              title={`${k}: ${counts[k] ?? 0}`} />
+            <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{k}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LengthScatter({ data }: { data: FactionMonth[] }) {
-  const w = 280;
-  const h = 100;
+  const h = 120;
   const margin = { top: 8, right: 8, bottom: 20, left: 8 };
-  const pw = w - margin.left - margin.right;
   const ph = h - margin.top - margin.bottom;
 
   const panels: { label: string; xField: "length" | "battle"; yFn: (d: FactionMonth, f: string) => number | null; yLabel: string }[] = [
@@ -341,40 +412,72 @@ function LengthScatter({ data }: { data: FactionMonth[] }) {
   return (
     <div style={{ marginBottom: 24 }}>
       <div className="eyebrow" style={{ marginBottom: 8 }}>Length vs outcome</div>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        {panels.map(p => {
-          const points: { x: number; y: number; faction: string; month: string }[] = [];
-          for (const d of data) {
-            for (const f of FACTIONS) {
-              const y = p.yFn(d, f);
-              if (y == null) continue;
-              points.push({ x: d[p.xField], y, faction: f, month: d.month });
-            }
+      {panels.map(p => {
+        const points: { x: number; y: number; faction: string; month: string }[] = [];
+        for (const d of data) {
+          for (const f of FACTIONS) {
+            const y = p.yFn(d, f);
+            if (y == null) continue;
+            points.push({ x: d[p.xField], y, faction: f, month: d.month });
           }
-          if (points.length === 0) return null;
-          const maxX = Math.max(...points.map(pt => pt.x));
-          const minX = Math.min(...points.map(pt => pt.x));
-          const maxY = Math.max(...points.map(pt => pt.y), 1);
-          const xRange = Math.max(maxX - minX, 1);
-          const sx = (v: number) => margin.left + ((v - minX) / xRange) * pw;
-          const sy = (v: number) => margin.top + ph - (v / maxY) * ph;
+        }
+        if (points.length === 0) return null;
+        const maxX = Math.max(...points.map(pt => pt.x));
+        const minX = Math.min(...points.map(pt => pt.x));
+        const maxY = Math.max(...points.map(pt => pt.y), 1);
+        const xRange = Math.max(maxX - minX, 1);
+        const pw = 100;
+        const sx = (v: number) => margin.left + ((v - minX) / xRange) * (pw - margin.left - margin.right);
+        const sy = (v: number) => margin.top + ph - (v / maxY) * ph;
 
-          return (
-            <div key={p.label} style={{ flex: 1, minWidth: 200 }}>
-              <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{p.label}</div>
-              <svg width={w} height={h} style={{ display: "block" }}>
-                {points.map((pt, i) => (
-                  <circle key={i} cx={sx(pt.x)} cy={sy(pt.y)} r={3} fill={factionHex(pt.faction)} opacity={0.6}>
-                    <title>{pt.month} {pt.faction}: {compact(pt.y)} {p.yLabel} at {pt.x} days</title>
-                  </circle>
-                ))}
-                {Array.from(new Set(points.map(pt => pt.x))).map(xv => (
-                  <text key={xv} x={sx(xv)} y={h - 2} textAnchor="middle" fontSize={8} fill="var(--text-dim)">{xv}</text>
-                ))}
-              </svg>
-            </div>
-          );
-        })}
+        return (
+          <div key={p.label} style={{ marginBottom: 12 }}>
+            <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{p.label}</div>
+            <svg width="100%" height={h} viewBox={`0 0 ${pw} ${h}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+              {points.map((pt, i) => (
+                <circle key={i} cx={sx(pt.x)} cy={sy(pt.y)} r={1.5} fill={factionHex(pt.faction)} opacity={0.6}>
+                  <title>{pt.month} {pt.faction}: {compact(pt.y)} {p.yLabel} at {pt.x} days</title>
+                </circle>
+              ))}
+              {Array.from(new Set(points.map(pt => pt.x))).map(xv => (
+                <text key={xv} x={sx(xv)} y={h - 2} textAnchor="middle" fontSize={4} fill="var(--text-dim)">{xv}</text>
+              ))}
+            </svg>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FactionTable({ factions }: { factions: Record<string, FactionAllTime> }) {
+  const list = Object.entries(factions).sort(
+    ([, a], [, b]) => b.wins - a.wins || b.qredits - a.qredits,
+  );
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div className="eyebrow" style={{ marginBottom: 4 }}>All-time standings</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+          <thead>
+            <tr>
+              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
+              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Wins</th>
+              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Launches</th>
+              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Qredits</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(([faction, data]) => (
+              <tr key={faction}>
+                <td style={{ ...cellStyle, color: factionColor(faction), fontWeight: 600 }}>{faction}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{data.wins}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(data.launches ?? 0)}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(data.qredits)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -386,11 +489,13 @@ export default function Factions({ index }: Props) {
 
   return (
     <div style={section}>
-      <div className="display" style={{ fontSize: 13, marginBottom: 4 }}>Factions</div>
-      <div style={{ color: "var(--text-dim)", fontSize: 10, marginBottom: 16 }}>{CAVEAT}</div>
+      <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Factions</div>
+      <FactionTable factions={index.all_time.factions} />
+      <PlacementCounts tournaments={tournaments} />
       <OverTime data={data} />
       <Distributions data={data} />
       <Streaks data={data} />
+      <DayHistograms data={data} />
       <LengthScatter data={data} />
     </div>
   );

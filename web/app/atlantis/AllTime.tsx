@@ -6,14 +6,11 @@ import { BASE } from "@/lib/dataOrigin";
 import { MAZ_AMBER } from "@/components/charts/palette";
 import {
   factionColor,
-  factionHex,
   compact,
-  formatDate,
   fetchPlayersDetail,
   type AtlantisIndex,
   type AllTimePlayer,
   type FactionDetail,
-  type FactionAllTime,
   type PlayerMonthRow,
 } from "./lib";
 
@@ -29,6 +26,8 @@ const cellStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const ARROW_SLOT: CSSProperties = { display: "inline-block", width: 12, textAlign: "center" };
+
 const thStyle: CSSProperties = {
   ...cellStyle,
   position: "sticky" as const,
@@ -39,44 +38,6 @@ const thStyle: CSSProperties = {
 };
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
-
-const SHORTFALL_NOTE =
-  "Faction launches from 2019-07 to 2019-09-11 are understated " +
-  "(the report header's per-faction split was partial on 861 reports in that window).";
-
-function FactionTable({ factions }: { factions: Record<string, FactionAllTime> }) {
-  const list = Object.entries(factions).sort(
-    ([, a], [, b]) => b.wins - a.wins || b.qredits - a.qredits,
-  );
-  return (
-    <>
-      <div className="display" style={{ fontSize: 12, marginBottom: 8 }}>Factions</div>
-      <div style={{ overflowX: "auto", marginBottom: 8 }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
-          <thead>
-            <tr>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Wins</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Launches</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Qredits (exact + est.)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map(([faction, data]) => (
-              <tr key={faction}>
-                <td style={{ ...cellStyle, color: factionColor(faction), fontWeight: 600 }}>{faction}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{data.wins}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(data.launches ?? 0)}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(data.qredits)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ color: "var(--text-dim)", fontSize: 10, marginBottom: 24 }}>{SHORTFALL_NOTE}</div>
-    </>
-  );
-}
 
 function FactionsCell({ factions, unattributed }: { factions: Record<string, FactionDetail>; unattributed: number }) {
   const entries = Object.entries(factions).sort(([, a], [, b]) => b.launches - a.launches);
@@ -94,14 +55,14 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
   );
 }
 
-type DetailSort = "launches" | "kills" | "lost" | "rank" | "qredits";
-const DETAIL_COL_INDEX: Record<DetailSort, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
+type DetailSort = "month" | "launches" | "kills" | "lost" | "rank" | "qredits";
+const DETAIL_COL_INDEX: Record<Exclude<DetailSort, "month">, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
 
 function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) {
   const [data, setData] = useState<PlayerMonthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
-  const [detailSort, setDetailSort] = useState<DetailSort | null>(null);
+  const [detailSort, setDetailSort] = useState<DetailSort>("month");
   const [detailAsc, setDetailAsc] = useState(false);
 
   useEffect(() => {
@@ -116,48 +77,93 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
   if (loading) return <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading player…</div>;
   if (!data || data.length === 0) return <div style={{ padding: 16, color: "var(--text-dim)" }}>No data for {name}.</div>;
 
-  const factions = [...new Set(data.map(r => r[1]))];
+  const factions = [...new Set(data.map(r => r[1]))].filter(f => f !== "Unconfirmed");
   const filtered = factionFilter ? data.filter(r => r[1] === factionFilter) : data;
-  const sorted = detailSort ? [...filtered].sort((a, b) => {
-    const ci = DETAIL_COL_INDEX[detailSort];
-    const av = a[ci] as number | null;
-    const bv = b[ci] as number | null;
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return detailAsc ? av - bv : bv - av;
-  }) : filtered;
+  const sorted = sortDetailRows(filtered, detailSort, detailAsc);
 
   const toggleDetailSort = (col: DetailSort) => {
     if (col === detailSort) setDetailAsc(!detailAsc);
-    else { setDetailSort(col); setDetailAsc(false); }
+    else { setDetailSort(col); setDetailAsc(col === "month" ? false : false); }
   };
-  const dArrow = (col: DetailSort) => col === detailSort ? (detailAsc ? " ▲" : " ▼") : "";
-  const dthStyle: CSSProperties = { ...cellStyle, textAlign: "right" as const, cursor: "pointer", userSelect: "none" as const };
+  const dArrow = (col: DetailSort) => <span style={ARROW_SLOT}>{col === detailSort ? (detailAsc ? "▲" : "▼") : ""}</span>;
 
   return (
     <div style={{ borderTop: "2px solid var(--hairline-bright)", padding: "16px 16px 24px" }}>
       <PlayerDetailHeader
         name={name} factions={factions} factionFilter={factionFilter}
-        onFilterChange={setFactionFilter} onClose={onClose}
+        onFilterChange={f => setFactionFilter(factionFilter === f ? null : f)} onClose={onClose}
       />
+      <FactionBreakdown data={data} />
       <PlayerCharts rows={data} />
-      <PlayerDetailTable rows={sorted} dthStyle={dthStyle} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
+      <PlayerDetailTable rows={sorted} detailSort={detailSort} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
+    </div>
+  );
+}
+
+function sortDetailRows(rows: PlayerMonthRow[], col: DetailSort, asc: boolean): PlayerMonthRow[] {
+  return [...rows].sort((a, b) => {
+    if (col === "month") {
+      return asc ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]);
+    }
+    const ci = DETAIL_COL_INDEX[col];
+    const av = a[ci] as number | null;
+    const bv = b[ci] as number | null;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return asc ? av - bv : bv - av;
+  });
+}
+
+function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
+  const totals: Record<string, { launches: number; kills: number; tournaments: number; qredits: number }> = {};
+  const months: Record<string, Set<string>> = {};
+  for (const r of data) {
+    const f = r[1];
+    if (!totals[f]) { totals[f] = { launches: 0, kills: 0, tournaments: 0, qredits: 0 }; months[f] = new Set(); }
+    totals[f].launches += r[2];
+    totals[f].kills += r[3];
+    if (!months[f].has(r[0])) { totals[f].tournaments++; months[f].add(r[0]); }
+    totals[f].qredits += (r[6] ?? 0);
+  }
+  const entries = Object.entries(totals).sort(([, a], [, b]) => b.launches - a.launches);
+  if (entries.length <= 1) return null;
+  const grand = entries.reduce((s, [, d]) => ({ launches: s.launches + d.launches, kills: s.kills + d.kills, tournaments: s.tournaments + d.tournaments, qredits: s.qredits + d.qredits }), { launches: 0, kills: 0, tournaments: 0, qredits: 0 });
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+        <tbody>
+          {entries.map(([f, d]) => (
+            <tr key={f}>
+              <td style={{ ...cellStyle, padding: "4px 8px", color: factionColor(f) }}>{f}</td>
+              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.tournaments}</td>
+              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.qredits > 0 ? compact(d.qredits) : "—"}</td>
+            </tr>
+          ))}
+          <tr style={{ fontWeight: 600 }}>
+            <td style={{ ...cellStyle, padding: "4px 8px" }}>Total</td>
+            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.launches.toLocaleString()}</td>
+            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.tournaments}</td>
+            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.qredits > 0 ? compact(grand.qredits) : "—"}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
 
 function Sparkline({ data, color, label }: { data: { month: string; value: number }[]; color: string; label: string }) {
-  if (data.length === 0) return null;
+  if (data.length < 2) return null;
   const maxV = Math.max(...data.map(d => d.value), 1);
-  const w = 280;
-  const h = 40;
-  const barW = Math.max(2, Math.min(6, (w - 4) / data.length));
+  const h = 60;
+  const barW = Math.max(2, Math.min(6, 4));
   const best = data.reduce((a, b) => b.value > a.value ? b : a);
   return (
-    <div style={{ minWidth: 200 }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
-      <svg width={w} height={h} style={{ display: "block" }}>
+      <svg width="100%" height={h} viewBox={`0 0 ${data.length * barW} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
         {data.map((d, i) => (
           <rect key={d.month} x={i * barW} y={h - (d.value / maxV) * (h - 4)} width={barW - 1} height={(d.value / maxV) * (h - 4)}
             fill={color} opacity={0.7}>
@@ -174,12 +180,12 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   if (data.length === 0) return null;
   const maxC = Math.max(...data.map(d => d.count), 1);
   return (
-    <div style={{ minWidth: 200 }}>
-      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Appearances per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 40 }}>
+    <div style={{ minWidth: 100 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60 }}>
         {data.map(d => (
           <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: 16, height: (d.count / maxC) * 32, background: "var(--text-dim)", borderRadius: 1 }}
+            <div style={{ width: 16, height: (d.count / maxC) * 48, background: "var(--text-dim)", borderRadius: 1 }}
               title={`${d.year}: ${d.count}`} />
             <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{d.year.slice(2)}</span>
           </div>
@@ -201,36 +207,35 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
   }, [rows]);
 
   const yearCounts = useMemo(() => {
+    const months = new Set(rows.map(r => r[0]));
     const yrs: Record<string, number> = {};
-    for (const d of byMonth) {
-      const y = d.month.slice(0, 4);
+    for (const m of months) {
+      const y = m.slice(0, 4);
       yrs[y] = (yrs[y] ?? 0) + 1;
     }
     return Object.entries(yrs).sort(([a], [b]) => a.localeCompare(b)).map(([y, c]) => ({ year: y, count: c }));
-  }, [byMonth]);
+  }, [rows]);
 
   if (byMonth.length === 0) return null;
 
-  const showSparklines = byMonth.length >= 2;
   const launchData = byMonth.map(d => ({ month: d.month, value: d.launches }));
   const killData = byMonth.filter(d => d.kills > 0).map(d => ({ month: d.month, value: d.kills }));
   const bestLaunches = launchData.reduce((a, b) => b.value > a.value ? b : a);
   const bestKills = killData.length > 0 ? killData.reduce((a, b) => b.value > a.value ? b : a) : null;
 
   return (
-    <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
-      {showSparklines ? (
+    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+      {byMonth.length >= 2 ? (
         <>
           <Sparkline data={launchData} color="var(--text-dim)" label="Launches" />
           {killData.length >= 2 ? <Sparkline data={killData} color="var(--text-dim)" label="Kills" /> : null}
         </>
-      ) : null}
-      {!showSparklines ? (
+      ) : (
         <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
           <div>Peak launches: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
           {bestKills ? <div>Peak kills: {bestKills.month} ({compact(bestKills.value)})</div> : null}
         </div>
-      ) : null}
+      )}
       <YearBars data={yearCounts} />
     </div>
   );
@@ -238,15 +243,17 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
 
 function PlayerDetailHeader({ name, factions, factionFilter, onFilterChange, onClose }: {
   name: string; factions: string[]; factionFilter: string | null;
-  onFilterChange: (f: string | null) => void; onClose: () => void;
+  onFilterChange: (f: string) => void; onClose: () => void;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
       <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 16 }}>×</button>
       <span className="display" style={{ fontSize: 16 }}>{name}</span>
+      <span style={{ fontSize: 12, color: factionFilter ? "var(--text-dim)" : "var(--text)", cursor: "pointer" }}
+        onClick={() => onFilterChange("")}>All</span>
       {factions.map(f => (
         <span key={f}
-          onClick={() => onFilterChange(factionFilter === f ? null : f)}
+          onClick={() => onFilterChange(f)}
           style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !factionFilter || factionFilter === f ? 1 : 0.4 }}
         >{f}</span>
       ))}
@@ -255,22 +262,23 @@ function PlayerDetailHeader({ name, factions, factionFilter, onFilterChange, onC
   );
 }
 
-function PlayerDetailTable({ rows, dthStyle, toggleDetailSort, dArrow }: {
-  rows: PlayerMonthRow[]; dthStyle: CSSProperties;
-  toggleDetailSort: (col: DetailSort) => void; dArrow: (col: DetailSort) => string;
+function PlayerDetailTable({ rows, detailSort, toggleDetailSort, dArrow }: {
+  rows: PlayerMonthRow[]; detailSort: DetailSort;
+  toggleDetailSort: (col: DetailSort) => void; dArrow: (col: DetailSort) => React.ReactNode;
 }) {
+  const dth: CSSProperties = { ...cellStyle, textAlign: "right" as const, cursor: "pointer", userSelect: "none" as const };
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
         <thead>
           <tr>
-            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Month</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left", cursor: "pointer", userSelect: "none" }} onClick={() => toggleDetailSort("month")}>Month{dArrow("month")}</th>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
-            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("launches")}>Launches{dArrow("launches")}</th>
-            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("kills")}>Kills{dArrow("kills")}</th>
-            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("lost")}>Lost{dArrow("lost")}</th>
-            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("rank")}>Rank{dArrow("rank")}</th>
-            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("qredits")}>Qredits{dArrow("qredits")}</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("launches")}>Launches{dArrow("launches")}</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("kills")}>Kills{dArrow("kills")}</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("lost")}>Lost{dArrow("lost")}</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("rank")}>Rank{dArrow("rank")}</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("qredits")}>Qredits{dArrow("qredits")}</th>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Source</th>
           </tr>
         </thead>
@@ -304,7 +312,6 @@ export default function AllTime({ index }: Props) {
   const playerParam = searchParams.get("player");
 
   const players = index.all_time.players;
-  const factions = index.all_time.factions;
 
   const [sortCol, setSortCol] = useState<SortCol>("launches");
   const [sortAsc, setSortAsc] = useState(false);
@@ -314,7 +321,7 @@ export default function AllTime({ index }: Props) {
     if (col === sortCol) setSortAsc(!sortAsc);
     else { setSortCol(col); setSortAsc(false); }
   };
-  const arrow = (col: SortCol) => (col === sortCol ? (sortAsc ? " ▲" : " ▼") : "");
+  const arrow = (col: SortCol) => <span style={ARROW_SLOT}>{col === sortCol ? (sortAsc ? "▲" : "▼") : ""}</span>;
 
   const ranked = useMemo(() => {
     const dir = sortAsc ? 1 : -1;
@@ -353,123 +360,33 @@ export default function AllTime({ index }: Props) {
 
   return (
     <div style={section}>
-      <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>All time standings</div>
-
-      <FactionTable factions={factions} />
-
+      <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Players</div>
       <PlayersTable
-        filtered={filtered}
-        filter={filter}
-        onFilterChange={setFilter}
-        sortCol={sortCol}
-        sortAsc={sortAsc}
-        toggleSort={toggleSort}
-        arrow={arrow}
+        filtered={filtered} filter={filter} onFilterChange={setFilter}
+        sortCol={sortCol} toggleSort={toggleSort} arrow={arrow}
         onPlayerClick={onPlayerClick}
       />
-
-      {playerParam ? (
-        <PlayerDetail name={playerParam} onClose={onPlayerClose} />
-      ) : null}
+      {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
     </div>
   );
 }
 
-function TotalRow({ r, onClick }: { r: AllTimePlayer & { rank: number }; onClick: () => void }) {
-  const multi = Object.keys(r.factions).length >= 2;
-  const title = !multi && r.unattributed > 0 ? `+ ${r.unattributed.toLocaleString()} unattributed` : undefined;
-  return (
-    <tr>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
-      <td style={{ ...cellStyle, cursor: "pointer", fontWeight: multi ? 600 : 400 }} onClick={onClick}>{r.name}</td>
-      <td style={cellStyle} title={title}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>{r.launches.toLocaleString()}</td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>{r.tournaments}</td>
-      <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.first_month}</td>
-      <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.last_month}</td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", fontWeight: multi ? 600 : 400 }}>
-        {r.qredits != null && r.qredits > 0 ? compact(r.qredits) : "—"}
-      </td>
-    </tr>
-  );
-}
-
-function FactionRow({ name, faction, detail, onClick }: { name: string; faction: string; detail: FactionDetail; onClick: () => void }) {
-  return (
-    <tr>
-      <td style={cellStyle} />
-      <td style={{ ...cellStyle, cursor: "pointer", paddingLeft: 24, color: "var(--text-dim)" }} onClick={onClick}>{name}</td>
-      <td style={cellStyle}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          <span style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(faction) }} />
-          <span style={{ fontSize: 11 }}>{faction}</span>
-        </span>
-      </td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{detail.launches.toLocaleString()}</td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{detail.tournaments}</td>
-      <td style={cellStyle} />
-      <td style={cellStyle} />
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>
-        {detail.qredits > 0 ? compact(detail.qredits) : "—"}
-      </td>
-    </tr>
-  );
-}
-
-function renderPlayerRows(r: AllTimePlayer & { rank: number }, onPlayerClick: (name: string) => void): React.ReactNode[] {
-  const factionEntries = Object.entries(r.factions);
-  const multi = factionEntries.length >= 2;
-  const click = () => onPlayerClick(r.name);
-  const rows: React.ReactNode[] = [<TotalRow key={r.name} r={r} onClick={click} />];
-  if (multi) {
-    for (const [f, d] of factionEntries) {
-      rows.push(<FactionRow key={`${r.name}:${f}`} name={r.name} faction={f} detail={d} onClick={click} />);
-    }
-    if (r.unattributed > 0) {
-      rows.push(
-        <tr key={`${r.name}:unconfirmed`}>
-          <td style={cellStyle} />
-          <td style={{ ...cellStyle, paddingLeft: 24, color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }} colSpan={2}>Unconfirmed</td>
-          <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.unattributed.toLocaleString()}</td>
-          <td style={cellStyle} /><td style={cellStyle} /><td style={cellStyle} /><td style={cellStyle} />
-        </tr>,
-      );
-    }
-  }
-  return rows;
-}
-
-function PlayersTable({
-  filtered, filter, onFilterChange, sortCol, sortAsc, toggleSort, arrow, onPlayerClick,
-}: {
+function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, arrow, onPlayerClick }: {
   filtered: (AllTimePlayer & { rank: number })[];
   filter: string;
   onFilterChange: (v: string) => void;
   sortCol: SortCol;
-  sortAsc: boolean;
   toggleSort: (col: SortCol) => void;
-  arrow: (col: SortCol) => string;
+  arrow: (col: SortCol) => React.ReactNode;
   onPlayerClick: (name: string) => void;
 }) {
   return (
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-        <div className="display" style={{ fontSize: 12 }}>Players</div>
         <span style={{ position: "relative", display: "inline-block" }}>
-          <input
-            type="text"
-            value={filter}
-            onChange={e => onFilterChange(e.target.value)}
+          <input type="text" value={filter} onChange={e => onFilterChange(e.target.value)}
             placeholder="Filter by name..."
-            style={{
-              background: "var(--ink-raised)",
-              border: "1px solid var(--hairline-bright)",
-              borderRadius: 3,
-              padding: "4px 24px 4px 8px",
-              color: "var(--text)",
-              fontSize: 12,
-              width: 180,
-            }}
+            style={{ background: "var(--ink-raised)", borderWidth: 1, borderStyle: "solid", borderColor: "var(--hairline-bright)", borderRadius: 3, padding: "4px 24px 4px 8px", color: "var(--text)", fontSize: 12, width: 180 }}
           />
           {filter ? (
             <button type="button" onClick={() => onFilterChange("")}
@@ -487,18 +404,28 @@ function PlayersTable({
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Factions</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("tournaments")}>Tournaments{arrow("tournaments")}</th>
-              <th className="eyebrow" style={{ ...thStyle, cursor: "default" }}>First</th>
-              <th className="eyebrow" style={{ ...thStyle, cursor: "default" }}>Last</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>First</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>Last</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.flatMap(r => renderPlayerRows(r, onPlayerClick))}
+            {filtered.map(r => (
+              <tr key={r.name}>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
+                <td style={{ ...cellStyle, cursor: "pointer" }} onClick={() => onPlayerClick(r.name)}>{r.name}</td>
+                <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.first_month}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.last_month}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>
+                  {r.qredits != null && r.qredits > 0 ? compact(r.qredits) : "—"}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-        <div style={{ color: "var(--text-dim)", fontSize: 10, marginTop: 4 }}>
-          Board months are exact; derived months estimated from battle reports. Months not yet attributed contribute nothing.
-        </div>
       </div>
     </>
   );

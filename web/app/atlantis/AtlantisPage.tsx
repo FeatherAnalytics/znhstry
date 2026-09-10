@@ -172,7 +172,7 @@ export default function AtlantisPage() {
               onClick={() => setParams({ tab: tab === "dashboard" ? null : tab, player: null, zone: null })}
               style={tabParam === tab ? activeBtnStyle : btnStyle}
             >
-              {tab === "dashboard" ? "Dashboard" : tab === "history" ? "History" : tab === "alltime" ? "All Time" : "Factions"}
+              {tab === "dashboard" ? "Leaderboard" : tab === "history" ? "History" : tab === "alltime" ? "Players" : "Factions"}
             </button>
           ))}
         </div>

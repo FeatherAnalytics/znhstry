@@ -78,13 +78,16 @@ function hasPositiveGain(month: MonthPayload): boolean {
 function FactionBars({ month, tournament }: { month: MonthPayload; tournament: TournamentSummary }) {
   const length = tournament.stacking_days + tournament.battle_days;
   const hours = length * 24;
-  const factions = FACTION_ORDER.filter(f => month.factions[f]);
+  const factions = FACTION_ORDER.filter(f => month.players[f]);
   const totals = factions.map(f => {
-    const arr = month.factions[f].launches_total;
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (arr[i] != null) return arr[i]!;
+    let sum = 0;
+    for (const p of Object.values(month.players[f] ?? {})) {
+      const arr = p.launches;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] != null) { sum += arr[i]!; break; }
+      }
     }
-    return 0;
+    return sum;
   });
   const max = Math.max(...totals, 1);
 

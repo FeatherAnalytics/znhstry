@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, useRef, useEffect, type CSSProperties } from "react";
 import { FACTIONS as FACTION_DEFS } from "@/components/charts/palette";
 import {
   factionColor,
@@ -34,7 +34,7 @@ interface FM {
   placements: [string, number, number][];
   zones: Record<string, number>;
   qredits: Record<string, number>;
-  players?: Record<string, number>;
+  factionPlayers: Record<string, number>;
 }
 
 function buildFM(tournaments: AnyTournament[]): FM[] {
@@ -46,7 +46,7 @@ function buildFM(tournaments: AnyTournament[]): FM[] {
     return {
       month: t.month, stacking: t.stacking_days, battle: t.battle_days, length,
       launches: t.launches ?? {}, kills: t.kills ?? {}, placements: t.placements,
-      zones, qredits,
+      zones, qredits, factionPlayers: t.faction_players ?? {},
     };
   }).sort((a, b) => a.month.localeCompare(b.month));
 }
@@ -71,33 +71,66 @@ function YearLabels({ data }: { data: FM[] }) {
   );
 }
 
+function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
+  const [w, setW] = useState(800);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(ref.current);
+    setW(ref.current.clientWidth);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
+}
+
 function LineChart({ data, getVal, label, height }: {
   data: FM[]; getVal: (d: FM, f: string) => number | null; label: string; height: number;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const w = useWidth(containerRef);
   const maxV = Math.max(...FACTIONS.flatMap(f => data.map(d => getVal(d, f) ?? 0)), 1);
   const n = data.length;
-  const vbW = n * 2;
-  const step = vbW / Math.max(n - 1, 1);
+  const step = w / Math.max(n - 1, 1);
+  const ph = height - 18;
 
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div style={{ marginBottom: 12 }} ref={containerRef}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
       <div style={{ position: "relative" }}>
         <span className="tabular" style={{ position: "absolute", top: 0, left: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
-        <svg width="100%" height={height} viewBox={`0 0 ${vbW} ${height}`} preserveAspectRatio="none" style={{ display: "block" }}>
+        <svg width={w} height={height} style={{ display: "block" }}>
           {FACTIONS.map(f => {
             const segments: string[] = [];
+            const singles: { x: number; y: number }[] = [];
             let cur = "";
+            let curCount = 0;
+            let curStart = 0;
             for (let i = 0; i < n; i++) {
               const v = getVal(data[i], f);
               if (v != null) {
-                cur += (cur ? " " : "") + `${i * step},${4 + (height - 18) - (v / maxV) * (height - 18)}`;
-              } else if (cur) { segments.push(cur); cur = ""; }
+                const x = i * step;
+                const y = 4 + ph - (v / maxV) * ph;
+                if (!cur) curStart = i;
+                cur += (cur ? " " : "") + `${x},${y}`;
+                curCount++;
+              } else if (cur) {
+                if (curCount === 1) singles.push({ x: curStart * step, y: parseFloat(cur.split(",")[1]) });
+                else segments.push(cur);
+                cur = ""; curCount = 0;
+              }
             }
-            if (cur) segments.push(cur);
-            return segments.map((seg, si) => (
-              <polyline key={`${f}:${si}`} points={seg} fill="none" stroke={factionHex(f)} strokeWidth={0.8} opacity={0.8} vectorEffect="non-scaling-stroke" />
-            ));
+            if (cur) {
+              if (curCount === 1) singles.push({ x: curStart * step, y: parseFloat(cur.split(",")[1]) });
+              else segments.push(cur);
+            }
+            return [
+              ...segments.map((seg, si) => (
+                <polyline key={`${f}:${si}`} points={seg} fill="none" stroke={factionHex(f)} strokeWidth={1.5} opacity={0.8} />
+              )),
+              ...singles.map((pt, pi) => (
+                <circle key={`${f}:dot:${pi}`} cx={pt.x} cy={pt.y} r={2} fill={factionHex(f)} opacity={0.8} />
+              )),
+            ];
           })}
           {data.map((d, i) => {
             const vals = FACTIONS.map(f => { const v = getVal(d, f); return v != null ? `${f}: ${compact(v)}` : null; }).filter(Boolean);
@@ -163,8 +196,21 @@ function OverTime({ data, mode }: { data: FM[]; mode: Mode }) {
       <div className="eyebrow" style={{ marginBottom: 8 }}>Over time</div>
       <LineChart data={data} label={mode === "perday" ? "Launches /day" : "Launches"} height={160} getVal={(d, f) => launchVal(d, f, data.indexOf(d))} />
       <LineChart data={data} label={mode === "perday" ? "Kills /battle day" : "Kills"} height={160} getVal={(d, f) => killVal(d, f, data.indexOf(d))} />
-      {data[0]?.players ? (
-        <LineChart data={data} label="Players per faction" height={160} getVal={(d, f) => d.players?.[f] ?? null} />
+      {data.some(d => Object.keys(d.factionPlayers).length > 0) ? (
+        <LineChart data={data} label={mode === "perday" ? "Players /day" : "Players"} height={160} getVal={(d, f) => {
+          const v = d.factionPlayers[f];
+          if (v == null) return null;
+          if (mode === "perday" && d.length > 0) return v / d.length;
+          if (mode === "cumulative") {
+            let sum = 0;
+            for (const dd of data) {
+              if (dd.month > d.month) break;
+              sum += dd.factionPlayers[f] ?? 0;
+            }
+            return sum;
+          }
+          return v;
+        }} />
       ) : null}
       <LineChart data={data} label="Qredits (cumulative)" height={160} getVal={(_, f) => {
         const i = data.indexOf(_);

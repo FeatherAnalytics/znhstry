@@ -58,7 +58,7 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
 type DetailSort = "month" | "launches" | "kills" | "lost" | "rank" | "qredits";
 const DETAIL_COL_INDEX: Record<Exclude<DetailSort, "month">, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
 
-function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) {
+function PlayerDetail({ name, isMercenary, onClose }: { name: string; isMercenary: boolean; onClose: () => void }) {
   const [data, setData] = useState<PlayerMonthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
@@ -90,7 +90,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
   return (
     <div style={{ borderTop: "2px solid var(--hairline-bright)", padding: "16px 16px 24px" }}>
       <PlayerDetailHeader
-        name={name} factions={factions} factionFilter={factionFilter}
+        name={name} factions={factions} isMercenary={isMercenary} factionFilter={factionFilter}
         onFilterChange={f => setFactionFilter(factionFilter === f ? null : f)} onClose={onClose}
       />
       <PlayerInfoRow data={data} />
@@ -252,12 +252,12 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   const maxC = Math.max(...data.map(d => d.count), 1);
   const h = 120;
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
+    <div>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: h }}>
         {data.map(d => (
-          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0" }}>
-            <div style={{ width: "100%", maxWidth: 24, height: (d.count / maxC) * (h - 20), background: "var(--text-dim)", borderRadius: 1 }}
+          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 48 }}>
+            <div style={{ width: 32, height: (d.count / maxC) * (h - 20), background: "var(--text-dim)", borderRadius: 1 }}
               title={`${d.year}: ${d.count}`} />
             <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.year}</span>
           </div>
@@ -304,8 +304,8 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
   );
 }
 
-function PlayerDetailHeader({ name, factions, factionFilter, onFilterChange, onClose }: {
-  name: string; factions: string[]; factionFilter: string | null;
+function PlayerDetailHeader({ name, factions, isMercenary, factionFilter, onFilterChange, onClose }: {
+  name: string; factions: string[]; isMercenary: boolean; factionFilter: string | null;
   onFilterChange: (f: string) => void; onClose: () => void;
 }) {
   return (
@@ -320,7 +320,7 @@ function PlayerDetailHeader({ name, factions, factionFilter, onFilterChange, onC
           style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !factionFilter || factionFilter === f ? 1 : 0.4 }}
         >{f}</span>
       ))}
-      {factions.length > 1 ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
+      {isMercenary ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
     </div>
   );
 }
@@ -429,7 +429,7 @@ export default function AllTime({ index }: Props) {
         sortCol={sortCol} toggleSort={toggleSort} arrow={arrow}
         onPlayerClick={onPlayerClick}
       />
-      {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
+      {playerParam ? <PlayerDetail name={playerParam} isMercenary={players.find(p => p.name === playerParam)?.is_mercenary ?? false} onClose={onPlayerClose} /> : null}
     </div>
   );
 }

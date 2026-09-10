@@ -28,6 +28,8 @@ export interface TournamentSummary {
   top: Record<string, [string, number]>;
   launches: Record<string, number>;
   kills: Record<string, number>;
+  faction_players?: Record<string, number>;
+  is_derived_placements?: boolean;
   source?: string;
 }
 
@@ -46,6 +48,7 @@ export interface AllTimePlayer {
   first_month: string;
   last_month: string;
   qredits: number | null;
+  is_mercenary: boolean;
 }
 
 export interface FactionAllTime {
@@ -240,6 +243,7 @@ export interface DerivedTournamentSummary {
   top: Record<string, [string, number]>;
   launches: Record<string, number>;
   kills: Record<string, number>;
+  faction_players?: Record<string, number>;
 }
 
 export interface DerivedZone {

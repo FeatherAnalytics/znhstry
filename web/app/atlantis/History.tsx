@@ -25,7 +25,8 @@ const section: CSSProperties = { padding: "16px 16px 24px" };
 
 function stripTitle(t: AnyTournament): string {
   const zones = t.placements.map(p => `${p[0]}: ${p[1]} zones`).join("\n");
-  return `${t.month}\n${zones}`;
+  const derived = isDerived(t) || ("is_derived_placements" in t && t.is_derived_placements);
+  return `${t.month}${derived ? " (derived)" : ""}\n${zones}`;
 }
 
 function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
@@ -87,7 +88,7 @@ function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
     <tr onClick={onClick} style={{ cursor: "pointer" }}>
       <td style={{ ...cellStyle, fontWeight: 600 }}>
         {t.month}
-        {isDerived(t) ? <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }}>derived</span> : null}
+        {isDerived(t) || ("is_derived_placements" in t && t.is_derived_placements) ? <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }}>derived</span> : null}
       </td>
       <td style={cellStyle}>
         {t.winner

@@ -1964,6 +1964,36 @@ def _faction_kills(con: duckdb.DuckDBPyConnection) -> dict[str, dict[str, int]]:
     return result
 
 
+def _faction_player_counts(con: duckdb.DuckDBPyConnection) -> dict[str, dict[str, int]]:
+    """Per-faction player counts per tournament. A Mercenary counts once per faction."""
+    rows = con.execute("""
+        with finished_board as (
+            select tournament_month from dim_atlantis_tournament where is_finished
+        ),
+        board_players as (
+            select p.tournament_month, p.faction, count(*) as players
+            from fct_atlantis_payout p
+            where p.tournament_month in (select * from finished_board)
+                and not p.is_estimate and p.faction != 'Unconfirmed'
+            group by 1, 2
+        ),
+        derived_players as (
+            select tournament_month, faction, count(*) as players
+            from fct_atlantis_player_month_derived
+            where tournament_month not in (select * from finished_board)
+                and faction != 'Unconfirmed'
+            group by 1, 2
+        )
+        select * from board_players union all select * from derived_players
+        order by 1, 2
+    """).fetchall()
+    result: dict[str, dict[str, int]] = {}
+    for month, faction, players in rows:
+        key = month.strftime("%Y-%m")
+        result.setdefault(key, {})[faction] = int(players)
+    return result
+
+
 def _build_atlantis_index(
     con: duckdb.DuckDBPyConnection,
     tournaments: list[tuple],
@@ -2012,16 +2042,46 @@ def _build_atlantis_index(
 
     derived_list = _build_derived_tournament_list(con, derived_tournaments, derived_cols)
 
+    unfinished_derived = con.execute("""
+        select tournament_month, winner, first_place, first_zones,
+               second_place, second_zones, third_place, third_zones
+        from dim_atlantis_tournament_derived d
+        where d.tournament_month in (
+            select tournament_month from dim_atlantis_tournament where not is_finished
+        )
+    """).fetchall()
+    for row in unfinished_derived:
+        month_str = row[0].strftime("%Y-%m")
+        for entry in tournament_list:
+            if entry["month"] == month_str:
+                pools = con.execute(
+                    "select first_pool, second_pool, third_pool from atlantis_pools "
+                    "where effective_from = (select max(effective_from) "
+                    "from atlantis_pools where effective_from <= $1)",
+                    [row[0]],
+                ).fetchone()
+                placements = []
+                for i, (rc, zc) in enumerate(((2, 3), (4, 5), (6, 7))):
+                    if row[rc]:
+                        placements.append([row[rc], int(row[zc]), int(pools[i]) if pools else 0])
+                entry["placements"] = placements
+                entry["winner"] = row[1]
+                entry["is_derived_placements"] = True
+                break
+
     flk = _faction_launches_kills(con)
-    empty = {"launches": {}, "kills": {}}
+    fpc = _faction_player_counts(con)
+    empty_flk = {"launches": {}, "kills": {}}
     for entry in tournament_list:
-        m = flk.get(entry["month"], empty)
+        m = flk.get(entry["month"], empty_flk)
         entry["launches"] = m["launches"]
         entry["kills"] = m["kills"]
+        entry["faction_players"] = fpc.get(entry["month"], {})
     for entry in derived_list:
-        m = flk.get(entry["month"], empty)
+        m = flk.get(entry["month"], empty_flk)
         entry["launches"] = m["launches"]
         entry["kills"] = m["kills"]
+        entry["faction_players"] = fpc.get(entry["month"], {})
 
     all_time = _build_all_time_merged(con)
 
@@ -2099,6 +2159,15 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
         else:
             fmap = entry["factions"]
             entry["factions"] = {f: fmap[f] for f in _FACTION_ORDER if f in fmap}
+
+    mercenaries = set(
+        r[0] for r in con.execute(
+            "select distinct player_name from fct_atlantis_player_month_derived "
+            "where is_mercenary"
+        ).fetchall()
+    )
+    for entry in merged.values():
+        entry["is_mercenary"] = entry["name"] in mercenaries
 
     players = sorted(merged.values(), key=lambda p: (-p["launches"], p["name"]))
 
@@ -2405,3 +2474,28 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         )
     finally:
         con.close()
+
+
+def export_atlantis_only(scope_name: str | None = None) -> None:
+    """Rebuild only the atlantis/ tree and patch meta.json."""
+    scope = config.SCOPES[scope_name or config.DEFAULT_SCOPE]
+    out = config.WEB_DATA / scope.name
+    meta_path = out / "meta.json"
+    if not meta_path.exists():
+        raise SystemExit(
+            "meta.json not found — run a full export first. "
+            "An atlantis-only export patches the existing meta.json."
+        )
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    shutil.rmtree(out / "atlantis", ignore_errors=True)
+
+    con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
+    try:
+        atlantis = _export_atlantis(con, out)
+    finally:
+        con.close()
+
+    meta["atlantis"] = atlantis
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    log.info("atlantis-only export complete")

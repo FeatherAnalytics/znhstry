@@ -52,6 +52,7 @@ uv run python -m znhstry restore          # pull data/raw back from R2 — first
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
+uv run python -m znhstry export --only atlantis  # rebuild only atlantis/; requires an existing meta.json from a full export
 
 cd web
 npm run data   # serve dist/data on :3002 — the map is empty without it
@@ -1171,6 +1172,16 @@ find dist/data/global -name '*.br' -exec md5sum {} + | sort | diff /tmp/a -
 
 `paint/`, the current year's `display/` shard and the touched `zone_history/` blocks will
 differ on any run that picks up new events. Nothing else may.
+
+For an atlantis-only change, the recipe scopes to that tree:
+
+```bash
+find dist/data/global/atlantis -name '*.br' -o -name '*.json' | sort | xargs md5 -r > /tmp/a
+cd pipeline && uv run python -m znhstry export --only atlantis && cd ..
+find dist/data/global/atlantis -name '*.br' -o -name '*.json' | sort | xargs md5 -r | diff /tmp/a -
+```
+
+The nightly keeps the full export; `--only atlantis` is for decoupled iteration.
 
 `_previous_index` hands the stable index to DuckDB **through a temporary Parquet file**, not
 `con.register`. Passing a polars frame directly goes through Arrow and so needs pyarrow, a

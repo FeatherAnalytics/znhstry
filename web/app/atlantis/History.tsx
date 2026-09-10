@@ -1,12 +1,11 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { FACTIONS } from "@/components/charts/palette";
 import {
   factionColor,
   factionHex,
   formatDateTime,
-  formatDate,
   mergedTournaments,
   isDerived,
   type AtlantisIndex,
@@ -26,29 +25,15 @@ const cellStyle: CSSProperties = {
 };
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
+const FACTION_NAMES = FACTIONS.map(f => f.label);
 
 function coverageOf(t: AnyTournament): string {
-  if (isDerived(t)) {
-    return `${t.reports} reports, ${formatDate(t.first_report_date)} to ${formatDate(t.last_report_date)}`;
-  }
+  if (isDerived(t)) return "derived";
   if (t.first_observed_at === t.last_observed_at) {
-    return `1 observation, ${formatDateTime(t.first_observed_at)}`;
+    return `1 obs, ${formatDateTime(t.first_observed_at)}`;
   }
   return `${formatDateTime(t.first_observed_at)} to ${formatDateTime(t.last_observed_at)}`;
 }
-
-function scheduleOf(t: AnyTournament): string {
-  const base = `${t.stacking_days}d / ${t.battle_days}d`;
-  if (isDerived(t)) {
-    const d = t as DerivedTournamentSummary;
-    const tol = d.end_tolerance_days === 1 ? " ±1 d" : "";
-    const note = d.schedule_note ? ` · ${d.schedule_note}` : "";
-    return base + tol + note;
-  }
-  return base;
-}
-
-const FACTION_NAMES = FACTIONS.map(f => f.label);
 
 function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
   const sorted = [...tournaments].sort((a, b) => a.month.localeCompare(b.month));
@@ -58,10 +43,12 @@ function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
   const h = 16;
   const labels = ["1st", "2nd", "3rd"] as const;
 
-  const yearTicks: { x: number; label: string }[] = [];
+  const yearBounds: number[] = [];
+  const yearLabels: { x: number; label: string }[] = [];
   for (let i = 0; i < sorted.length; i++) {
     if (sorted[i].month.endsWith("-01")) {
-      yearTicks.push({ x: i * barW + barW / 2, label: sorted[i].month.slice(0, 4) });
+      yearBounds.push(i * barW);
+      yearLabels.push({ x: i * barW, label: sorted[i].month.slice(0, 4) });
     }
   }
 
@@ -81,19 +68,33 @@ function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
                 </rect>
               );
             })}
+            {yearBounds.map(x => (
+              <line key={x} x1={x} x2={x} y1={0} y2={h} stroke="var(--hairline)" strokeWidth={0.5} />
+            ))}
           </svg>
         </div>
       ))}
-      <div style={{ display: "flex", paddingLeft: labelW }}>
-        <svg viewBox={`0 0 ${svgW} 12`} style={{ width: "100%", height: 12 }} preserveAspectRatio="none">
-          {yearTicks.map(({ x, label }) => (
-            <text key={label + x} x={x} y={10} textAnchor="middle" fontSize={barW * 1.8} fill="var(--text-dim)">
-              {label}
-            </text>
-          ))}
-        </svg>
+      <div style={{ display: "flex", paddingLeft: labelW, position: "relative", height: 14 }}>
+        {yearLabels.map(({ x, label }) => (
+          <span key={label + x} className="tabular"
+            style={{ position: "absolute", left: `${(x / svgW) * 100}%`, fontSize: 9, color: "var(--text-dim)" }}
+          >{label}</span>
+        ))}
       </div>
     </div>
+  );
+}
+
+function PlacementBars({ counts, total }: { counts: [number, number, number]; total: number }) {
+  const max = Math.max(total, 1);
+  const colors = ["var(--text)", "var(--text-dim)", "var(--hairline-bright)"];
+  return (
+    <span style={{ display: "inline-flex", gap: 1, marginLeft: 6, verticalAlign: "middle" }}>
+      {counts.map((c, i) => (
+        <span key={i} style={{ width: Math.max(1, (c / max) * 40), height: 8, background: colors[i], borderRadius: 1 }}
+          title={`${["1st", "2nd", "3rd"][i]}: ${c}`} />
+      ))}
+    </span>
   );
 }
 
@@ -116,6 +117,7 @@ function PlacementCounts({ tournaments }: { tournaments: AnyTournament[] }) {
             <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>1st</th>
             <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>2nd</th>
             <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>3rd</th>
+            <th style={cellStyle} />
           </tr>
         </thead>
         <tbody>
@@ -125,6 +127,7 @@ function PlacementCounts({ tournaments }: { tournaments: AnyTournament[] }) {
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][0]}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][1]}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{counts[f][2]}</td>
+              <td style={cellStyle}><PlacementBars counts={counts[f]} total={tournaments.length} /></td>
             </tr>
           ))}
         </tbody>
@@ -243,17 +246,21 @@ function PlacementCell({ placement }: { placement?: [string, number, number] }) 
   return <span style={{ color: factionColor(placement[0]) }}>{placement[0]}</span>;
 }
 
+type TableSort = "month" | "players" | "stack" | "battle" | "length";
+
+function sortVal(t: AnyTournament, col: TableSort): number | string {
+  if (col === "month") return t.month;
+  if (col === "players") return t.players;
+  if (col === "stack") return t.stacking_days;
+  if (col === "battle") return t.battle_days;
+  return t.stacking_days + t.battle_days;
+}
+
 function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
+  const length = t.stacking_days + t.battle_days;
   return (
     <tr onClick={onClick} style={{ cursor: "pointer" }}>
-      <td style={{ ...cellStyle, fontWeight: 600 }}>
-        {t.month}
-        {isDerived(t) ? (
-          <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }} title="derived from battle reports">
-            derived
-          </span>
-        ) : null}
-      </td>
+      <td style={{ ...cellStyle, fontWeight: 600 }}>{t.month}</td>
       <td style={cellStyle}>
         {t.winner
           ? <span style={{ color: factionColor(t.winner) }}>{t.winner}</span>
@@ -263,30 +270,56 @@ function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
       <td style={cellStyle}><PlacementCell placement={t.placements[1]} /></td>
       <td style={cellStyle}><PlacementCell placement={t.placements[2]} /></td>
       <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString()}</td>
-      <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{scheduleOf(t)}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.stacking_days}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.battle_days}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{length}</td>
       <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{coverageOf(t)}</td>
     </tr>
   );
 }
 
-const MONTH_HEADERS = ["Month", "Winner", "1st", "2nd", "3rd"] as const;
-
 function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[]; onMonthClick: (m: string) => void }) {
+  const [sortCol, setSortCol] = useState<TableSort>("month");
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const toggle = (col: TableSort) => {
+    if (col === sortCol) setSortAsc(!sortAsc);
+    else { setSortCol(col); setSortAsc(col === "month"); }
+  };
+  const arrow = (col: TableSort) => col === sortCol ? (sortAsc ? " ▲" : " ▼") : "";
+
+  const sorted = useMemo(() => {
+    const dir = sortAsc ? 1 : -1;
+    return [...tournaments].sort((a, b) => {
+      const av = sortVal(a, sortCol);
+      const bv = sortVal(b, sortCol);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }, [tournaments, sortCol, sortAsc]);
+
+  const sth: CSSProperties = { ...cellStyle, textAlign: "right", cursor: "pointer", userSelect: "none" };
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
         <thead>
           <tr>
-            {MONTH_HEADERS.map(h => (
-              <th key={h} className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>{h}</th>
-            ))}
-            <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Players</th>
-            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Schedule</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left", cursor: "pointer", userSelect: "none" }} onClick={() => toggle("month")}>Month{arrow("month")}</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Winner</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>1st</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>2nd</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>3rd</th>
+            <th className="eyebrow tabular" style={sth} onClick={() => toggle("players")}>Players{arrow("players")}</th>
+            <th className="eyebrow tabular" style={sth} onClick={() => toggle("stack")}>Stack{arrow("stack")}</th>
+            <th className="eyebrow tabular" style={sth} onClick={() => toggle("battle")}>Battle{arrow("battle")}</th>
+            <th className="eyebrow tabular" style={sth} onClick={() => toggle("length")}>Length{arrow("length")}</th>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Coverage</th>
           </tr>
         </thead>
         <tbody>
-          {tournaments.map(t => (
+          {sorted.map(t => (
             <MonthRow key={t.month} t={t} onClick={() => onMonthClick(t.month)} />
           ))}
         </tbody>

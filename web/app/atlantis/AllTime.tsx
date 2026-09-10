@@ -120,8 +120,11 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
   const filtered = factionFilter ? data.filter(r => r[1] === factionFilter) : data;
   const sorted = detailSort ? [...filtered].sort((a, b) => {
     const ci = DETAIL_COL_INDEX[detailSort];
-    const av = (a[ci] as number | null) ?? -1;
-    const bv = (b[ci] as number | null) ?? -1;
+    const av = a[ci] as number | null;
+    const bv = b[ci] as number | null;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
     return detailAsc ? av - bv : bv - av;
   }) : filtered;
 

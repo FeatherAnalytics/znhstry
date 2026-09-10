@@ -7,7 +7,18 @@ import logging
 import os
 import sys
 
-from . import atlantis, boundaries, config, export, ingest, marts, portal, upload, wayback
+from . import (
+    atlantis,
+    attribute,
+    boundaries,
+    config,
+    export,
+    ingest,
+    marts,
+    portal,
+    upload,
+    wayback,
+)
 
 STEPS = {
     "ingest": ingest.ingest_daily,
@@ -19,6 +30,7 @@ STEPS = {
     # it runs on the tournament's clock, not the nightly's.
     "atlantis": atlantis.scrape_atlantis,
     "wayback": wayback.ingest_wayback,
+    "attribute": attribute.attribute_factions,
     "export": export.export_all,
     # The same marts as Parquet, for anything that reads the warehouse from outside the
     # map. `upload --marts` sends them; the export's upload never sees them.
@@ -106,6 +118,7 @@ _DISPATCH = {
     "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),
     "atlantis": lambda _: _emit(rows=atlantis.scrape_atlantis()),
     "wayback": lambda _: _run_wayback(),
+    "attribute": lambda _: attribute.attribute_factions(),
     "upload": _run_upload,
     "archive": lambda a: upload.archive_raw(prefix=a.prefix),
     "restore": lambda a: upload.restore_raw(prefix=a.prefix),

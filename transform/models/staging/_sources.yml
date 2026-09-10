@@ -60,6 +60,12 @@ sources:
           until the backfill (6b).
         meta:
           external_location: "read_parquet('../data/raw/battlestats/players/**/*.parquet', hive_partitioning=true)"
+      - name: battlestats_player_factions
+        description: >
+          Per-player faction attribution from the solve algorithm. One row per
+          tournament month per player with their attributed faction and evidence.
+        meta:
+          external_location: "read_parquet('../data/raw/battlestats/player_factions/*.parquet')"
       - name: atlantis_leaderboard
         description: >
           The monthly tournament leaderboard at `portal.qonqr.com/Atlantis`, one row per

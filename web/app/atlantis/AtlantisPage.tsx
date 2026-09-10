@@ -140,7 +140,6 @@ export default function AtlantisPage() {
   const scheduleText = selectedTournament
     ? `Stacking ${selectedTournament.stacking_days}d, battle ${selectedTournament.battle_days}d`
       + (derivedTournament?.end_tolerance_days === 1 ? " ±1 d" : "")
-      + (derivedTournament?.schedule_note ? ` · ${derivedTournament.schedule_note}` : "")
       + " · "
       + formatDate(selectedTournament.starts_at) + " to " + formatDate(selectedTournament.ends_at)
     : null;
@@ -156,7 +155,7 @@ export default function AtlantisPage() {
             onChange={(e) => setParam("t", e.target.value)}
             style={{ ...btnStyle, appearance: "auto" }}
           >
-            {allTournaments.map((t) => (
+            {[...allTournaments].reverse().map((t) => (
               <option key={t.month} value={t.month}>
                 {t.month}{t.winner ? ` — ${t.winner}` : ""}{isDerived(t) ? " derived" : ""}
               </option>
@@ -169,7 +168,7 @@ export default function AtlantisPage() {
             <button
               key={tab}
               type="button"
-              onClick={() => setParam("tab", tab === "dashboard" ? null : tab)}
+              onClick={() => setParams({ tab: tab === "dashboard" ? null : tab, player: null, zone: null })}
               style={tabParam === tab ? activeBtnStyle : btnStyle}
             >
               {tab === "dashboard" ? "Dashboard" : tab === "history" ? "History" : "All Time"}

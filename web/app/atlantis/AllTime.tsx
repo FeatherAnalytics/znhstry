@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BASE } from "@/lib/dataOrigin";
+import { MAZ_AMBER } from "@/components/charts/palette";
 import {
   factionColor,
   factionHex,
@@ -93,9 +94,15 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
   );
 }
 
+type DetailSort = "launches" | "kills" | "lost" | "rank" | "qredits";
+const DETAIL_COL_INDEX: Record<DetailSort, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
+
 function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) {
   const [data, setData] = useState<PlayerMonthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [factionFilter, setFactionFilter] = useState<string | null>(null);
+  const [detailSort, setDetailSort] = useState<DetailSort | null>(null);
+  const [detailAsc, setDetailAsc] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -109,54 +116,91 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
   if (loading) return <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading player…</div>;
   if (!data || data.length === 0) return <div style={{ padding: 16, color: "var(--text-dim)" }}>No data for {name}.</div>;
 
-  const factions = new Set(data.map(r => r[1]));
+  const factions = [...new Set(data.map(r => r[1]))];
+  const filtered = factionFilter ? data.filter(r => r[1] === factionFilter) : data;
+  const sorted = detailSort ? [...filtered].sort((a, b) => {
+    const ci = DETAIL_COL_INDEX[detailSort];
+    const av = (a[ci] as number | null) ?? -1;
+    const bv = (b[ci] as number | null) ?? -1;
+    return detailAsc ? av - bv : bv - av;
+  }) : filtered;
+
+  const toggleDetailSort = (col: DetailSort) => {
+    if (col === detailSort) setDetailAsc(!detailAsc);
+    else { setDetailSort(col); setDetailAsc(false); }
+  };
+  const dArrow = (col: DetailSort) => col === detailSort ? (detailAsc ? " ▲" : " ▼") : "";
+  const dthStyle: CSSProperties = { ...cellStyle, textAlign: "right" as const, cursor: "pointer", userSelect: "none" as const };
 
   return (
     <div style={{ borderTop: "2px solid var(--hairline-bright)", padding: "16px 16px 24px" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
-        <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 16 }}>×</button>
-        <span className="display" style={{ fontSize: 16 }}>{name}</span>
-        {[...factions].map(f => (
-          <span key={f} style={{ color: factionColor(f), fontSize: 12 }}>{f}</span>
-        ))}
-        {factions.size > 1 ? <span className="eyebrow" style={{ color: "var(--text-dim)", fontSize: 10 }}>mercenary</span> : null}
-      </div>
+      <PlayerDetailHeader
+        name={name} factions={factions} factionFilter={factionFilter}
+        onFilterChange={setFactionFilter} onClose={onClose}
+      />
+      <PlayerDetailTable rows={sorted} dthStyle={dthStyle} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
+    </div>
+  );
+}
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
-          <thead>
-            <tr>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Month</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Launches</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Kills</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Lost</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Rank</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Qredits</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Source</th>
+function PlayerDetailHeader({ name, factions, factionFilter, onFilterChange, onClose }: {
+  name: string; factions: string[]; factionFilter: string | null;
+  onFilterChange: (f: string | null) => void; onClose: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
+      <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 16 }}>×</button>
+      <span className="display" style={{ fontSize: 16 }}>{name}</span>
+      {factions.map(f => (
+        <span key={f}
+          onClick={() => onFilterChange(factionFilter === f ? null : f)}
+          style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !factionFilter || factionFilter === f ? 1 : 0.4 }}
+        >{f}</span>
+      ))}
+      {factions.length > 1 ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
+    </div>
+  );
+}
+
+function PlayerDetailTable({ rows, dthStyle, toggleDetailSort, dArrow }: {
+  rows: PlayerMonthRow[]; dthStyle: CSSProperties;
+  toggleDetailSort: (col: DetailSort) => void; dArrow: (col: DetailSort) => string;
+}) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+        <thead>
+          <tr>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Month</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
+            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("launches")}>Launches{dArrow("launches")}</th>
+            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("kills")}>Kills{dArrow("kills")}</th>
+            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("lost")}>Lost{dArrow("lost")}</th>
+            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("rank")}>Rank{dArrow("rank")}</th>
+            <th className="eyebrow tabular" style={dthStyle} onClick={() => toggleDetailSort("qredits")}>Qredits{dArrow("qredits")}</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([month, faction, launches, kills, lost, rank, qredits, source]) => (
+            <tr key={`${month}:${faction}`}>
+              <td className="tabular" style={cellStyle}>{month}</td>
+              <td style={cellStyle}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(faction) }} />
+                  {faction}
+                </span>
+              </td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
+              <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
             </tr>
-          </thead>
-          <tbody>
-            {data.map(([month, faction, launches, kills, lost, rank, qredits, source]) => (
-              <tr key={`${month}:${faction}`}>
-                <td className="tabular" style={cellStyle}>{month}</td>
-                <td style={cellStyle}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(faction) }} />
-                    {faction}
-                  </span>
-                </td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
-                <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -254,21 +298,28 @@ function PlayersTable({
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
         <div className="display" style={{ fontSize: 12 }}>Players</div>
-        <input
-          type="text"
-          value={filter}
-          onChange={e => onFilterChange(e.target.value)}
-          placeholder="Filter by name..."
-          style={{
-            background: "var(--ink-raised)",
-            border: "1px solid var(--hairline-bright)",
-            borderRadius: 3,
-            padding: "4px 8px",
-            color: "var(--text)",
-            fontSize: 12,
-            width: 180,
-          }}
-        />
+        <span style={{ position: "relative", display: "inline-block" }}>
+          <input
+            type="text"
+            value={filter}
+            onChange={e => onFilterChange(e.target.value)}
+            placeholder="Filter by name..."
+            style={{
+              background: "var(--ink-raised)",
+              border: "1px solid var(--hairline-bright)",
+              borderRadius: 3,
+              padding: "4px 24px 4px 8px",
+              color: "var(--text)",
+              fontSize: 12,
+              width: 180,
+            }}
+          />
+          {filter ? (
+            <button type="button" onClick={() => onFilterChange("")}
+              style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 12, padding: 0 }}
+            >×</button>
+          ) : null}
+        </span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
@@ -277,11 +328,11 @@ function PlayersTable({
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default", width: 40 }}>#</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Factions</th>
-              <th className="eyebrow tabular" style={thStyle} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={thStyle} onClick={() => toggleSort("tournaments")}>Tournaments{arrow("tournaments")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("tournaments")}>Tournaments{arrow("tournaments")}</th>
               <th className="eyebrow" style={{ ...thStyle, cursor: "default" }}>First</th>
               <th className="eyebrow" style={{ ...thStyle, cursor: "default" }}>Last</th>
-              <th className="eyebrow tabular" style={thStyle} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}</th>
             </tr>
           </thead>
           <tbody>

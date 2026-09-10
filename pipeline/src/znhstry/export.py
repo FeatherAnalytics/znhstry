@@ -1786,7 +1786,14 @@ def _build_zones_dict(
 def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
     """Per-player month rows from both collected and derived marts."""
     rows = con.execute("""
-        with board as (
+        with derived_totals as (
+            select tournament_month, player_name,
+                   sum(bots_killed) as bots_killed,
+                   sum(bots_lost) as bots_lost
+            from fct_atlantis_player_month_derived
+            group by 1, 2
+        ),
+        board as (
             select p.player_name, t.tournament_month, p.faction,
                    p.launches,
                    coalesce(d.bots_killed, 0) as bots_killed,
@@ -1795,10 +1802,9 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
                    p.qredits, 'board' as source
             from fct_atlantis_payout p
             join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
-            left join fct_atlantis_player_month_derived d
+            left join derived_totals d
                 on d.tournament_month = p.tournament_month
                 and d.player_name = p.player_name
-                and d.faction = p.faction
             where t.is_finished and not p.is_estimate
         ),
         derived as (
@@ -1812,7 +1818,7 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
             where not d.has_board
         )
         select * from board union all select * from derived
-        order by player_name, tournament_month
+        order by player_name, tournament_month, faction
     """).fetchall()
 
     result: dict[str, list] = {}

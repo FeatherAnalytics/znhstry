@@ -93,7 +93,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
         name={name} factions={factions} factionFilter={factionFilter}
         onFilterChange={f => setFactionFilter(factionFilter === f ? null : f)} onClose={onClose}
       />
-      <FactionBreakdown data={data} />
+      <PlayerInfoRow data={data} />
       <PlayerCharts rows={data} />
       <PlayerDetailTable rows={sorted} detailSort={detailSort} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
     </div>
@@ -162,35 +162,87 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
   );
 }
 
-function Sparkline({ data, color, label }: { data: { month: string; value: number }[]; color: string; label: string }) {
-  if (data.length < 2) return null;
+interface MonthVal { month: string; value: number }
+
+function ChartYearLabels({ months, maxBarW }: { months: string[]; maxBarW?: number }) {
+  let firstLabeled = false;
+  return (
+    <div style={{ display: "flex", gap: 1 }}>
+      {months.map((m, i) => {
+        const isJan = m.endsWith("-01");
+        const show = isJan || (!firstLabeled && i === 0);
+        if (show) firstLabeled = true;
+        return (
+          <div key={m} style={{ flex: "1 1 0", maxWidth: maxBarW, marginLeft: isJan ? 4 : 0 }}>
+            {show ? <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{m.slice(0, 4)}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BarChart({ data, label }: { data: MonthVal[]; label: string }) {
+  if (data.length === 0) return null;
   const maxV = Math.max(...data.map(d => d.value), 1);
   const h = 120;
-  const best = data.reduce((a, b) => b.value > a.value ? b : a);
+  const maxBarW = 20;
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
-        {data.map(d => {
-          const isYear = d.month.endsWith("-01");
-          return (
-            <div key={d.month} title={`${d.month}: ${d.value.toLocaleString()}`}
-              style={{ flex: "1 1 0", height: (d.value / maxV) * (h - 14), background: color, opacity: 0.7, borderRadius: 1, marginLeft: isYear ? 4 : 0 }}
-            />
-          );
-        })}
+        {data.map(d => (
+          <div key={d.month} title={`${d.month}: ${d.value.toLocaleString()}`} style={{
+            flex: "1 1 0", maxWidth: maxBarW,
+            height: (d.value / maxV) * (h - 14), background: "var(--text-dim)", opacity: 0.7, borderRadius: 1,
+            marginLeft: d.month.endsWith("-01") ? 4 : 0,
+          }} />
+        ))}
       </div>
-      <div style={{ display: "flex", gap: 1 }}>
-        {data.map(d => {
-          const isYear = d.month.endsWith("-01");
-          return (
-            <div key={d.month} style={{ flex: "1 1 0", marginLeft: isYear ? 4 : 0 }}>
-              {isYear ? <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.month.slice(2, 4)}</span> : null}
-            </div>
-          );
-        })}
+      <ChartYearLabels months={data.map(d => d.month)} maxBarW={maxBarW} />
+    </div>
+  );
+}
+
+function CumulativeLine({ data, label }: { data: MonthVal[]; label: string }) {
+  if (data.length < 2) return null;
+  let cumMax = 0;
+  const cumVals = data.map(d => { cumMax += d.value; return cumMax; });
+  const h = 120;
+  const vbW = data.length * 2;
+  const step = vbW / Math.max(data.length - 1, 1);
+  const pts = cumVals.map((v, i) => `${i * step},${4 + (h - 18) - (v / cumMax) * (h - 18)}`).join(" ");
+
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
+      <div style={{ position: "relative" }}>
+        <svg width="100%" height={h} viewBox={`0 0 ${vbW} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
+          <polyline points={pts} fill="none" stroke="var(--text-dim)" strokeWidth={0.8} opacity={0.8} vectorEffect="non-scaling-stroke" />
+          {data.map((d, i) => (
+            <rect key={d.month} x={i * step - step / 2} y={0} width={step} height={h} fill="transparent">
+              <title>{d.month}: {cumVals[i].toLocaleString()}</title>
+            </rect>
+          ))}
+        </svg>
+        <span className="tabular" style={{ position: "absolute", right: 0, top: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(cumMax)}</span>
       </div>
-      <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {best.month} ({compact(best.value)})</div>
+      <ChartYearLabels months={data.map(d => d.month)} />
+    </div>
+  );
+}
+
+function PlayerInfoRow({ data }: { data: PlayerMonthRow[] }) {
+  const yearCounts = useMemo(() => {
+    const months = new Set(data.map(r => r[0]));
+    const yrs: Record<string, number> = {};
+    for (const m of months) { const y = m.slice(0, 4); yrs[y] = (yrs[y] ?? 0) + 1; }
+    return Object.entries(yrs).sort(([a], [b]) => a.localeCompare(b)).map(([y, c]) => ({ year: y, count: c }));
+  }, [data]);
+  return (
+    <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
+      <FactionBreakdown data={data} />
+      <YearBars data={yearCounts} />
     </div>
   );
 }
@@ -198,15 +250,16 @@ function Sparkline({ data, color, label }: { data: { month: string; value: numbe
 function YearBars({ data }: { data: { year: string; count: number }[] }) {
   if (data.length === 0) return null;
   const maxC = Math.max(...data.map(d => d.count), 1);
+  const h = 120;
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 120 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
         {data.map(d => (
           <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0" }}>
-            <div style={{ width: "100%", maxWidth: 20, height: (d.count / maxC) * 100, background: "var(--text-dim)", borderRadius: 1 }}
+            <div style={{ width: "100%", maxWidth: 24, height: (d.count / maxC) * (h - 20), background: "var(--text-dim)", borderRadius: 1 }}
               title={`${d.year}: ${d.count}`} />
-            <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{d.year.slice(2)}</span>
+            <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.year}</span>
           </div>
         ))}
       </div>
@@ -225,37 +278,28 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => ({ month: m, ...v }));
   }, [rows]);
 
-  const yearCounts = useMemo(() => {
-    const months = new Set(rows.map(r => r[0]));
-    const yrs: Record<string, number> = {};
-    for (const m of months) {
-      const y = m.slice(0, 4);
-      yrs[y] = (yrs[y] ?? 0) + 1;
-    }
-    return Object.entries(yrs).sort(([a], [b]) => a.localeCompare(b)).map(([y, c]) => ({ year: y, count: c }));
-  }, [rows]);
-
   if (byMonth.length === 0) return null;
 
   const launchData = byMonth.map(d => ({ month: d.month, value: d.launches }));
-  const killData = byMonth.filter(d => d.kills > 0).map(d => ({ month: d.month, value: d.kills }));
+  const killData = byMonth.map(d => ({ month: d.month, value: d.kills }));
   const bestLaunches = launchData.reduce((a, b) => b.value > a.value ? b : a);
-  const bestKills = killData.length > 0 ? killData.reduce((a, b) => b.value > a.value ? b : a) : null;
+  const bestKills = killData.filter(d => d.value > 0).length > 0
+    ? killData.reduce((a, b) => b.value > a.value ? b : a) : null;
 
   return (
-    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
-      {byMonth.length >= 2 ? (
-        <>
-          <Sparkline data={launchData} color="var(--text-dim)" label="Launches" />
-          {killData.length >= 2 ? <Sparkline data={killData} color="var(--text-dim)" label="Kills" /> : null}
-        </>
-      ) : (
-        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
-          <div>Peak launches: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
-          {bestKills ? <div>Peak kills: {bestKills.month} ({compact(bestKills.value)})</div> : null}
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div>
+          <BarChart data={launchData} label="Launches" />
+          <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
         </div>
-      )}
-      <YearBars data={yearCounts} />
+        <div>
+          <BarChart data={killData} label="Kills" />
+          {bestKills ? <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestKills.month} ({compact(bestKills.value)})</div> : null}
+        </div>
+        <CumulativeLine data={launchData} label="Cumulative launches" />
+        <CumulativeLine data={killData} label="Cumulative kills" />
+      </div>
     </div>
   );
 }

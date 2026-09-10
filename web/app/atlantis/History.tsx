@@ -23,53 +23,45 @@ const cellStyle: CSSProperties = {
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
 
+function stripTitle(t: AnyTournament): string {
+  const zones = t.placements.map(p => `${p[0]}: ${p[1]} zones`).join("\n");
+  return `${t.month}\n${zones}`;
+}
+
 function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
   const sorted = [...tournaments].sort((a, b) => a.month.localeCompare(b.month));
   const labelW = 24;
-  const barW = Math.max(2, Math.min(6, 500 / sorted.length));
-  const svgW = sorted.length * barW;
-  const h = 16;
   const labels = ["1st", "2nd", "3rd"] as const;
-
-  const yearBounds: number[] = [];
-  const yearLabels: { x: number; label: string }[] = [];
-  for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i].month.endsWith("-01")) {
-      yearBounds.push(i * barW);
-      yearLabels.push({ x: i * barW, label: sorted[i].month.slice(0, 4) });
-    }
-  }
 
   return (
     <div style={{ marginBottom: 16 }}>
       {labels.map((label, place) => (
         <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 4 : 0 }}>
           <span className="eyebrow" style={{ width: labelW, flexShrink: 0, fontSize: 10 }}>{label}</span>
-          <svg viewBox={`0 0 ${svgW} ${h}`} style={{ width: "100%", height: h }} preserveAspectRatio="none">
-            {sorted.map((t, i) => {
+          <div style={{ display: "flex", flex: 1, gap: 1 }}>
+            {sorted.map(t => {
               const faction = t.placements[place]?.[0] ?? null;
-              const zones: string[] = [];
-              for (const p of t.placements) zones.push(`${p[0]}: ${p[1]} zones`);
+              const isYear = t.month.endsWith("-01");
               return (
-                <rect key={t.month} x={i * barW} y={0} width={barW - 0.5} height={h}
-                  fill={faction ? factionHex(faction) : "#333"}
-                >
-                  <title>{t.month}{"\n"}{zones.join("\n")}</title>
-                </rect>
+                <div key={t.month} title={stripTitle(t)} style={{
+                  flex: "1 1 0", height: 16, borderRadius: 1,
+                  background: faction ? factionHex(faction) : "#333",
+                  marginLeft: isYear ? 6 : 0,
+                }} />
               );
             })}
-            {yearBounds.map(x => (
-              <rect key={x} x={x - 0.5} y={0} width={1.5} height={h} fill="var(--ink)" />
-            ))}
-          </svg>
+          </div>
         </div>
       ))}
-      <div style={{ display: "flex", paddingLeft: labelW, position: "relative", height: 14 }}>
-        {yearLabels.map(({ x, label }) => (
-          <span key={label + x} className="tabular"
-            style={{ position: "absolute", left: `${(x / svgW) * 100}%`, fontSize: 9, color: "var(--text-dim)" }}
-          >{label}</span>
-        ))}
+      <div style={{ display: "flex", paddingLeft: labelW, gap: 1 }}>
+        {sorted.map(t => {
+          const isYear = t.month.endsWith("-01");
+          return (
+            <div key={t.month} style={{ flex: "1 1 0", marginLeft: isYear ? 6 : 0 }}>
+              {isYear ? <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{t.month.slice(0, 4)}</span> : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

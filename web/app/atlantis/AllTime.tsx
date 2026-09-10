@@ -133,6 +133,14 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr>
+            <th className="eyebrow" style={{ ...cellStyle, padding: "4px 8px", textAlign: "left" }}>Faction</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>Launches</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>Tournaments</th>
+            <th className="eyebrow tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>Qredits</th>
+          </tr>
+        </thead>
         <tbody>
           {entries.map(([f, d]) => (
             <tr key={f}>
@@ -157,20 +165,31 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
 function Sparkline({ data, color, label }: { data: { month: string; value: number }[]; color: string; label: string }) {
   if (data.length < 2) return null;
   const maxV = Math.max(...data.map(d => d.value), 1);
-  const h = 60;
-  const barW = Math.max(2, Math.min(6, 4));
+  const h = 120;
   const best = data.reduce((a, b) => b.value > a.value ? b : a);
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
-      <svg width="100%" height={h} viewBox={`0 0 ${data.length * barW} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
-        {data.map((d, i) => (
-          <rect key={d.month} x={i * barW} y={h - (d.value / maxV) * (h - 4)} width={barW - 1} height={(d.value / maxV) * (h - 4)}
-            fill={color} opacity={0.7}>
-            <title>{d.month}: {d.value.toLocaleString()}</title>
-          </rect>
-        ))}
-      </svg>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
+        {data.map(d => {
+          const isYear = d.month.endsWith("-01");
+          return (
+            <div key={d.month} title={`${d.month}: ${d.value.toLocaleString()}`}
+              style={{ flex: "1 1 0", height: (d.value / maxV) * (h - 14), background: color, opacity: 0.7, borderRadius: 1, marginLeft: isYear ? 4 : 0 }}
+            />
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", gap: 1 }}>
+        {data.map(d => {
+          const isYear = d.month.endsWith("-01");
+          return (
+            <div key={d.month} style={{ flex: "1 1 0", marginLeft: isYear ? 4 : 0 }}>
+              {isYear ? <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.month.slice(2, 4)}</span> : null}
+            </div>
+          );
+        })}
+      </div>
       <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {best.month} ({compact(best.value)})</div>
     </div>
   );
@@ -180,12 +199,12 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   if (data.length === 0) return null;
   const maxC = Math.max(...data.map(d => d.count), 1);
   return (
-    <div style={{ minWidth: 100 }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 120 }}>
         {data.map(d => (
-          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ width: 16, height: (d.count / maxC) * 48, background: "var(--text-dim)", borderRadius: 1 }}
+          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0" }}>
+            <div style={{ width: "100%", maxWidth: 20, height: (d.count / maxC) * 100, background: "var(--text-dim)", borderRadius: 1 }}
               title={`${d.year}: ${d.count}`} />
             <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{d.year.slice(2)}</span>
           </div>

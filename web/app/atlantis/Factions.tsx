@@ -152,20 +152,12 @@ function OverTimeLines({ data, field, perDay, label, divideBy }: {
   );
 }
 
-function OverTime({ data }: { data: FactionMonth[] }) {
-  const [perDay, setPerDay] = useState(false);
+function OverTime({ data, perDay }: { data: FactionMonth[]; perDay: boolean }) {
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
-        <div className="eyebrow">Over time</div>
-        <label style={{ fontSize: 11, color: "var(--text-dim)", cursor: "pointer" }}>
-          <input type="checkbox" checked={perDay} onChange={e => setPerDay(e.target.checked)} style={{ marginRight: 4 }} />
-          per day
-        </label>
-      </div>
+      <div className="eyebrow" style={{ marginBottom: 8 }}>Over time</div>
       <OverTimeLines data={data} field="launches" perDay={perDay} label="Launches" divideBy="length" />
       <OverTimeLines data={data} field="kills" perDay={perDay} label="Kills" divideBy="battle" />
-      <OverTimeLines data={data} field="qredits" perDay={perDay} label="Qredits" divideBy="length" />
     </div>
   );
 }
@@ -260,14 +252,61 @@ function ValueHistogram({ data, field, label }: { data: FactionMonth[]; field: "
   );
 }
 
-function Distributions({ data }: { data: FactionMonth[] }) {
+function KillsPerDayHistogram({ data }: { data: FactionMonth[] }) {
+  const entries: { faction: string; value: number }[] = [];
+  for (const d of data) {
+    if (d.battle <= 0) continue;
+    for (const f of FACTIONS) {
+      if (!(f in d.kills)) continue;
+      entries.push({ faction: f, value: (d.kills[f] ?? 0) / d.battle });
+    }
+  }
+  if (entries.length === 0) return null;
+  const bucketCount = 10;
+  const vals = entries.map(e => e.value);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const step = Math.max(1, Math.ceil((max - min) / bucketCount));
+  const buckets: Record<string, number[]> = {};
+  for (const f of FACTIONS) buckets[f] = new Array(bucketCount).fill(0);
+  for (const e of entries) {
+    const idx = Math.min(Math.floor((e.value - min) / step), bucketCount - 1);
+    buckets[e.faction][idx]++;
+  }
+  const maxStack = Math.max(
+    ...Array.from({ length: bucketCount }, (_, i) => FACTIONS.reduce((s, f) => s + buckets[f][i], 0)),
+    1,
+  );
+  return (
+    <div style={{ flex: 1, minWidth: 180 }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>Kills /battle day</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 48 }}>
+        {Array.from({ length: bucketCount }, (_, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: 1 }}>
+            <div style={{ display: "flex", flexDirection: "column", width: "100%" }}>
+              {FACTIONS.map(f => {
+                const count = buckets[f][i];
+                return count > 0 ? (
+                  <div key={f} style={{ width: "100%", height: (count / maxStack) * 36, background: factionHex(f), opacity: 0.7 }}
+                    title={`${f}: ${count}`} />
+                ) : null;
+              })}
+            </div>
+            <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{compact(min + i * step)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Distributions({ data, perDay }: { data: FactionMonth[]; perDay: boolean }) {
   return (
     <div style={{ marginBottom: 24 }}>
       <div className="eyebrow" style={{ marginBottom: 8 }}>Distributions</div>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <ZonesHistogram data={data} />
-        <ValueHistogram data={data} field="kills" label="Kills" />
-        <ValueHistogram data={data} field="qredits" label="Qredits" />
+        {perDay ? <KillsPerDayHistogram data={data} /> : <ValueHistogram data={data} field="kills" label="Kills" />}
       </div>
     </div>
   );
@@ -486,14 +525,21 @@ function FactionTable({ factions }: { factions: Record<string, FactionAllTime> }
 export default function Factions({ index }: Props) {
   const tournaments = useMemo(() => mergedTournaments(index), [index]);
   const data = useMemo(() => buildFactionMonths(tournaments), [tournaments]);
+  const [perDay, setPerDay] = useState(false);
 
   return (
     <div style={section}>
-      <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Factions</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
+        <div className="display" style={{ fontSize: 13 }}>Factions</div>
+        <label style={{ fontSize: 11, color: "var(--text-dim)", cursor: "pointer" }}>
+          <input type="checkbox" checked={perDay} onChange={e => setPerDay(e.target.checked)} style={{ marginRight: 4 }} />
+          per day
+        </label>
+      </div>
       <FactionTable factions={index.all_time.factions} />
       <PlacementCounts tournaments={tournaments} />
-      <OverTime data={data} />
-      <Distributions data={data} />
+      <OverTime data={data} perDay={perDay} />
+      <Distributions data={data} perDay={perDay} />
       <Streaks data={data} />
       <DayHistograms data={data} />
       <LengthScatter data={data} />

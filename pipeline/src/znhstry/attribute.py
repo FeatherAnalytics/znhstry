@@ -321,7 +321,8 @@ def _solve_month(
             **{f: row[f"hl_{f}"] for f in _FACTIONS},
             "truncated": row["truncated"],
         }
-    rows = list(sub.select("brn", "PlayerName", "Faction", "Launches").iter_rows())
+    player_rows = sub.select("brn", "PlayerName", "Faction", "Launches")
+    rows = list(player_rows.sort("brn", "PlayerName").iter_rows())
     M = _Month(month_val, rows, reps)
     s0 = M.score()
     M.solve()

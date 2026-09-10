@@ -106,9 +106,9 @@ select
     lr.holder,
     case
         when a.triangle = 'Prime' then null
-        when a.zone_name like 'L %' or a.zone_name like 'S %' or a.zone_name like 'F %'
-            or a.zone_name like 'Legion %' or a.zone_name like 'Swarm %' or a.zone_name like 'Faceless %'
-            then cast(4 as smallint)
+        when a.zone_name like '% DEF SHOCK' or a.zone_name like '% Grunt' then cast(4 as smallint)
+        when a.zone_name like '% SEEK ZA' or a.zone_name like '% Melee' then cast(5 as smallint)
+        when a.zone_name like '% ABS MISSILES' or a.zone_name like '% Clover' then cast(6 as smallint)
         when pr.rank_in_faction is not null then cast(pr.rank_in_faction as smallint)
         else null
     end as position

@@ -1,18 +1,24 @@
 "use client";
 
-import { useEffect, useState, useCallback, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, useCallback, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BASE } from "@/lib/dataOrigin";
 import {
   fetchIndex,
   fetchMonth,
+  fetchDerivedMonth,
+  mergedTournaments,
+  isDerived,
   parseObsTimestamps,
   formatDate,
   type AtlantisIndex,
   type MonthPayload,
-  type TournamentSummary,
+  type DerivedMonthPayload,
+  type DerivedTournamentSummary,
+  type AnyTournament,
 } from "./lib";
 import Dashboard from "./Dashboard";
+import DerivedDashboard from "./DerivedDashboard";
 import PlayerDetail from "./PlayerDetail";
 import ZoneDetail from "./ZoneDetail";
 import History from "./History";
@@ -45,7 +51,7 @@ export default function AtlantisPage() {
   const router = useRouter();
 
   const [index, setIndex] = useState<AtlantisIndex | null>(null);
-  const [month, setMonth] = useState<MonthPayload | null>(null);
+  const [monthData, setMonthData] = useState<MonthPayload | DerivedMonthPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -63,6 +69,18 @@ export default function AtlantisPage() {
     [searchParams, router],
   );
 
+  const setParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      const p = new URLSearchParams(searchParams.toString());
+      for (const [key, value] of Object.entries(updates)) {
+        if (value) p.set(key, value);
+        else p.delete(key);
+      }
+      router.replace(`/atlantis/?${p.toString()}`, { scroll: false });
+    },
+    [searchParams, router],
+  );
+
   useEffect(() => {
     let live = true;
     fetchIndex(BASE).then(
@@ -72,23 +90,38 @@ export default function AtlantisPage() {
     return () => { live = false; };
   }, []);
 
-  const resolvedMonth = selectedMonth ?? index?.tournaments[index.tournaments.length - 1]?.month ?? null;
+  const allTournaments = useMemo(() => index ? mergedTournaments(index) : [], [index]);
+
+  const resolvedMonth = selectedMonth
+    ?? (index?.tournaments.length ? index.tournaments[index.tournaments.length - 1].month : null)
+    ?? (allTournaments.length ? allTournaments[allTournaments.length - 1].month : null);
+
+  const selectedTournament: AnyTournament | null =
+    allTournaments.find((t) => t.month === resolvedMonth) ?? null;
+
+  const derivedSelected = selectedTournament && isDerived(selectedTournament);
 
   useEffect(() => {
-    if (!resolvedMonth) return;
+    if (!resolvedMonth || !selectedTournament) return;
     let live = true;
-    setMonth(null);
-    fetchMonth(BASE, resolvedMonth).then(
-      (m) => { if (live) setMonth(m); },
+    setMonthData(null);
+    const fetcher = isDerived(selectedTournament)
+      ? fetchDerivedMonth(BASE, resolvedMonth)
+      : fetchMonth(BASE, resolvedMonth);
+    fetcher.then(
+      (m) => { if (live) setMonthData(m); },
       (err: unknown) => { if (live) setError(err instanceof Error ? err.message : String(err)); },
     );
     return () => { live = false; };
-  }, [resolvedMonth]);
+  }, [resolvedMonth, selectedTournament]);
 
-  const tournament: TournamentSummary | null =
-    index?.tournaments.find((t) => t.month === resolvedMonth) ?? null;
+  const boardMonth = !derivedSelected && monthData && "observations" in monthData ? monthData as MonthPayload : null;
+  const derivedMonth = derivedSelected && monthData && "zones" in monthData && Array.isArray((monthData as DerivedMonthPayload).zones) ? monthData as DerivedMonthPayload : null;
 
-  const obsTimestamps = month ? parseObsTimestamps(month.observations) : [];
+  const boardTournament = selectedTournament && !isDerived(selectedTournament) ? selectedTournament : null;
+  const derivedTournament = selectedTournament && isDerived(selectedTournament) ? selectedTournament as DerivedTournamentSummary : null;
+
+  const obsTimestamps = boardMonth ? parseObsTimestamps(boardMonth.observations) : [];
 
   const zoneParam = searchParams.get("zone");
 
@@ -102,20 +135,28 @@ export default function AtlantisPage() {
   const onZoneClick = (key: string) => setParam("zone", key);
   const onZoneClose = () => setParam("zone", null);
 
+  const scheduleText = selectedTournament
+    ? `Stacking ${selectedTournament.stacking_days}d, battle ${selectedTournament.battle_days}d`
+      + (derivedTournament?.end_tolerance_days === 1 ? " ±1 d" : "")
+      + (derivedTournament?.schedule_note ? ` · ${derivedTournament.schedule_note}` : "")
+      + " · "
+      + formatDate(selectedTournament.starts_at) + " to " + formatDate(selectedTournament.ends_at)
+    : null;
+
   return (
     <main style={{ height: "100dvh", overflow: "auto", background: "var(--ink)", color: "var(--text)" }}>
       <header style={{ ...panel, display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>
         <h1 className="display" style={{ margin: 0, fontSize: 18 }}>Atlantis</h1>
 
-        {index && index.tournaments.length > 1 ? (
+        {allTournaments.length > 1 ? (
           <select
             value={resolvedMonth ?? ""}
             onChange={(e) => setParam("t", e.target.value)}
             style={{ ...btnStyle, appearance: "auto" }}
           >
-            {index.tournaments.map((t) => (
+            {allTournaments.map((t) => (
               <option key={t.month} value={t.month}>
-                {t.month}{t.winner ? ` — ${t.winner}` : ""}
+                {t.month}{t.winner ? ` — ${t.winner}` : ""}{isDerived(t) ? " derived" : ""}
               </option>
             ))}
           </select>
@@ -134,12 +175,8 @@ export default function AtlantisPage() {
           ))}
         </div>
 
-        {tournament ? (
-          <span style={{ color: "var(--text-dim)", marginLeft: "auto" }}>
-            Stacking {tournament.stacking_days}d, battle {tournament.battle_days}d
-            {" · "}
-            {formatDate(tournament.starts_at)} to {formatDate(tournament.ends_at)}
-          </span>
+        {scheduleText ? (
+          <span style={{ color: "var(--text-dim)", marginLeft: "auto" }}>{scheduleText}</span>
         ) : null}
       </header>
 
@@ -147,37 +184,39 @@ export default function AtlantisPage() {
         <div style={{ padding: 16, color: "var(--legion)" }}>{error}</div>
       ) : loading ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading…</div>
-      ) : tabParam === "dashboard" && month && tournament ? (
+      ) : tabParam === "dashboard" && derivedMonth && derivedTournament ? (
+        <DerivedDashboard month={derivedMonth} tournament={derivedTournament} />
+      ) : tabParam === "dashboard" && boardMonth && boardTournament ? (
         <>
           <Dashboard
-            month={month}
-            tournament={tournament}
+            month={boardMonth}
+            tournament={boardTournament}
             onPlayerClick={onPlayerClick}
             onZoneClick={onZoneClick}
           />
-          {playerFaction && playerName && month.players[playerFaction]?.[playerName] ? (
+          {!derivedSelected && playerFaction && playerName && boardMonth.players[playerFaction]?.[playerName] ? (
             <PlayerDetail
               faction={playerFaction}
               playerName={playerName}
-              month={month}
+              month={boardMonth}
               obsTimestamps={obsTimestamps}
               onClose={onPlayerClose}
             />
           ) : null}
-          {zoneParam && month.zones[zoneParam] ? (
+          {!derivedSelected && zoneParam && boardMonth.zones[zoneParam] ? (
             <ZoneDetail
               zoneKey={zoneParam}
-              month={month}
+              month={boardMonth}
               obsTimestamps={obsTimestamps}
               onClose={onZoneClose}
             />
           ) : null}
         </>
       ) : tabParam === "history" && index ? (
-        <History index={index} onMonthClick={(m) => { setParam("t", m); setParam("tab", null); }} />
+        <History index={index} onMonthClick={(m) => setParams({ t: m, tab: null })} />
       ) : tabParam === "alltime" && index ? (
         <AllTime index={index} />
-      ) : !month ? (
+      ) : !monthData ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading month…</div>
       ) : null}
     </main>

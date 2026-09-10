@@ -555,6 +555,8 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 
 **Qredits are labeled "estimated" while a month runs.** The payout mart computes each player's share of their placement's pool, but placement is not settled until the last observation. A running month's qredits use the current standings, so the figure moves until the tournament ends.
 
+**Derived months render a static dashboard from battle report data.** No time-series charts (there are no hourly observations); a zones table ordered by triangle replaces the zone cards; players are grouped by attributed faction with an Unconfirmed group at the end; rows are not clickable (no player or zone detail). "Not yet attributed" appears where the backfill has not reached and all players are Unconfirmed. History and All Time merge derived months with collected ones, labeled "derived" in muted text.
+
 ## Where the data comes from
 
 QONQR publishes its own data to a public Dropbox folder. That is the only live source.

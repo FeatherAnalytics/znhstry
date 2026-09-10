@@ -1,7 +1,16 @@
 "use client";
 
-import { type CSSProperties } from "react";
-import { factionColor, formatDateTime, type AtlantisIndex } from "./lib";
+import { useMemo, type CSSProperties } from "react";
+import {
+  factionColor,
+  formatDateTime,
+  formatDate,
+  mergedTournaments,
+  isDerived,
+  type AtlantisIndex,
+  type AnyTournament,
+  type DerivedTournamentSummary,
+} from "./lib";
 
 interface Props {
   index: AtlantisIndex;
@@ -16,8 +25,29 @@ const cellStyle: CSSProperties = {
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
 
+function coverageOf(t: AnyTournament): string {
+  if (isDerived(t)) {
+    return `${t.reports} reports, ${formatDate(t.first_report_date)} to ${formatDate(t.last_report_date)}`;
+  }
+  return `${formatDateTime(t.first_observed_at)} to ${formatDateTime(t.last_observed_at)}`;
+}
+
+function scheduleOf(t: AnyTournament): string {
+  const base = `${t.stacking_days}d / ${t.battle_days}d`;
+  if (isDerived(t)) {
+    const d = t as DerivedTournamentSummary;
+    const tol = d.end_tolerance_days === 1 ? " ±1 d" : "";
+    const note = d.schedule_note ? ` · ${d.schedule_note}` : "";
+    return base + tol + note;
+  }
+  return base;
+}
+
 export default function History({ index, onMonthClick }: Props) {
-  const tournaments = [...index.tournaments].reverse();
+  const tournaments = useMemo(
+    () => [...mergedTournaments(index)].reverse(),
+    [index],
+  );
 
   return (
     <div style={section}>
@@ -32,7 +62,7 @@ export default function History({ index, onMonthClick }: Props) {
               <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>2nd</th>
               <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>3rd</th>
               <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Players</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Obs</th>
+              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Schedule</th>
               <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Coverage</th>
             </tr>
           </thead>
@@ -43,7 +73,14 @@ export default function History({ index, onMonthClick }: Props) {
                 onClick={() => onMonthClick(t.month)}
                 style={{ cursor: "pointer" }}
               >
-                <td style={{ ...cellStyle, fontWeight: 600 }}>{t.month}</td>
+                <td style={{ ...cellStyle, fontWeight: 600 }}>
+                  {t.month}
+                  {isDerived(t) ? (
+                    <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }} title="derived from battle reports">
+                      derived
+                    </span>
+                  ) : null}
+                </td>
                 <td style={cellStyle}>
                   {t.winner ? (
                     <span style={{ color: factionColor(t.winner) }}>{t.winner}</span>
@@ -61,10 +98,8 @@ export default function History({ index, onMonthClick }: Props) {
                   {t.placements[2] ? <span style={{ color: factionColor(t.placements[2][0]) }}>{t.placements[2][0]}</span> : "—"}
                 </td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.observations}</td>
-                <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>
-                  {formatDateTime(t.first_observed_at)} to {formatDateTime(t.last_observed_at)}
-                </td>
+                <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{scheduleOf(t)}</td>
+                <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{coverageOf(t)}</td>
               </tr>
             ))}
           </tbody>

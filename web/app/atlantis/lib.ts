@@ -29,11 +29,28 @@ export interface TournamentSummary {
   source?: string;
 }
 
-export type AllTimePlayer = [string, string, number, number, number];
+export interface AllTimePlayer {
+  name: string;
+  factions: Record<string, number>;
+  launches: number;
+  tournaments: number;
+  first_month: string;
+  last_month: string;
+  qredits: number;
+}
 
 export interface FactionAllTime {
   wins: number;
   qredits: number;
+  launches?: number;
+}
+
+export type PlayerMonthRow = [string, string, number, number, number, number | null, number, string];
+
+export async function fetchPlayersDetail(base: string): Promise<Record<string, PlayerMonthRow[]>> {
+  const res = await fetch(`${base}/atlantis/players.json.br`);
+  if (!res.ok) throw new Error(`players: ${res.status}`);
+  return res.json();
 }
 
 export interface MonthPayload {

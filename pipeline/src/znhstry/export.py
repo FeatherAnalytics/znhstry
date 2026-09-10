@@ -1426,6 +1426,9 @@ def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         total_bytes += _write_json(path, payload)
         months_written.append(f"atlantis/{month_str}.json.br")
 
+    players_payload = _build_players_payload(con)
+    total_bytes += _write_json(tree / "players.json.br", players_payload)
+
     index = _build_atlantis_index(
         con, tournaments, tournament_cols,
         derived_tournaments, derived_cols,
@@ -1434,15 +1437,17 @@ def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
 
     total_tournaments = len(tournaments) + len(derived_tournaments)
     log.info(
-        "atlantis: %s tournaments (%s board, %s derived), %s KB",
+        "atlantis: %s tournaments (%s board, %s derived), %s players, %s KB",
         total_tournaments,
         len(tournaments),
         len(derived_tournaments),
+        len(players_payload),
         total_bytes // 1024,
     )
     return {
         "path": "atlantis/",
         "index": "atlantis/index.json.br",
+        "players": "atlantis/players.json.br",
         "months": sorted(months_written),
         "bytes": total_bytes,
     }
@@ -1778,6 +1783,45 @@ def _build_zones_dict(
     return result
 
 
+def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
+    """Per-player month rows from both collected and derived marts."""
+    rows = con.execute("""
+        with board as (
+            select p.player_name, t.tournament_month, p.faction,
+                   p.launches, cast(0 as bigint) as bots_killed,
+                   cast(0 as bigint) as bots_lost,
+                   cast(0 as smallint) as rank_in_faction,
+                   p.qredits, 'board' as source
+            from fct_atlantis_payout p
+            join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
+            where t.is_finished and not p.is_estimate
+        ),
+        derived as (
+            select p.player_name, p.tournament_month, p.faction,
+                   p.launches, p.bots_killed, p.bots_lost,
+                   p.rank_in_faction,
+                   coalesce(p.qredits_estimate, 0) as qredits,
+                   'derived' as source
+            from fct_atlantis_player_month_derived p
+            join dim_atlantis_tournament_derived d on d.tournament_month = p.tournament_month
+            where not d.has_board
+        )
+        select * from board union all select * from derived
+        order by player_name, tournament_month
+    """).fetchall()
+
+    result: dict[str, list] = {}
+    for name, month, faction, launches, killed, lost, rank, qr, src in rows:
+        if name not in result:
+            result[name] = []
+        result[name].append([
+            month.strftime("%Y-%m"), faction, int(launches),
+            int(killed), int(lost), int(rank) if rank else None,
+            round(float(qr), 1), src,
+        ])
+    return result
+
+
 def _build_atlantis_index(
     con: duckdb.DuckDBPyConnection,
     tournaments: list[tuple],
@@ -1826,72 +1870,68 @@ def _build_atlantis_index(
 
     derived_list = _build_derived_tournament_list(con, derived_tournaments, derived_cols)
 
-    all_time = _build_all_time(con)
-    all_time_derived = _build_all_time_derived(con)
+    all_time = _build_all_time_merged(con)
 
     return {
         "tournaments": tournament_list,
         "tournaments_derived": derived_list,
-        "all_time": {
-            **all_time,
-            "players_derived": all_time_derived["players"],
-            "factions_derived": all_time_derived["factions"],
-        },
+        "all_time": all_time,
     }
 
 
-def _build_all_time(con: duckdb.DuckDBPyConnection) -> dict:
-    player_rows = con.execute("""
-        with finished as (
-            select tournament_month, first_place, second_place, third_place,
-                   first_pool, second_pool, third_pool
-            from dim_atlantis_tournament
-            where is_finished
-        ),
-        final_board as (
-            select p.tournament_month, p.faction, p.player_name, p.launches, p.qredits
+def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
+    rows = con.execute("""
+        with board as (
+            select p.player_name, p.faction, p.tournament_month,
+                   p.launches, p.qredits, 'board' as src
             from fct_atlantis_payout p
-            join finished f on f.tournament_month = p.tournament_month
-            where not p.is_estimate
+            join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
+            where t.is_finished and not p.is_estimate
+        ),
+        derived as (
+            select p.player_name, p.faction, p.tournament_month,
+                   p.launches, coalesce(p.qredits_estimate, 0) as qredits, 'derived' as src
+            from fct_atlantis_player_month_derived p
+            join dim_atlantis_tournament_derived d on d.tournament_month = p.tournament_month
+            where not d.has_board and p.faction != 'Unconfirmed'
+        ),
+        combined as (
+            select * from board union all select * from derived
         )
-        select player_name, faction, sum(launches) as total_launches,
-               count(distinct tournament_month) as appearances,
-               round(sum(qredits), 1) as total_qredits
-        from final_board
+        select player_name, faction,
+               sum(launches) as launches,
+               count(distinct tournament_month) as tournaments,
+               min(tournament_month) as first_month,
+               max(tournament_month) as last_month,
+               round(sum(qredits), 1) as qredits
+        from combined
         group by 1, 2
-        order by total_qredits desc, player_name
+        order by player_name, launches desc
     """).fetchall()
 
-    players = [
-        [name, faction, int(launches), int(apps), float(qr)]
-        for name, faction, launches, apps, qr in player_rows
-    ]
+    merged: dict[str, dict] = {}
+    for name, faction, launches, tournaments, first_m, last_m, qredits in rows:
+        if name not in merged:
+            merged[name] = {
+                "name": name, "factions": {},
+                "launches": 0, "tournaments": 0,
+                "first_month": first_m.strftime("%Y-%m"),
+                "last_month": last_m.strftime("%Y-%m"),
+                "qredits": 0.0,
+            }
+        entry = merged[name]
+        entry["factions"][faction] = int(launches)
+        entry["launches"] += int(launches)
+        entry["tournaments"] += int(tournaments)
+        if first_m.strftime("%Y-%m") < entry["first_month"]:
+            entry["first_month"] = first_m.strftime("%Y-%m")
+        if last_m.strftime("%Y-%m") > entry["last_month"]:
+            entry["last_month"] = last_m.strftime("%Y-%m")
+        entry["qredits"] = round(entry["qredits"] + float(qredits), 1)
 
-    faction_rows = con.execute("""
-        with finished as (
-            select tournament_month, winner from dim_atlantis_tournament where is_finished
-        ),
-        payouts as (
-            select p.faction, p.tournament_month, sum(p.qredits) as faction_qredits
-            from fct_atlantis_payout p
-            join finished f on f.tournament_month = p.tournament_month
-            where not p.is_estimate
-            group by 1, 2
-        )
-        select p.faction,
-               count(distinct f.tournament_month) filter (where f.winner = p.faction) as wins,
-               round(sum(p.faction_qredits), 0) as total_qredits
-        from payouts p
-        join finished f on f.tournament_month = p.tournament_month
-        group by 1
-        order by total_qredits desc
-    """).fetchall()
+    players = sorted(merged.values(), key=lambda p: (-p["launches"], p["name"]))
 
-    factions = {
-        faction: {"wins": int(wins), "qredits": int(qr)}
-        for faction, wins, qr in faction_rows
-    }
-
+    factions = _build_all_time_factions(con)
     return {"players": players, "factions": factions}
 
 
@@ -1975,50 +2015,60 @@ def _build_derived_tournament_list(
     return result
 
 
-def _build_all_time_derived(con: duckdb.DuckDBPyConnection) -> dict:
-    player_rows = con.execute("""
-        select p.player_name, p.faction,
-               sum(p.launches) as total_launches,
-               count(distinct p.tournament_month) as appearances,
-               round(sum(coalesce(p.qredits_estimate, 0)), 1) as total_qredits
-        from fct_atlantis_player_month_derived p
-        join dim_atlantis_tournament_derived d
-            on d.tournament_month = p.tournament_month
-        where not d.has_board and p.faction != 'Unconfirmed'
-        group by 1, 2
-        order by total_qredits desc, p.player_name
+def _build_all_time_factions(con: duckdb.DuckDBPyConnection) -> dict:
+    rows = con.execute("""
+        with board_wins as (
+            select winner as faction, count(*) as wins
+            from dim_atlantis_tournament where is_finished and winner is not null
+            group by 1
+        ),
+        derived_wins as (
+            select winner as faction, count(*) as wins
+            from dim_atlantis_tournament_derived
+            where not has_board and winner is not null
+            group by 1
+        ),
+        board_qr as (
+            select p.faction, round(sum(p.qredits), 0) as qredits,
+                   sum(p.launches) as launches
+            from fct_atlantis_payout p
+            join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
+            where t.is_finished and not p.is_estimate
+            group by 1
+        ),
+        derived_launches as (
+            select 'Legion' as faction, sum(legion_launches) as launches
+            from dim_atlantis_tournament_derived where not has_board
+            union all
+            select 'Swarm', sum(swarm_launches)
+            from dim_atlantis_tournament_derived where not has_board
+            union all
+            select 'Faceless', sum(faceless_launches)
+            from dim_atlantis_tournament_derived where not has_board
+        ),
+        derived_qr as (
+            select p.faction, round(sum(coalesce(p.qredits_estimate, 0)), 0) as qredits
+            from fct_atlantis_player_month_derived p
+            join dim_atlantis_tournament_derived d on d.tournament_month = p.tournament_month
+            where not d.has_board and p.faction != 'Unconfirmed'
+            group by 1
+        )
+        select f.faction,
+               coalesce(bw.wins, 0) + coalesce(dw.wins, 0) as wins,
+               coalesce(bq.qredits, 0) + coalesce(dq.qredits, 0) as qredits,
+               coalesce(bq.launches, 0) + coalesce(dl.launches, 0) as launches
+        from (values ('Legion'), ('Swarm'), ('Faceless')) f(faction)
+        left join board_wins bw on bw.faction = f.faction
+        left join derived_wins dw on dw.faction = f.faction
+        left join board_qr bq on bq.faction = f.faction
+        left join derived_launches dl on dl.faction = f.faction
+        left join derived_qr dq on dq.faction = f.faction
+        order by wins desc, qredits desc
     """).fetchall()
-
-    players = [
-        [name, faction, int(launches), int(apps), float(qr)]
-        for name, faction, launches, apps, qr in player_rows
-    ]
-
-    win_rows = con.execute("""
-        select winner, count(*) as wins
-        from dim_atlantis_tournament_derived
-        where not has_board and winner is not null
-        group by 1
-    """).fetchall()
-    wins_by_faction = {f: int(w) for f, w in win_rows}
-
-    qredits_rows = con.execute("""
-        select p.faction,
-               round(sum(coalesce(p.qredits_estimate, 0)), 0) as total_qredits
-        from fct_atlantis_player_month_derived p
-        join dim_atlantis_tournament_derived d
-            on d.tournament_month = p.tournament_month
-        where not d.has_board and p.faction != 'Unconfirmed'
-        group by 1
-    """).fetchall()
-    qredits_by_faction = {f: int(qr) for f, qr in qredits_rows}
-
-    factions = {
-        f: {"wins": wins_by_faction.get(f, 0), "qredits": qredits_by_faction.get(f, 0)}
-        for f in ("Legion", "Swarm", "Faceless")
+    return {
+        f: {"wins": int(w), "qredits": int(qr), "launches": int(la)}
+        for f, w, qr, la in rows
     }
-
-    return {"players": players, "factions": factions}
 
 
 def export_all(scope_name: str | None = None, out: Path | None = None) -> None:

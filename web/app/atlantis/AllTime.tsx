@@ -76,11 +76,15 @@ function FactionTable({ factions }: { factions: Record<string, FactionAllTime> }
   );
 }
 
-function FactionsCell({ factions }: { factions: Record<string, number> }) {
+function FactionsCell({ factions, unattributed }: { factions: Record<string, number>; unattributed: number }) {
   const entries = Object.entries(factions).sort(([, a], [, b]) => b - a);
-  const title = entries.map(([f, l]) => `${f}: ${l.toLocaleString()}`).join(", ");
+  if (entries.length === 0) {
+    return <span style={{ color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }}>not yet attributed</span>;
+  }
+  const parts = entries.map(([f, l]) => `${f}: ${l.toLocaleString()}`);
+  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} unattributed`);
   return (
-    <span style={{ display: "inline-flex", gap: 3 }} title={title}>
+    <span style={{ display: "inline-flex", gap: 3 }} title={parts.join(", ")}>
       {entries.map(([f]) => (
         <span key={f} style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(f) }} />
       ))}
@@ -284,7 +288,7 @@ function PlayersTable({
               <tr key={r.name}>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
                 <td style={{ ...cellStyle, cursor: "pointer", color: "var(--text)" }} onClick={() => onPlayerClick(r.name)}>{r.name}</td>
-                <td style={cellStyle}><FactionsCell factions={r.factions} /></td>
+                <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
                 <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.first_month}</td>

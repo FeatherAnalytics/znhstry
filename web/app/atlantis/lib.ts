@@ -34,6 +34,7 @@ export interface AllTimePlayer {
   factions: Record<string, number>;
   launches: number;
   tournaments: number;
+  unattributed: number;
   first_month: string;
   last_month: string;
   qredits: number;

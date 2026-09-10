@@ -1800,7 +1800,7 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
             select p.player_name, p.tournament_month, p.faction,
                    p.launches, p.bots_killed, p.bots_lost,
                    p.rank_in_faction,
-                   coalesce(p.qredits_estimate, 0) as qredits,
+                   p.qredits_estimate as qredits,
                    'derived' as source
             from fct_atlantis_player_month_derived p
             join dim_atlantis_tournament_derived d on d.tournament_month = p.tournament_month
@@ -1816,8 +1816,10 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
             result[name] = []
         result[name].append([
             month.strftime("%Y-%m"), faction, int(launches),
-            int(killed), int(lost), int(rank) if rank else None,
-            round(float(qr), 1), src,
+            int(killed), int(lost),
+            int(rank) if rank is not None else None,
+            round(float(qr), 1) if qr is not None else None,
+            src,
         ])
     return result
 
@@ -1883,17 +1885,17 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
     rows = con.execute("""
         with board as (
             select p.player_name, p.faction, p.tournament_month,
-                   p.launches, p.qredits, 'board' as src
+                   p.launches, p.qredits
             from fct_atlantis_payout p
             join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
             where t.is_finished and not p.is_estimate
         ),
         derived as (
             select p.player_name, p.faction, p.tournament_month,
-                   p.launches, coalesce(p.qredits_estimate, 0) as qredits, 'derived' as src
+                   p.launches, p.qredits_estimate as qredits
             from fct_atlantis_player_month_derived p
             join dim_atlantis_tournament_derived d on d.tournament_month = p.tournament_month
-            where not d.has_board and p.faction != 'Unconfirmed'
+            where not d.has_board
         ),
         combined as (
             select * from board union all select * from derived
@@ -1903,7 +1905,7 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
                count(distinct tournament_month) as tournaments,
                min(tournament_month) as first_month,
                max(tournament_month) as last_month,
-               round(sum(qredits), 1) as qredits
+               sum(qredits) as qredits
         from combined
         group by 1, 2
         order by player_name, launches desc
@@ -1914,20 +1916,23 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
         if name not in merged:
             merged[name] = {
                 "name": name, "factions": {},
-                "launches": 0, "tournaments": 0,
+                "launches": 0, "tournaments": 0, "unattributed": 0,
                 "first_month": first_m.strftime("%Y-%m"),
                 "last_month": last_m.strftime("%Y-%m"),
                 "qredits": 0.0,
             }
         entry = merged[name]
-        entry["factions"][faction] = int(launches)
         entry["launches"] += int(launches)
         entry["tournaments"] += int(tournaments)
         if first_m.strftime("%Y-%m") < entry["first_month"]:
             entry["first_month"] = first_m.strftime("%Y-%m")
         if last_m.strftime("%Y-%m") > entry["last_month"]:
             entry["last_month"] = last_m.strftime("%Y-%m")
-        entry["qredits"] = round(entry["qredits"] + float(qredits), 1)
+        if faction == "Unconfirmed":
+            entry["unattributed"] += int(launches)
+        else:
+            entry["factions"][faction] = entry["factions"].get(faction, 0) + int(launches)
+            entry["qredits"] = round(entry["qredits"] + float(qredits or 0), 1)
 
     players = sorted(merged.values(), key=lambda p: (-p["launches"], p["name"]))
 

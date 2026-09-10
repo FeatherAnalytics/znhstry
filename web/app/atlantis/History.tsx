@@ -47,19 +47,49 @@ function scheduleOf(t: AnyTournament): string {
 
 const FACTION_NAMES = FACTIONS.map(f => f.label);
 
-function WinnerStrip({ tournaments }: { tournaments: AnyTournament[] }) {
+function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
   const sorted = [...tournaments].sort((a, b) => a.month.localeCompare(b.month));
+  const labelW = 24;
   const barW = Math.max(2, Math.min(6, 500 / sorted.length));
-  const h = 20;
+  const svgW = sorted.length * barW;
+  const h = 16;
+  const labels = ["1st", "2nd", "3rd"] as const;
+
+  const yearTicks: { x: number; label: string }[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i].month.endsWith("-01") || i === 0) {
+      yearTicks.push({ x: i * barW + barW / 2, label: sorted[i].month.slice(0, 4) });
+    }
+  }
+
   return (
     <div style={{ marginBottom: 16 }}>
-      <div className="eyebrow" style={{ marginBottom: 4 }}>Winners by month</div>
-      <svg viewBox={`0 0 ${sorted.length * barW} ${h}`} style={{ width: "100%", height: h }}>
-        {sorted.map((t, i) => (
-          <rect key={t.month} x={i * barW} y={0} width={barW - 0.5} height={h}
-            fill={t.winner ? factionHex(t.winner) : "#333"} />
-        ))}
-      </svg>
+      {labels.map((label, place) => (
+        <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 2 : 0 }}>
+          <span className="eyebrow" style={{ width: labelW, flexShrink: 0, fontSize: 10 }}>{label}</span>
+          <svg viewBox={`0 0 ${svgW} ${h}`} style={{ width: "100%", height: h }} preserveAspectRatio="none">
+            {sorted.map((t, i) => {
+              const faction = t.placements[place]?.[0] ?? null;
+              return (
+                <rect key={t.month} x={i * barW} y={0} width={barW - 0.5} height={h}
+                  fill={faction ? factionHex(faction) : "#333"}
+                >
+                  <title>{t.month} · {faction ?? "—"}</title>
+                </rect>
+              );
+            })}
+          </svg>
+        </div>
+      ))}
+      <div style={{ display: "flex", paddingLeft: labelW }}>
+        <svg viewBox={`0 0 ${svgW} 12`} style={{ width: "100%", height: 12 }} preserveAspectRatio="none">
+          {yearTicks.map(({ x, label }) => (
+            <text key={label + x} x={x} y={10} textAnchor="middle" fontSize={barW * 1.8} fill="var(--text-dim)">
+              {label}
+            </text>
+          ))}
+        </svg>
+      </div>
     </div>
   );
 }
@@ -140,11 +170,14 @@ function WinStreaks({ tournaments }: { tournaments: AnyTournament[] }) {
   );
 }
 
-function Histogram({ values, label }: { values: number[]; label: string }) {
+function Histogram({ values, label, rangeMin }: { values: number[]; label: string; rangeMin: number }) {
   const counts: Record<number, number> = {};
   for (const v of values) counts[v] = (counts[v] ?? 0) + 1;
-  const keys = Object.keys(counts).map(Number).sort((a, b) => a - b);
+  const lo = Math.min(rangeMin, ...values);
+  const hi = Math.max(...values);
   const max = Math.max(...Object.values(counts), 1);
+  const keys: number[] = [];
+  for (let k = lo; k <= hi; k++) keys.push(k);
   return (
     <div style={{ marginBottom: 16 }}>
       <div className="eyebrow" style={{ marginBottom: 4 }}>{label}</div>
@@ -152,8 +185,8 @@ function Histogram({ values, label }: { values: number[]; label: string }) {
         {keys.map(k => (
           <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
             <div
-              style={{ width: 16, height: (counts[k] / max) * 32, background: "var(--text-dim)", borderRadius: 1 }}
-              title={`${k}: ${counts[k]}`}
+              style={{ width: 16, height: ((counts[k] ?? 0) / max) * 32, background: "var(--text-dim)", borderRadius: 1 }}
+              title={`${k}: ${counts[k] ?? 0}`}
             />
             <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{k}</span>
           </div>
@@ -190,14 +223,71 @@ function HistoryDashboard({ tournaments }: { tournaments: AnyTournament[] }) {
       <div style={{ color: "var(--text-dim)", fontSize: 11, marginBottom: 16 }}>
         {tournaments.length} months. Board months are exact; derived months estimated from battle reports.
       </div>
-      <WinnerStrip tournaments={tournaments} />
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+      <PlacementStrips tournaments={tournaments} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px 24px" }}>
         <PlacementCounts tournaments={tournaments} />
         <WinStreaks tournaments={tournaments} />
-        <Histogram values={stackingDays} label="Stacking days" />
-        <Histogram values={battleDays} label="Battle days" />
+        <Histogram values={stackingDays} label="Stacking days" rangeMin={0} />
+        <Histogram values={battleDays} label="Battle days" rangeMin={1} />
       </div>
       <ZoneExceptions tournaments={tournaments} />
+    </div>
+  );
+}
+
+function PlacementCell({ placement }: { placement?: [string, number, number] }) {
+  if (!placement) return <>{"—"}</>;
+  return <span style={{ color: factionColor(placement[0]) }}>{placement[0]}</span>;
+}
+
+function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
+  return (
+    <tr onClick={onClick} style={{ cursor: "pointer" }}>
+      <td style={{ ...cellStyle, fontWeight: 600 }}>
+        {t.month}
+        {isDerived(t) ? (
+          <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }} title="derived from battle reports">
+            derived
+          </span>
+        ) : null}
+      </td>
+      <td style={cellStyle}>
+        {t.winner
+          ? <span style={{ color: factionColor(t.winner) }}>{t.winner}</span>
+          : <span style={{ color: "var(--text-dim)" }}>In progress</span>}
+      </td>
+      <td style={cellStyle}><PlacementCell placement={t.placements[0]} /></td>
+      <td style={cellStyle}><PlacementCell placement={t.placements[1]} /></td>
+      <td style={cellStyle}><PlacementCell placement={t.placements[2]} /></td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString()}</td>
+      <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{scheduleOf(t)}</td>
+      <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{coverageOf(t)}</td>
+    </tr>
+  );
+}
+
+const MONTH_HEADERS = ["Month", "Winner", "1st", "2nd", "3rd"] as const;
+
+function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[]; onMonthClick: (m: string) => void }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+        <thead>
+          <tr>
+            {MONTH_HEADERS.map(h => (
+              <th key={h} className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>{h}</th>
+            ))}
+            <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Players</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Schedule</th>
+            <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Coverage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tournaments.map(t => (
+            <MonthRow key={t.month} t={t} onClick={() => onMonthClick(t.month)} />
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -212,59 +302,7 @@ export default function History({ index, onMonthClick }: Props) {
     <div style={section}>
       <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Tournament history</div>
       <HistoryDashboard tournaments={tournaments} />
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
-          <thead>
-            <tr>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Month</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Winner</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>1st</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>2nd</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>3rd</th>
-              <th className="eyebrow tabular" style={{ ...cellStyle, textAlign: "right" }}>Players</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Schedule</th>
-              <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Coverage</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tournaments.map((t) => (
-              <tr
-                key={t.month}
-                onClick={() => onMonthClick(t.month)}
-                style={{ cursor: "pointer" }}
-              >
-                <td style={{ ...cellStyle, fontWeight: 600 }}>
-                  {t.month}
-                  {isDerived(t) ? (
-                    <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }} title="derived from battle reports">
-                      derived
-                    </span>
-                  ) : null}
-                </td>
-                <td style={cellStyle}>
-                  {t.winner ? (
-                    <span style={{ color: factionColor(t.winner) }}>{t.winner}</span>
-                  ) : (
-                    <span style={{ color: "var(--text-dim)" }}>In progress</span>
-                  )}
-                </td>
-                <td style={cellStyle}>
-                  {t.placements[0] ? <span style={{ color: factionColor(t.placements[0][0]) }}>{t.placements[0][0]}</span> : "—"}
-                </td>
-                <td style={cellStyle}>
-                  {t.placements[1] ? <span style={{ color: factionColor(t.placements[1][0]) }}>{t.placements[1][0]}</span> : "—"}
-                </td>
-                <td style={cellStyle}>
-                  {t.placements[2] ? <span style={{ color: factionColor(t.placements[2][0]) }}>{t.placements[2][0]}</span> : "—"}
-                </td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString()}</td>
-                <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{scheduleOf(t)}</td>
-                <td style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>{coverageOf(t)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <MonthTable tournaments={tournaments} onMonthClick={onMonthClick} />
     </div>
   );
 }

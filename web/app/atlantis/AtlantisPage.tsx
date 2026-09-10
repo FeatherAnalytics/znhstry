@@ -30,7 +30,9 @@ const panel: CSSProperties = {
 };
 
 const btnStyle: CSSProperties = {
-  border: "1px solid var(--hairline-bright)",
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: "var(--hairline-bright)",
   background: "var(--ink-raised)",
   padding: "6px 14px",
   borderRadius: 3,

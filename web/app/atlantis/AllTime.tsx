@@ -118,7 +118,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
         {[...factions].map(f => (
           <span key={f} style={{ color: factionColor(f), fontSize: 12 }}>{f}</span>
         ))}
-        {factions.size > 1 ? <span style={{ color: "var(--text-dim)", fontSize: 10 }}>⚔ mercenary</span> : null}
+        {factions.size > 1 ? <span className="eyebrow" style={{ color: "var(--text-dim)", fontSize: 10 }}>mercenary</span> : null}
       </div>
 
       <div style={{ overflowX: "auto" }}>
@@ -149,7 +149,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString()}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString()}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits > 0 ? compact(qredits) : "—"}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
                 <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
               </tr>
             ))}
@@ -181,13 +181,13 @@ export default function AllTime({ index }: Props) {
   const ranked = useMemo(() => {
     const dir = sortAsc ? 1 : -1;
     const sorted = [...players].sort((a, b) => {
-      const diff = (a[sortCol] - b[sortCol]) * dir;
+      const diff = ((a[sortCol] ?? 0) - (b[sortCol] ?? 0)) * dir;
       return diff !== 0 ? diff : a.name.localeCompare(b.name);
     });
     let rank = 0;
     let prev = -Infinity;
     return sorted.map((r, i) => {
-      const val = r[sortCol];
+      const val = r[sortCol] ?? 0;
       if (val !== prev) { rank = i + 1; prev = val; }
       return { ...r, rank };
     });
@@ -294,9 +294,7 @@ function PlayersTable({
                 <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.first_month}</td>
                 <td className="tabular" style={{ ...cellStyle, color: "var(--text-dim)" }}>{r.last_month}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>
-                  {r.qredits > 0 ? compact(r.qredits) : r.launches > 0 ? (
-                    <span style={{ color: "var(--text-dim)", fontStyle: "italic" }}>not yet attributed</span>
-                  ) : "0"}
+                  {r.qredits != null && r.qredits > 0 ? compact(r.qredits) : "—"}
                 </td>
               </tr>
             ))}

@@ -37,7 +37,7 @@ export interface AllTimePlayer {
   unattributed: number;
   first_month: string;
   last_month: string;
-  qredits: number;
+  qredits: number | null;
 }
 
 export interface FactionAllTime {

@@ -31,6 +31,9 @@ function coverageOf(t: AnyTournament): string {
   if (isDerived(t)) {
     return `${t.reports} reports, ${formatDate(t.first_report_date)} to ${formatDate(t.last_report_date)}`;
   }
+  if (t.first_observed_at === t.last_observed_at) {
+    return `1 observation, ${formatDateTime(t.first_observed_at)}`;
+  }
   return `${formatDateTime(t.first_observed_at)} to ${formatDateTime(t.last_observed_at)}`;
 }
 
@@ -57,7 +60,7 @@ function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
 
   const yearTicks: { x: number; label: string }[] = [];
   for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i].month.endsWith("-01") || i === 0) {
+    if (sorted[i].month.endsWith("-01")) {
       yearTicks.push({ x: i * barW + barW / 2, label: sorted[i].month.slice(0, 4) });
     }
   }

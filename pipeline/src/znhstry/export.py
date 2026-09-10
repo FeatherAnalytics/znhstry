@@ -1788,12 +1788,17 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
     rows = con.execute("""
         with board as (
             select p.player_name, t.tournament_month, p.faction,
-                   p.launches, cast(0 as bigint) as bots_killed,
-                   cast(0 as bigint) as bots_lost,
-                   cast(0 as smallint) as rank_in_faction,
+                   p.launches,
+                   coalesce(d.bots_killed, 0) as bots_killed,
+                   coalesce(d.bots_lost, 0) as bots_lost,
+                   cast(null as smallint) as rank_in_faction,
                    p.qredits, 'board' as source
             from fct_atlantis_payout p
             join dim_atlantis_tournament t on t.tournament_month = p.tournament_month
+            left join fct_atlantis_player_month_derived d
+                on d.tournament_month = p.tournament_month
+                and d.player_name = p.player_name
+                and d.faction = p.faction
             where t.is_finished and not p.is_estimate
         ),
         derived as (
@@ -1933,6 +1938,10 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
         else:
             entry["factions"][faction] = entry["factions"].get(faction, 0) + int(launches)
             entry["qredits"] = round(entry["qredits"] + float(qredits or 0), 1)
+
+    for entry in merged.values():
+        if not entry["factions"]:
+            entry["qredits"] = None
 
     players = sorted(merged.values(), key=lambda p: (-p["launches"], p["name"]))
 

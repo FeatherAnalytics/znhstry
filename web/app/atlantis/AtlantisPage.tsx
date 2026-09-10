@@ -23,6 +23,7 @@ import PlayerDetail from "./PlayerDetail";
 import ZoneDetail from "./ZoneDetail";
 import History from "./History";
 import AllTime from "./AllTime";
+import Factions from "./Factions";
 
 const panel: CSSProperties = {
   borderBottom: "1px solid var(--hairline)",
@@ -46,7 +47,7 @@ const activeBtnStyle: CSSProperties = {
   background: "var(--hairline)",
 };
 
-type Tab = "dashboard" | "history" | "alltime";
+type Tab = "dashboard" | "history" | "alltime" | "factions";
 
 export default function AtlantisPage() {
   const searchParams = useSearchParams();
@@ -164,14 +165,14 @@ export default function AtlantisPage() {
         ) : null}
 
         <div style={{ display: "flex", gap: 6 }}>
-          {(["dashboard", "history", "alltime"] as Tab[]).map((tab) => (
+          {(["dashboard", "history", "alltime", "factions"] as Tab[]).map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => setParams({ tab: tab === "dashboard" ? null : tab, player: null, zone: null })}
               style={tabParam === tab ? activeBtnStyle : btnStyle}
             >
-              {tab === "dashboard" ? "Dashboard" : tab === "history" ? "History" : "All Time"}
+              {tab === "dashboard" ? "Dashboard" : tab === "history" ? "History" : tab === "alltime" ? "All Time" : "Factions"}
             </button>
           ))}
         </div>
@@ -217,6 +218,8 @@ export default function AtlantisPage() {
         <History index={index} onMonthClick={(m) => setParams({ t: m, tab: null })} />
       ) : tabParam === "alltime" && index ? (
         <AllTime index={index} />
+      ) : tabParam === "factions" && index ? (
+        <Factions index={index} />
       ) : !monthData ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading month…</div>
       ) : null}

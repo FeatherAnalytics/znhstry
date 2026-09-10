@@ -1,11 +1,8 @@
 """Attribute factions to Atlantis battle-report players.
 
-Reads the per-player rows (from the backfill) and the battlestats header,
-runs a greedy reconciliation per month, overlays board and zone-name evidence,
-and writes one row per (month, player) to player_factions/rows.parquet.
-
-The algorithm is ported from the spike's month_solve.py, tested against 16
-archived boards at 100% confirmed agreement and 99.8% reconciled.
+Per (month, player): (a) the month's board where one exists, (b) an override
+seed, (c) zone-name evidence (next month's triangle), (d) the player's scraped
+current faction. Months the backfill has not reached stay Unconfirmed/'none'.
 """
 
 from __future__ import annotations
@@ -14,7 +11,6 @@ import logging
 import time
 from collections import defaultdict
 from datetime import date
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -26,140 +22,10 @@ from .schema import ATLANTIS_PLAYER_FACTION_DTYPES, ATLANTIS_PLAYER_FACTION_KEY
 log = logging.getLogger(__name__)
 
 _FACTIONS = ("Legion", "Swarm", "Faceless")
-
-
-class _Month:
-    """Per-month greedy faction solver."""
-
-    def __init__(
-        self,
-        month: date,
-        rows: list[tuple[int, str, str, int]],
-        reports: dict[int, dict[str, Any]],
-    ) -> None:
-        self.month = month
-        self.rows = rows
-        self.scraped: dict[str, str] = {}
-        self.by_player: dict[str, list[tuple[int, int]]] = defaultdict(list)
-        self.by_report: dict[int, list[tuple[str, int]]] = defaultdict(list)
-        for b, n, s, launches in rows:
-            self.scraped[n] = s
-            self.by_player[n].append((b, launches))
-            self.by_report[b].append((n, launches))
-        self.header = {
-            b: {f: h[f] for f in _FACTIONS}
-            for b, h in reports.items()
-            if not h["truncated"]
-        }
-        self.assign = dict(self.scraped)
-        self.moved: set[str] = set()
-        self.sums: dict[int, dict[str, int]] = {}
-        for b in self.header:
-            self.sums[b] = {f: 0 for f in _FACTIONS}
-            for n, launches in self.by_report[b]:
-                self.sums[b][self.assign[n]] += launches
-
-    def _ok(self, b: int) -> bool:
-        return self.sums[b] == self.header[b]
-
-    def score(self) -> int:
-        return sum(self._ok(b) for b in self.header)
-
-    def _apply(self, name: str, g: str) -> None:
-        a = self.assign[name]
-        if a == g:
-            return
-        for b, launches in self.by_player[name]:
-            if b in self.header:
-                self.sums[b][a] -= launches
-                self.sums[b][g] += launches
-        self.assign[name] = g
-
-    def _gain(self, moves: list[tuple[str, str]]) -> int:
-        touched = set()
-        for n, _ in moves:
-            touched.update(b for b, _ in self.by_player[n] if b in self.header)
-        before = sum(self._ok(b) for b in touched)
-        saved = [(n, self.assign[n]) for n, _ in moves]
-        for n, g in moves:
-            self._apply(n, g)
-        after = sum(self._ok(b) for b in touched)
-        for n, a in saved:
-            self._apply(n, a)
-        return after - before
-
-    def _candidates_single(self):
-        names: set[str] = set()
-        for b in self.header:
-            if not self._ok(b):
-                names.update(n for n, _ in self.by_report[b])
-        for n in sorted(names, key=lambda x: (-sum(v for _, v in self.by_player[x]), x)):
-            for g in _FACTIONS:
-                if g != self.assign[n]:
-                    yield [(n, g)]
-
-    def _candidates_pair(self, b: int):
-        rows = self.by_report[b]
-        for (ni, _), (nj, _) in combinations(rows, 2):
-            for gi in _FACTIONS:
-                if gi == self.assign[ni]:
-                    continue
-                for gj in _FACTIONS:
-                    if gj == self.assign[nj]:
-                        continue
-                    yield [(ni, gi), (nj, gj)]
-
-    def _best(self, cands):
-        best, best_gain = None, 0
-        for mv in cands:
-            g = self._gain(mv)
-            if g > best_gain:
-                best, best_gain = mv, g
-        return best
-
-    def _commit(self, mv: list[tuple[str, str]]) -> None:
-        for n, f in mv:
-            self._apply(n, f)
-            self.moved.add(n)
-
-    def solve(self) -> None:
-        while True:
-            mv = self._best(self._candidates_single())
-            if mv is None:
-                break
-            self._commit(mv)
-        progressed = True
-        while progressed:
-            progressed = False
-            for b in sorted(self.header):
-                if self._ok(b) or len(self.by_report[b]) > 50:
-                    continue
-                mv = self._best(self._candidates_pair(b))
-                if mv is not None:
-                    self._commit(mv)
-                    progressed = True
-
-    def _unique_for(self, name: str) -> bool:
-        return all(
-            self._gain([(name, g)]) < 0
-            for g in _FACTIONS
-            if g != self.assign[name]
-        )
-
-    def label(self, name: str) -> tuple[str, str | None]:
-        untr = [b for b, _ in self.by_player[name] if b in self.header]
-        if not untr:
-            return "none", None
-        if not any(self._ok(b) for b in untr):
-            return "none", None
-        if not self._unique_for(name):
-            return "none", None
-        source = "reconciled" if name in self.moved else "confirmed"
-        return source, self.assign[name]
+_SEEDS_DIR = Path(__file__).resolve().parents[3] / "transform" / "seeds"
 
 
 def _load_players(bs_path: Path, players_dir: Path) -> pl.DataFrame | None:
-    """Load per-player rows, preferring the backfill table over the packed string."""
     if not bs_path.exists():
         return None
     bs = (
@@ -191,12 +57,9 @@ def _load_players(bs_path: Path, players_dir: Path) -> pl.DataFrame | None:
     return players.join(bs.select(cols), on="brn", how="left")
 
 
-def _load_board_evidence(lb_dir: Path) -> tuple[dict[tuple[date, str], str], set[tuple[date, str]]]:
-    """Board evidence: (month, player) -> faction where ALL observations agree.
-
-    Also returns (month, player) pairs that appeared under 2+ factions on the
-    board in the same month (same-month mercenary evidence).
-    """
+def _load_board_evidence(
+    lb_dir: Path,
+) -> tuple[dict[tuple[date, str], str], set[tuple[date, str]]]:
     pq_files = list(lb_dir.rglob("*.parquet")) if lb_dir.exists() else []
     if not pq_files:
         return {}, set()
@@ -224,7 +87,6 @@ def _load_board_evidence(lb_dir: Path) -> tuple[dict[tuple[date, str], str], set
 
 
 def _load_zone_names(bs_path: Path) -> dict[tuple[date, str], str]:
-    """Zone name -> triangle (Region) per month, for zone-name evidence."""
     if not bs_path.exists():
         return {}
     bs = (
@@ -246,20 +108,18 @@ def _load_zone_names(bs_path: Path) -> dict[tuple[date, str], str]:
 
 def _zone_name_evidence(
     zone_names: dict[tuple[date, str], str],
-    player_months: dict[tuple[date, str], str],
+    all_player_months: set[tuple[date, str]],
 ) -> dict[tuple[date, str], str]:
-    """If a player is named as a zone in a faction's triangle, that's their faction."""
     evidence: dict[tuple[date, str], str] = {}
     for (m, zn), tri in zone_names.items():
         if tri in _FACTIONS:
             prev = date(m.year, m.month - 1, 1) if m.month > 1 else date(m.year - 1, 12, 1)
-            if (prev, zn) in player_months:
+            if (prev, zn) in all_player_months:
                 evidence[(prev, zn)] = tri
     return evidence
 
 
 def _zone_name_mercs(bs_path: Path) -> set[tuple[date, str]]:
-    """Players whose name appears in 2+ different triangles in one month."""
     if not bs_path.exists():
         return set()
     bs = (
@@ -280,83 +140,119 @@ def _zone_name_mercs(bs_path: Path) -> set[tuple[date, str]]:
     return {(m, n) for m, n in multi.select("month", "zone_name").iter_rows()}
 
 
-def _across_month_mercs(results: list[dict[str, Any]]) -> set[str]:
-    """Players with 2+ non-Unconfirmed factions in any months of the record."""
-    by_player: dict[str, set[str]] = defaultdict(set)
-    for r in results:
-        if r["Faction"] != "Unconfirmed":
-            by_player[r["PlayerName"]].add(r["Faction"])
-    return {n for n, factions in by_player.items() if len(factions) > 1}
+def _load_overrides() -> dict[tuple[date, str], str]:
+    csv_path = _SEEDS_DIR / "atlantis_player_faction_overrides.csv"
+    if not csv_path.exists():
+        return {}
+    df = pl.read_csv(csv_path, schema={
+        "tournament_month": pl.Date, "player_name": pl.Utf8,
+        "faction": pl.Utf8, "note": pl.Utf8,
+    })
+    return {
+        (m, n): f
+        for m, n, f in df.select("tournament_month", "player_name", "faction").iter_rows()
+    }
 
 
 def _detect_mercenary(
     results: list[dict[str, Any]],
     board_multi: set[tuple[date, str]],
     zone_name_mercs: set[tuple[date, str]],
+    board: dict[tuple[date, str], str],
+    zn_evidence: dict[tuple[date, str], str],
 ) -> None:
-    """Set is_mercenary and mercenary_evidence on result rows."""
-    across = _across_month_mercs(results)
+    board_factions: dict[str, set[str]] = defaultdict(set)
+    for (_m, n), f in board.items():
+        board_factions[n].add(f)
+    zn_factions: dict[str, set[str]] = defaultdict(set)
+    for (_m, n), f in zn_evidence.items():
+        zn_factions[n].add(f)
+
     for r in results:
-        m, n, f = r["Month"], r["PlayerName"], r["Faction"]
+        m, n = r["Month"], r["PlayerName"]
         parts: list[str] = []
         if (m, n) in board_multi:
             parts.append("same-month")
         if (m, n) in zone_name_mercs:
             parts.append("zone-names")
-        if n in across and f != "Unconfirmed":
+        all_known = board_factions.get(n, set()) | zn_factions.get(n, set())
+        if len(all_known) > 1:
             parts.append("across-months")
         r["IsMercenary"] = bool(parts)
         r["MercenaryEvidence"] = ", ".join(parts) if parts else None
 
 
-def _solve_month(
-    month_val: date,
-    sub: pl.DataFrame,
-    board: dict[tuple[date, str], str],
+_REVIEW_SCHEMA = {
+    "tournament_month": pl.Date, "player_name": pl.Utf8,
+    "scraped_faction": pl.Utf8, "launches": pl.Int64,
+    "reports": pl.Int64, "failing_reports": pl.Int64,
+    "has_reconciling_report": pl.Boolean,
+}
+
+
+def _check_report(hdr: dict, month_players: pl.DataFrame) -> bool:
+    sums: dict[str, int] = {f: 0 for f in _FACTIONS}
+    for row in month_players.filter(pl.col("brn") == hdr["brn"]).iter_rows(named=True):
+        sums[row["Faction"]] += row["Launches"]
+    return all(sums[f] == hdr[f"hl_{f}"] for f in _FACTIONS)
+
+
+def _review_month(
+    month_val: date, month_players: pl.DataFrame, headers: pl.DataFrame,
 ) -> list[dict[str, Any]]:
-    reps: dict[int, dict[str, Any]] = {}
-    cols = ["brn", "truncated", *[f"hl_{f}" for f in _FACTIONS]]
-    for row in sub.select(cols).unique("brn").iter_rows(named=True):
-        reps[row["brn"]] = {
-            **{f: row[f"hl_{f}"] for f in _FACTIONS},
-            "truncated": row["truncated"],
-        }
-    player_rows = sub.select("brn", "PlayerName", "Faction", "Launches")
-    rows = list(player_rows.sort("brn", "PlayerName").iter_rows())
-    M = _Month(month_val, rows, reps)
-    s0 = M.score()
-    M.solve()
-    s1 = M.score()
+    player_info: dict[str, dict[str, Any]] = {}
+    for row in month_players.iter_rows(named=True):
+        n = row["PlayerName"]
+        if n not in player_info:
+            player_info[n] = {
+                "faction": row["Faction"], "launches": 0,
+                "reports": set(), "failing": 0, "has_reconciling": False,
+            }
+        player_info[n]["launches"] += row["Launches"]
+        player_info[n]["reports"].add(row["brn"])
 
-    results: list[dict[str, Any]] = []
-    for name in M.scraped:
-        source, faction = M.label(name)
-        faction = faction if faction is not None else "Unconfirmed"
-        bf = board.get((month_val, name))
-        if bf is not None:
-            faction, source = bf, "board"
-        results.append({
-            "Month": month_val,
-            "PlayerName": name,
-            "Faction": faction,
-            "FactionSource": source,
-            "IsMercenary": False,
-            "MercenaryEvidence": None,
-        })
+    month_hdrs = headers.filter(pl.col("brn").is_in(list(month_players["brn"].unique())))
+    for hdr in month_hdrs.iter_rows(named=True):
+        ok = _check_report(hdr, month_players)
+        for _n, info in player_info.items():
+            if hdr["brn"] not in info["reports"]:
+                continue
+            if ok:
+                info["has_reconciling"] = True
+            else:
+                info["failing"] += 1
 
-    log.info(
-        "attribute: %s  %d->%d/%d reconciled  %d players  %d moved",
-        month_val, s0, s1, len(M.header), len(M.scraped), len(M.moved),
-    )
-    return results
+    return [
+        {"tournament_month": month_val, "player_name": n,
+         "scraped_faction": info["faction"], "launches": info["launches"],
+         "reports": len(info["reports"]), "failing_reports": info["failing"],
+         "has_reconciling_report": False}
+        for n, info in player_info.items()
+        if info["failing"] > 0 and not info["has_reconciling"]
+    ]
+
+
+def _build_review_list(players: pl.DataFrame) -> pl.DataFrame:
+    header_cols = ["brn", "truncated", *[f"hl_{f}" for f in _FACTIONS]]
+    headers = players.select(header_cols).unique("brn").filter(~pl.col("truncated"))
+    sel = players.select("brn", "PlayerName", "Faction", "Launches", "month")
+    rows_by_report = sel.sort("brn", "PlayerName")
+
+    review: list[dict[str, Any]] = []
+    for (month_val,), mp in rows_by_report.group_by("month"):
+        review.extend(_review_month(month_val, mp, headers))
+
+    if not review:
+        return pl.DataFrame(schema=_REVIEW_SCHEMA)
+    return pl.DataFrame(review).sort("tournament_month", "player_name")
 
 
 def attribute_factions() -> None:
-    """Run the faction attribution and write the output."""
     bs_path = config.RAW / "battlestats" / "battlestats.parquet"
     players_dir = config.RAW / "battlestats" / "players"
     lb_dir = config.RAW / "atlantis" / "leaderboard"
     out_path = config.RAW / "battlestats" / "player_factions" / "rows.parquet"
+    review_path = config.RAW / "battlestats" / "player_factions" / "review.parquet"
 
     players = _load_players(bs_path, players_dir)
     if players is None or players.height == 0:
@@ -367,26 +263,45 @@ def attribute_factions() -> None:
     board, board_multi = _load_board_evidence(lb_dir)
     zone_names = _load_zone_names(bs_path)
     zn_mercs = _zone_name_mercs(bs_path)
+    overrides = _load_overrides()
     t0 = time.monotonic()
 
+    all_player_months: set[tuple[date, str]] = set()
+    scraped_map: dict[tuple[date, str], str] = {}
+    for row in players.select("month", "PlayerName", "Faction").unique().iter_rows():
+        all_player_months.add((row[0], row[1]))
+        scraped_map[(row[0], row[1])] = row[2]
+
+    zn_evidence = _zone_name_evidence(zone_names, all_player_months)
+
     results: list[dict[str, Any]] = []
-    for (month_val,), sub in players.group_by("month"):
-        results.extend(_solve_month(month_val, sub, board))
+    for (m, n), scraped in sorted(scraped_map.items()):
+        bf = board.get((m, n))
+        ov = overrides.get((m, n))
+        zn = zn_evidence.get((m, n))
+        if bf is not None:
+            faction, source = bf, "board"
+        elif ov is not None:
+            faction, source = ov, "override"
+        elif zn is not None:
+            faction, source = zn, "zone-name"
+        else:
+            faction, source = scraped, "scraped"
+        results.append({
+            "Month": m, "PlayerName": n, "Faction": faction,
+            "FactionSource": source, "IsMercenary": False,
+            "MercenaryEvidence": None,
+        })
 
-    zn_evidence = _zone_name_evidence(
-        zone_names, {(r["Month"], r["PlayerName"]): r["Faction"] for r in results}
-    )
-    for r in results:
-        zn = zn_evidence.get((r["Month"], r["PlayerName"]))
-        if zn is not None and r["FactionSource"] == "none":
-            r["Faction"] = zn
-            r["FactionSource"] = "zone-name"
+    _detect_mercenary(results, board_multi, zn_mercs, board, zn_evidence)
 
-    _detect_mercenary(results, board_multi, zn_mercs)
+    review_df = _build_review_list(players)
+    _write_review(review_df, review_path)
+
     _write_results(results, out_path)
     log.info(
-        "attribute: %d player-months in %.1f s",
-        len(results), time.monotonic() - t0,
+        "attribute: %d player-months in %.1f s, %d review rows",
+        len(results), time.monotonic() - t0, review_df.height,
     )
 
 
@@ -401,8 +316,14 @@ def _write_results(results: list[dict[str, Any]], path: Path) -> None:
     tmp.replace(path)
 
 
+def _write_review(df: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    df.write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+
+
 def _write_empty(path: Path) -> None:
-    """Write an empty file with the contract schema so dbt's glob matches."""
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(schema=ATLANTIS_PLAYER_FACTION_DTYPES).write_parquet(
         path, compression="zstd"

@@ -75,6 +75,10 @@ TABLES = (
         "fct_atlantis_zone_month_derived",
         ("tournament_month", "triangle", "zone_name"),
     ),
+    Table(
+        "stg_atlantis_faction_review",
+        ("tournament_month", "player_name"),
+    ),
 )
 
 # Rows per row group. ~100 groups over the 9.9M-row event table: small enough that a

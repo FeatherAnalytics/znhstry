@@ -154,11 +154,9 @@ select
     case
         when t.ends_at is not null and cast(s.last_battle_day + interval '1 day' as timestamp) = t.ends_at
             then cast(0 as smallint)
-        when t.tournament_month is not null and s.tournament_month < '2024-12-01'
+        when s.tournament_month < '2024-12-01'
             then cast(1 as smallint)
-        when t.tournament_month is not null
-            then cast(0 as smallint)
-        else null
+        else cast(0 as smallint)
     end as end_tolerance_days,
     case
         when s.stacking_days >= 2 and s.battle_days >= 8 then 'long format'

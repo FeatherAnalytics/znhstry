@@ -1387,6 +1387,9 @@ _ZONE_PYRAMID_ORDER = [
 
 _FACTION_ORDER = ("Legion", "Swarm", "Faceless")
 
+_TRIANGLE_ORDER = {"Central": 0, "Legion": 1, "Swarm": 2, "Faceless": 3}
+_DERIVED_PLAYER_ORDER = ("Legion", "Swarm", "Faceless", "Unconfirmed")
+
 
 def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     tree = out / "atlantis"
@@ -1397,7 +1400,6 @@ def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
     )
     tournament_cols = [d[0] for d in result.description]
     tournaments = result.fetchall()
-
     months_written: list[str] = []
     total_bytes = 0
 
@@ -1409,18 +1411,39 @@ def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         total_bytes += _write_json(path, payload)
         months_written.append(f"atlantis/{month_str}.json.br")
 
-    index = _build_atlantis_index(con, tournaments, tournament_cols)
+    derived_result = con.execute(
+        "select * from dim_atlantis_tournament_derived where not has_board "
+        "order by tournament_month"
+    )
+    derived_cols = [d[0] for d in derived_result.description]
+    derived_tournaments = derived_result.fetchall()
+
+    for row in derived_tournaments:
+        dt = dict(zip(derived_cols, row, strict=True))
+        month_str = dt["tournament_month"].strftime("%Y-%m")
+        payload = _build_derived_month_payload(con, dt, month_str)
+        path = tree / f"{month_str}.json.br"
+        total_bytes += _write_json(path, payload)
+        months_written.append(f"atlantis/{month_str}.json.br")
+
+    index = _build_atlantis_index(
+        con, tournaments, tournament_cols,
+        derived_tournaments, derived_cols,
+    )
     total_bytes += _write_json(tree / "index.json.br", index)
 
+    total_tournaments = len(tournaments) + len(derived_tournaments)
     log.info(
-        "atlantis: %s tournaments, %s KB",
+        "atlantis: %s tournaments (%s board, %s derived), %s KB",
+        total_tournaments,
         len(tournaments),
+        len(derived_tournaments),
         total_bytes // 1024,
     )
     return {
         "path": "atlantis/",
         "index": "atlantis/index.json.br",
-        "months": months_written,
+        "months": sorted(months_written),
         "bytes": total_bytes,
     }
 
@@ -1473,6 +1496,103 @@ def _build_month_payload(
         "zones": zones,
         "battles": battles,
     }
+
+
+def _build_derived_month_payload(
+    con: duckdb.DuckDBPyConnection, dt: dict, month_str: str,
+) -> dict:
+    month = dt["tournament_month"]
+
+    pools = con.execute(
+        "select first_pool, second_pool, third_pool from atlantis_pools "
+        "where effective_from = (select max(effective_from) from atlantis_pools "
+        "where effective_from <= $1)",
+        [month],
+    ).fetchone()
+
+    placements = []
+    for rank_col, zone_col in (
+        ("first_place", "first_zones"),
+        ("second_place", "second_zones"),
+        ("third_place", "third_zones"),
+    ):
+        faction = dt[rank_col]
+        pool = pools[len(placements)] if pools else 0
+        if faction:
+            placements.append([faction, int(dt[zone_col]), int(pool)])
+
+    zones = _build_derived_zones(con, month)
+    players = _build_derived_players(con, month)
+
+    return {
+        "month": month_str,
+        "source": "reports",
+        "placements": placements,
+        "zones": zones,
+        "players": players,
+    }
+
+
+def _build_derived_zones(
+    con: duckdb.DuckDBPyConnection, month: Any,
+) -> list[dict]:
+    rows = con.execute(
+        "select zone_name, triangle, position, "
+        "legion_ending_bots, swarm_ending_bots, faceless_ending_bots, holder "
+        "from fct_atlantis_zone_month_derived where tournament_month = $1",
+        [month],
+    ).fetchall()
+
+    def sort_key(r: tuple) -> tuple:
+        tri = _TRIANGLE_ORDER.get(r[1], 99)
+        pos = r[2] if r[2] is not None else 99
+        return (tri, pos, r[0])
+
+    result = []
+    for name, triangle, position, lg, sw, fc, holder in sorted(rows, key=sort_key):
+        result.append({
+            "name": name,
+            "triangle": triangle,
+            "position": int(position) if position is not None else None,
+            "legion": int(lg),
+            "swarm": int(sw),
+            "faceless": int(fc),
+            "holder": holder,
+        })
+    return result
+
+
+def _build_derived_players(
+    con: duckdb.DuckDBPyConnection, month: Any,
+) -> dict:
+    rows = con.execute(
+        "select player_name, faction, faction_source, is_mercenary, "
+        "launches, bots_killed, bots_lost, reports, qredits_estimate "
+        "from fct_atlantis_player_month_derived where tournament_month = $1 "
+        "order by faction, launches desc, player_name",
+        [month],
+    ).fetchall()
+
+    result: dict[str, dict] = {}
+    for name, faction, source, merc, launches, killed, lost, reps, qr in rows:
+        if faction not in result:
+            result[faction] = {}
+        entry: dict[str, Any] = {
+            "launches": int(launches),
+            "bots_killed": int(killed),
+            "bots_lost": int(lost),
+            "reports": int(reps),
+            "faction_source": source,
+            "is_mercenary": bool(merc) if merc is not None else False,
+        }
+        entry["qredits_estimate"] = round(float(qr), 1) if qr is not None else None
+        result[faction][name] = entry
+
+    ordered: dict[str, dict] = {}
+    for f in _DERIVED_PLAYER_ORDER:
+        if f in result:
+            ordered[f] = result[f]
+    return ordered
 
 
 def _build_battles_dict(
@@ -1662,6 +1782,8 @@ def _build_atlantis_index(
     con: duckdb.DuckDBPyConnection,
     tournaments: list[tuple],
     cols: list[str],
+    derived_tournaments: list[tuple],
+    derived_cols: list[str],
 ) -> dict:
     tournament_list = []
     for row in tournaments:
@@ -1702,11 +1824,19 @@ def _build_atlantis_index(
             "top": top,
         })
 
+    derived_list = _build_derived_tournament_list(con, derived_tournaments, derived_cols)
+
     all_time = _build_all_time(con)
+    all_time_derived = _build_all_time_derived(con)
 
     return {
         "tournaments": tournament_list,
-        "all_time": all_time,
+        "tournaments_derived": derived_list,
+        "all_time": {
+            **all_time,
+            "players_derived": all_time_derived["players"],
+            "factions_derived": all_time_derived["factions"],
+        },
     }
 
 
@@ -1760,6 +1890,132 @@ def _build_all_time(con: duckdb.DuckDBPyConnection) -> dict:
     factions = {
         faction: {"wins": int(wins), "qredits": int(qr)}
         for faction, wins, qr in faction_rows
+    }
+
+    return {"players": players, "factions": factions}
+
+
+def _derived_placements(dt: dict, pools: tuple | None) -> list:
+    result = []
+    for i, (rc, zc) in enumerate((
+        ("first_place", "first_zones"),
+        ("second_place", "second_zones"),
+        ("third_place", "third_zones"),
+    )):
+        if dt[rc]:
+            result.append([dt[rc], int(dt[zc]), int(pools[i]) if pools else 0])
+    return result
+
+
+def _derived_top_players(con: duckdb.DuckDBPyConnection, month: Any) -> dict:
+    rows = con.execute(
+        "select faction, player_name, launches "
+        "from fct_atlantis_player_month_derived "
+        "where tournament_month = $1 and faction != 'Unconfirmed' "
+        "order by faction, launches desc",
+        [month],
+    ).fetchall()
+    top: dict[str, list] = {}
+    for faction, player, launches in rows:
+        if faction not in top:
+            top[faction] = [player, int(launches)]
+    return top
+
+
+def _build_derived_tournament_list(
+    con: duckdb.DuckDBPyConnection,
+    derived_tournaments: list[tuple],
+    derived_cols: list[str],
+) -> list[dict]:
+    result = []
+    for row in derived_tournaments:
+        dt = dict(zip(derived_cols, row, strict=True))
+        month = dt["tournament_month"]
+
+        pools = con.execute(
+            "select first_pool, second_pool, third_pool from atlantis_pools "
+            "where effective_from = (select max(effective_from) from atlantis_pools "
+            "where effective_from <= $1)",
+            [month],
+        ).fetchone()
+
+        report_dates = con.execute(
+            "select min(battle_date), max(battle_date) "
+            "from fct_atlantis_zone_player_daily where tournament_month = $1",
+            [month],
+        ).fetchone()
+
+        result.append({
+            "month": month.strftime("%Y-%m"),
+            "source": "reports",
+            "has_board": False,
+            "stacking_days": int(dt["stacking_days"]),
+            "battle_days": int(dt["battle_days"]),
+            "starts_at": dt["starts_at"].isoformat() + "Z",
+            "ends_at": dt["ends_at"].isoformat() + "Z",
+            "end_tolerance_days": (
+                int(dt["end_tolerance_days"]) if dt["end_tolerance_days"] is not None else None
+            ),
+            "schedule_note": dt["schedule_note"],
+            "placement_tiebreak": dt["placement_tiebreak"],
+            "winner": dt["winner"],
+            "zone_count": int(dt["zone_count"]),
+            "reports": int(dt["reports"]),
+            "players": int(dt["players"]),
+            "launches_total": int(dt["launches_total"]),
+            "first_report_date": (
+                report_dates[0].isoformat() if report_dates and report_dates[0] else None
+            ),
+            "last_report_date": (
+                report_dates[1].isoformat() if report_dates and report_dates[1] else None
+            ),
+            "placements": _derived_placements(dt, pools),
+            "top": _derived_top_players(con, month),
+        })
+    return result
+
+
+def _build_all_time_derived(con: duckdb.DuckDBPyConnection) -> dict:
+    player_rows = con.execute("""
+        select p.player_name, p.faction,
+               sum(p.launches) as total_launches,
+               count(distinct p.tournament_month) as appearances,
+               round(sum(coalesce(p.qredits_estimate, 0)), 1) as total_qredits
+        from fct_atlantis_player_month_derived p
+        join dim_atlantis_tournament_derived d
+            on d.tournament_month = p.tournament_month
+        where not d.has_board and p.faction != 'Unconfirmed'
+        group by 1, 2
+        order by total_qredits desc, p.player_name
+    """).fetchall()
+
+    players = [
+        [name, faction, int(launches), int(apps), float(qr)]
+        for name, faction, launches, apps, qr in player_rows
+    ]
+
+    win_rows = con.execute("""
+        select winner, count(*) as wins
+        from dim_atlantis_tournament_derived
+        where not has_board and winner is not null
+        group by 1
+    """).fetchall()
+    wins_by_faction = {f: int(w) for f, w in win_rows}
+
+    qredits_rows = con.execute("""
+        select p.faction,
+               round(sum(coalesce(p.qredits_estimate, 0)), 0) as total_qredits
+        from fct_atlantis_player_month_derived p
+        join dim_atlantis_tournament_derived d
+            on d.tournament_month = p.tournament_month
+        where not d.has_board and p.faction != 'Unconfirmed'
+        group by 1
+    """).fetchall()
+    qredits_by_faction = {f: int(qr) for f, qr in qredits_rows}
+
+    factions = {
+        f: {"wins": wins_by_faction.get(f, 0), "qredits": qredits_by_faction.get(f, 0)}
+        for f in ("Legion", "Swarm", "Faceless")
     }
 
     return {"players": players, "factions": factions}

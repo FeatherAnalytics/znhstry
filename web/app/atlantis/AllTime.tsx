@@ -11,6 +11,7 @@ import {
   fetchPlayersDetail,
   type AtlantisIndex,
   type AllTimePlayer,
+  type FactionDetail,
   type FactionAllTime,
   type PlayerMonthRow,
 } from "./lib";
@@ -76,12 +77,12 @@ function FactionTable({ factions }: { factions: Record<string, FactionAllTime> }
   );
 }
 
-function FactionsCell({ factions, unattributed }: { factions: Record<string, number>; unattributed: number }) {
-  const entries = Object.entries(factions).sort(([, a], [, b]) => b - a);
+function FactionsCell({ factions, unattributed }: { factions: Record<string, FactionDetail>; unattributed: number }) {
+  const entries = Object.entries(factions).sort(([, a], [, b]) => b.launches - a.launches);
   if (entries.length === 0) {
     return <span style={{ color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }}>not yet attributed</span>;
   }
-  const parts = entries.map(([f, l]) => `${f}: ${l.toLocaleString()}`);
+  const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString()}`);
   if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} unattributed`);
   return (
     <span style={{ display: "inline-flex", gap: 3 }} title={parts.join(", ")}>

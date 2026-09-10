@@ -26,12 +26,20 @@ export interface TournamentSummary {
   last_observed_at: string;
   placements: [string, number, number][];
   top: Record<string, [string, number]>;
+  launches: Record<string, number>;
+  kills: Record<string, number>;
   source?: string;
+}
+
+export interface FactionDetail {
+  launches: number;
+  tournaments: number;
+  qredits: number;
 }
 
 export interface AllTimePlayer {
   name: string;
-  factions: Record<string, number>;
+  factions: Record<string, FactionDetail>;
   launches: number;
   tournaments: number;
   unattributed: number;
@@ -230,6 +238,8 @@ export interface DerivedTournamentSummary {
   last_report_date: string;
   placements: [string, number, number][];
   top: Record<string, [string, number]>;
+  launches: Record<string, number>;
+  kills: Record<string, number>;
 }
 
 export interface DerivedZone {

@@ -162,8 +162,10 @@ export default function Page() {
   const canvasSize = useRef({ width: 1280, height: 720 });
   const hasInteracted = useRef(false);
 
-  // Fit the camera width so the full 360° of longitude is visible. Refits on
-  // orientation change until the reader pans or zooms, then stops.
+  // Fit the camera width so 360° of longitude fills the canvas. In portrait
+  // deck.gl's MapView clamps zoom to log2(height/512) so the map is never
+  // shorter than the viewport; 360° cannot fit, so we center on the Americas
+  // and Europe instead. Refits on orientation change until the reader interacts.
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return;
@@ -172,7 +174,13 @@ export default function Page() {
       if (w <= 0 || h <= 0) return;
       canvasSize.current = { width: w, height: h };
       if (hasInteracted.current) return;
-      setViewState((v) => ({ ...v, zoom: Math.log2(w / 512) }));
+      const zoom = Math.log2(w / 512);
+      const portrait = h > w;
+      setViewState((v) => ({
+        ...v,
+        zoom,
+        ...(portrait ? { longitude: -40 } : null),
+      }));
     };
     fit();
     const observer = new ResizeObserver(fit);
@@ -1243,8 +1251,8 @@ export default function Page() {
                   ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM }
                   : null
             }
-            onViewStateChange={(vs) => {
-              hasInteracted.current = true;
+            onViewStateChange={(vs, userInitiated) => {
+              if (userInitiated) hasInteracted.current = true;
               setViewState(vs);
             }}
             onHover={handleHover}

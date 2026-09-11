@@ -126,7 +126,7 @@ export interface ZoneMapProps {
    * in here.
    */
   overlays?: LayersList;
-  onViewStateChange: (next: MapViewState) => void;
+  onViewStateChange: (next: MapViewState, userInitiated: boolean) => void;
   /** Receives a zone idx, or null when the pointer leaves the dots. */
   onHover: (idx: number | null) => void;
   onClickZone: (idx: number | null) => void;
@@ -645,14 +645,16 @@ export function ZoneMap({
 
   return (
     <DeckGL
-      viewState={{ ...viewState, minZoom: -1 }}
+      viewState={viewState}
       controller={{ dragRotate: false }}
       layers={layers}
       onHover={(info) => onHover(picked(info))}
       onClick={(info) => onClickZone(picked(info))}
       onViewStateChange={(e) => {
         const vs = e.viewState as MapViewState;
-        onViewStateChange(vs);
+        const is = e.interactionState as Record<string, boolean> | undefined;
+        const user = !!(is?.isDragging || is?.isPanning || is?.isZooming || is?.isRotating);
+        onViewStateChange(vs, user);
         // Bounds are pushed to a callback that writes a ref rather than React
         // state: panning must not rebuild a 9.87M-event series every frame.
         const view = new WebMercatorViewport({

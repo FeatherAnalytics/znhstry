@@ -63,8 +63,8 @@ permissions:
 # Both the nightly (which runs scrape_battlestats -> _merge_player_rows) and the
 # backfill write raw/battlestats/players/. The shared group serializes them;
 # cancel-in-progress is false so a nightly firing during a backfill window waits
-# rather than canceling hours of progress. The 19:15 backfill cut-off makes that
-# rare: it ends by 00:15, clear of the 00:45 nightly dispatch.
+# rather than canceling hours of progress. Backfill runs at 02:00, 09:00 and
+# 15:00 UTC with a 00:30 cut-off, clear of the 00:45 nightly dispatch.
 concurrency:
   group: battlestats-players
   cancel-in-progress: false
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
@@ -135,9 +135,12 @@ jobs:
       # must not read as "new data".
       - name: Anything to publish?
         id: changed
+        env:
+          INGEST_EVENTS: ${{ steps.ingest.outputs.events }}
+          BATTLESTATS_REPORTS: ${{ steps.battlestats.outputs.reports }}
         run: |
-          events="${{ steps.ingest.outputs.events }}"
-          reports="${{ steps.battlestats.outputs.reports }}"
+          events="$INGEST_EVENTS"
+          reports="$BATTLESTATS_REPORTS"
           if [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
             echo "any=true" >> "$GITHUB_OUTPUT"
           else

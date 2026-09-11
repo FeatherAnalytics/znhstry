@@ -190,9 +190,9 @@ _REVIEW_SCHEMA = {
 }
 
 
-def _check_report(hdr: dict, month_players: pl.DataFrame) -> bool:
+def _check_report(hdr: dict, by_brn: dict[int, list[dict[str, Any]]]) -> bool:
     sums: dict[str, int] = {f: 0 for f in _FACTIONS}
-    for row in month_players.filter(pl.col("brn") == hdr["brn"]).iter_rows(named=True):
+    for row in by_brn.get(hdr["brn"], []):
         sums[row["Faction"]] += row["Launches"]
     return all(sums[f] == hdr[f"hl_{f}"] for f in _FACTIONS)
 
@@ -211,9 +211,13 @@ def _review_month(
         player_info[n]["launches"] += row["Launches"]
         player_info[n]["reports"].add(row["brn"])
 
+    by_brn: dict[int, list[dict[str, Any]]] = {}
+    for row in month_players.iter_rows(named=True):
+        by_brn.setdefault(row["brn"], []).append(row)
+
     month_hdrs = headers.filter(pl.col("brn").is_in(list(month_players["brn"].unique())))
     for hdr in month_hdrs.iter_rows(named=True):
-        ok = _check_report(hdr, month_players)
+        ok = _check_report(hdr, by_brn)
         for _n, info in player_info.items():
             if hdr["brn"] not in info["reports"]:
                 continue

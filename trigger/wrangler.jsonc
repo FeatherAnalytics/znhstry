@@ -13,5 +13,6 @@
   // firing a little before the hour would read the previous hour's page. 00:45 is for the
   // nightly: QONQR writes the day's slot just after 00:00 UTC.
   "triggers": { "crons": ["7 * * * *", "45 0 * * *"] },
+  "observability": { "enabled": true },
   "workers_dev": false
 }

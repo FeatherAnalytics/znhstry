@@ -28,6 +28,8 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
 
       - name: Set up Python
         working-directory: pipeline
@@ -35,8 +37,6 @@ jobs:
 
       - name: Restore Atlantis raw
         working-directory: pipeline
-        env:
-          NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
         run: uv run python -m znhstry restore --prefix atlantis/
 
       - name: Ingest Wayback snapshots

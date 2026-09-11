@@ -20,35 +20,10 @@ from . import (
     wayback,
 )
 
-STEPS = {
-    "ingest": ingest.ingest_daily,
-    # Battle reports come from the game's live portal, not the Dropbox drop, so they are
-    # their own step: the map must not fail to publish because a web page was slow.
-    "battlestats": portal.scrape_battlestats,
-    "backfill": portal.backfill_players,
-    # The monthly tournament page, read hourly while a battle is on. Its own step because
-    # it runs on the tournament's clock, not the nightly's.
-    "atlantis": atlantis.scrape_atlantis,
-    "wayback": wayback.ingest_wayback,
-    "attribute": attribute.attribute_factions,
-    "export": export.export_all,
-    # The same marts as Parquet, for anything that reads the warehouse from outside the
-    # map. `upload --marts` sends them; the export's upload never sees them.
-    "marts": marts.export_marts,
-    "upload": upload.upload_all,
-    # The raw layer's durable copy. `restore` is the first step on a fresh clone:
-    # the 31-slot ring cannot seed a history it does not hold. It needs no
-    # credentials; only `archive` does.
-    "archive": upload.archive_raw,
-    "restore": upload.restore_raw,
-    # Scope-independent and rarely rerun.
-    "boundaries": boundaries.export_boundaries,
-}
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="znhstry", description="Zone History pipeline.")
-    parser.add_argument("step", choices=sorted(STEPS), nargs="?", default="ingest")
+    parser.add_argument("step", choices=sorted(_DISPATCH), nargs="?", default="ingest")
     parser.add_argument(
         "--scope",
         choices=sorted(config.SCOPES),

@@ -206,16 +206,14 @@ def _pack(
                 f"Decide what a null means in the query - coalesce it or drop the row."
             )
         column = np.asarray(source)
+        encoding = None
+        if name in delta and rows:
+            column = np.diff(column.astype("int64"), prepend=np.int64(0))
+            if dtype.startswith("uint") and column.min() < 0:
+                raise ValueError(f"{name} must be sorted ascending to delta-encode")
+            encoding = "delta"
+
         if rows and dtype.startswith(("int", "uint")):
-            # Silent wraparound is the failure mode these dumps are most
-            # exposed to: a value one step past the width lands as a
-            # plausible-looking small number rather than an error. A negative
-            # day, say, would come from an event before DAY_EPOCH - the 2010
-            # backfill rows - and underflow uint16 into a real-looking date.
-            #
-            # Every integer column, not a chosen few: which ones "can" overflow
-            # is a judgement that goes stale the moment upstream widens a field,
-            # and `area_id` is a uint16 fed straight from a country id.
             info = np.iinfo(dtype)
             low, high = int(column.min()), int(column.max())
             if high > info.max:
@@ -223,19 +221,6 @@ def _pack(
             if low < info.min:
                 hint = " (an event before DAY_EPOCH)" if dtype == DAY else ""
                 raise ValueError(f"{name} min {low:,} does not fit {dtype}{hint}")
-
-        encoding = None
-        if name in delta and rows:
-            column = np.diff(column.astype("int64"), prepend=np.int64(0))
-            # An unsigned column cannot carry a negative difference, so for those
-            # the encoding doubles as an assertion that the column is sorted.
-            # Signed columns are allowed to go backwards: the geometry tiles are
-            # in spatial order, where longitude resets at every row of latitude
-            # and idx jumps around, and those deltas are still far smaller than
-            # the absolute values they replace.
-            if dtype.startswith("uint") and column.min() < 0:
-                raise ValueError(f"{name} must be sorted ascending to delta-encode")
-            encoding = "delta"
 
         payload += np.ascontiguousarray(column, dtype=dtype).tobytes()
         spec.append([name, dtype, encoding])
@@ -2443,7 +2428,9 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
                 "record, fetched one block at a time and only for a zone in hand.",
             ],
         }
-        (out / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        tmp = out / "meta.json.tmp"
+        tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        tmp.replace(out / "meta.json")
 
         scrub = max(e["bytes"] for e in display["shards"]) + max(
             (e["bytes"] for e in display["anchors"]), default=0

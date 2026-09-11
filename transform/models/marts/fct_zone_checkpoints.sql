@@ -25,7 +25,7 @@ with events as (
 boundaries as (
     select cast(unnest(generate_series(
         date '2013-01-01',
-        date '{{ var("checkpoint_end_year", 2027) }}-01-01',
+        date '{{ var("checkpoint_end_year", modules.datetime.date.today().year + 1) }}-01-01',
         interval 1 year
     )) as date) as checkpoint_date
 )

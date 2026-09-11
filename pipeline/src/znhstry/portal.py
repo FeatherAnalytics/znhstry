@@ -80,8 +80,17 @@ def _number(text: str) -> int:
 
 
 def _parse_player_rows(
-    soup: BeautifulSoup, brn: int, battle_date: date, zone_name: str,
+    soup: BeautifulSoup, brn: int, battle_date: date, zone_name: str, fetched_at: datetime,
 ) -> list[dict[str, Any]]:
+    """Rows from the report's player table.
+
+    `Faction` is the row's CSS class, and the portal renders it from the player's
+    profile as it stands when the page is served - not as it stood on `battle_date`.
+    A report fetched years later therefore carries today's faction against an old
+    battle, so `FetchedAtUtc` records when the claim was true. Without it a row
+    scraped the same day is indistinguishable from one the backfill reached in 2026,
+    and both read as history.
+    """
     table = soup.select_one("div.col-sm-6 > div.table-responsive > table.table-hover > tbody")
     if table is None:
         return []
@@ -100,6 +109,7 @@ def _parse_player_rows(
             "BattleDate": battle_date,
             "ZoneName": zone_name,
             "Faction": faction,
+            "FetchedAtUtc": fetched_at,
             "Rank": _number(cells[0].get_text(strip=True)),
             "PlayerName": player_name,
             "Launches": _number(cells[3].get_text(strip=True)),
@@ -111,7 +121,9 @@ def _parse_player_rows(
     return rows
 
 
-def parse_report(brn: int, html: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def parse_report(
+    brn: int, html: str, fetched_at: datetime | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Turn one battle report page into a row.
 
     Column names are built from the page's own text - the stat label, and the faction
@@ -162,7 +174,9 @@ def parse_report(brn: int, html: str) -> tuple[dict[str, Any], list[dict[str, An
     if not row["players"]:
         raise ReportUnavailable(f"{brn}: no players")
 
-    player_rows = _parse_player_rows(soup, brn, row["Date"], row["Zone Name"])
+    if fetched_at is None:
+        fetched_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    player_rows = _parse_player_rows(soup, brn, row["Date"], row["Zone Name"], fetched_at)
     return row, player_rows
 
 
@@ -354,22 +368,47 @@ _PLAYER_SCHEMA = {
     "BotsLost": pl.Int64,
     "TournamentMillionKills": pl.Boolean,
     "WeeklyMillionKills": pl.Boolean,
+    # When the page was served, which is when `Faction` was true. See _parse_player_rows.
+    "FetchedAtUtc": pl.Datetime("us"),
 }
 
 
 def ensure_players_table() -> None:
-    """Create an empty players Parquet if none exists.
+    """Create an empty players Parquet if none exists, and align the ones that do.
 
     A dbt source bound to a glob must match at least one file, and a fresh
     clone or a PR runner has none until the first scrape has been archived.
+
+    Every file behind that glob has to carry the same columns in the same order.
+    DuckDB takes the schema from the first file it reads, so a column the others
+    add is dropped without a word, and a column only the first one has fails the
+    read outright; polars refuses the scan either way. A column added to
+    `_PLAYER_SCHEMA` therefore has to reach the files already on disk, and here is
+    where both writers and a fresh `restore` all pass.
     """
     root = config.RAW / "battlestats" / "players"
-    if any(root.rglob("*.parquet")):
+    paths = sorted(root.rglob("*.parquet"))
+    if not paths:
+        path = root / f"year={datetime.now().year}" / "rows.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame(schema=_PLAYER_SCHEMA).write_parquet(path, compression="zstd")
         return
-    year = datetime.now().year
-    path = root / f"year={year}" / "rows.parquet"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(schema=_PLAYER_SCHEMA).write_parquet(path, compression="zstd")
+    for path in paths:
+        if list(pl.read_parquet_schema(path)) != list(_PLAYER_SCHEMA):
+            _align_to_schema(path)
+
+
+def _align_to_schema(path: Path) -> None:
+    """Rewrite one file with the declared columns, in the declared order."""
+    df = pl.read_parquet(path)
+    added = [name for name in _PLAYER_SCHEMA if name not in df.columns]
+    df = df.with_columns(
+        pl.lit(None, dtype=_PLAYER_SCHEMA[name]).alias(name) for name in added
+    ).select(list(_PLAYER_SCHEMA))
+    tmp = path.with_name(path.name + ".tmp")
+    df.write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+    log.info("players: aligned %s/%s, added %s", path.parent.name, path.name, added or "nothing")
 
 
 def _merge_player_rows(incoming: pl.DataFrame) -> None:
@@ -381,9 +420,11 @@ def _merge_player_rows(incoming: pl.DataFrame) -> None:
             existing = pl.read_parquet(path)
             group = pl.concat([existing, group], how="diagonal_relaxed")
 
-        merged = group.unique(
-            subset=_PLAYER_KEY, keep="last", maintain_order=True,
-        ).sort(_PLAYER_KEY)
+        merged = (
+            group.unique(subset=_PLAYER_KEY, keep="last", maintain_order=True)
+            .sort(_PLAYER_KEY)
+            .select(list(_PLAYER_SCHEMA))
+        )
 
         tmp = path.with_name(path.name + ".tmp")
         merged.write_parquet(tmp, compression="zstd")

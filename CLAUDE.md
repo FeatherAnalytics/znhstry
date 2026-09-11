@@ -168,6 +168,13 @@ See [docs/data.md](docs/data.md) for data sources, battle reports, Atlantis tour
 - **`serve-data.mjs` must check `isFile()`, not just that `stat` succeeded.** A directory
   stats happily and then `createReadStream` throws EISDIR asynchronously, which killed the
   whole dev server and every tile in flight with it.
+- **Every file behind the `battlestats/players/` glob carries the same columns in the same
+  order.** DuckDB takes its schema from the first file it reads, so a column the others add
+  is dropped without a word, and a column only the first one has fails the read outright;
+  polars refuses the scan either way. A column added to `_PLAYER_SCHEMA` therefore has to
+  reach the files already on disk. `ensure_players_table` aligns them and runs before every
+  scrape and in CI, so a fresh `restore` from a bucket written before the column existed
+  heals itself rather than failing at 02:30 UTC.
 - `matched` is a reserved word in DuckDB. Don't use it as a column alias.
 
 
@@ -186,6 +193,13 @@ See [docs/export.md](docs/export.md) for the export format, raw layer, and publi
 - `data/` and `dist/` are gitignored. `dist/` is fully rebuildable; `data/` is not — see
   "The raw layer".
 - Conventional commits: `feat:`, `fix:`, `data:`, `docs:`, `refactor:`.
+- **A pull request that changes published bytes carries the `republish` label.** The
+  nightly's gate asks whether new events arrived, not whether the shape of what we publish
+  moved, so an output change merged on a quiet night sits unpublished behind a manifest
+  that predates it. The label makes `republish.yml` dispatch the nightly with
+  `republish: true` on merge. Use it for the export format, mart values and the derived
+  history; not for a change confined to the raw layer, which the next archive carries on
+  its own, and not for the viewer, which `deploy.yml` deploys.
 - **American English everywhere.** UI strings, code comments, docs, commit messages: color,
   gray, meter, behavior, normalize, analyze. Not colour, grey, metre, behaviour, normalise.
   This file and parts of the codebase still carry British spellings from earlier work; fix

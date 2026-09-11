@@ -12,16 +12,20 @@ names, or the raw layer quietly splits into two shapes that only diverge downstr
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from znhstry import config
 from znhstry.portal import (
+    _PLAYER_SCHEMA,
     ReportUnavailable,
+    _merge_player_rows,
     _targets,
     checked_through,
+    ensure_players_table,
     most_active_zones,
     parse_report,
     record_checked,
@@ -233,3 +237,124 @@ def test_a_page_the_parser_cannot_read_is_a_parse_error():
     """
     with pytest.raises(ValueError):
         parse_report(131012, BROKEN_REPORT)
+
+
+def test_player_rows_record_when_the_page_was_served(player_rows):
+    """`Faction` is the player's faction now, not on the day of the battle.
+
+    The portal renders it from the profile as it stands when it serves the page, so a
+    report the backfill reaches years later carries today's faction against an old
+    battle. Only the fetch time tells the two apart.
+    """
+    stamped = parse_report(
+        131012,
+        (FIXTURES / "battle_report_131012.html").read_text(encoding="utf-8"),
+        datetime(2026, 9, 11, 18, 8, 33),
+    )[1]
+    assert all(row["FetchedAtUtc"] == datetime(2026, 9, 11, 18, 8, 33) for row in stamped)
+    assert player_rows[0]["FetchedAtUtc"].tzinfo is None
+
+
+def test_existing_files_are_brought_up_to_the_current_schema(tmp_path, monkeypatch):
+    """Every file behind the glob has to carry the same columns in the same order.
+
+    DuckDB takes its schema from the first file and drops a column the rest add without
+    a word; polars refuses the scan outright. So a file written before a column existed
+    has to gain it, and one holding the columns in another order has to be put straight.
+    """
+    monkeypatch.setattr(config, "RAW", tmp_path)
+    root = tmp_path / "battlestats" / "players"
+
+    stale = {name: dtype for name, dtype in _PLAYER_SCHEMA.items() if name != "FetchedAtUtc"}
+    (root / "year=2019").mkdir(parents=True)
+    pl.DataFrame(schema=stale).write_parquet(root / "year=2019" / "rows.parquet")
+    (root / "year=2020").mkdir(parents=True)
+    pl.DataFrame(schema=dict(reversed(list(_PLAYER_SCHEMA.items())))).write_parquet(
+        root / "year=2020" / "rows.parquet"
+    )
+
+    ensure_players_table()
+
+    for year in ("2019", "2020"):
+        written = pl.read_parquet_schema(root / f"year={year}" / "rows.parquet")
+        assert list(written) == list(_PLAYER_SCHEMA)
+
+
+def test_aligning_leaves_the_rows_alone(tmp_path, monkeypatch):
+    """The rewrite adds a column. Losing or reordering a row would be silent."""
+    monkeypatch.setattr(config, "RAW", tmp_path)
+    root = tmp_path / "battlestats" / "players"
+    (root / "year=2019").mkdir(parents=True)
+
+    stale = {name: dtype for name, dtype in _PLAYER_SCHEMA.items() if name != "FetchedAtUtc"}
+    before = pl.DataFrame(
+        {
+            "BattleReportNumber": [1, 2],
+            "BattleDate": [date(2019, 1, 1), date(2019, 1, 2)],
+            "ZoneName": ["a", "b"],
+            "Faction": ["Swarm", "Legion"],
+            "Rank": [1, 2],
+            "PlayerName": ["x", "y"],
+            "Launches": [10, 20],
+            "BotsKilled": [1, 2],
+            "BotsLost": [3, 4],
+            "TournamentMillionKills": [False, True],
+            "WeeklyMillionKills": [True, False],
+        },
+        schema=stale,
+    )
+    before.write_parquet(root / "year=2019" / "rows.parquet")
+
+    ensure_players_table()
+
+    after = pl.read_parquet(root / "year=2019" / "rows.parquet")
+    assert after.drop("FetchedAtUtc").equals(before)
+    assert after["FetchedAtUtc"].null_count() == 2
+
+
+def test_aligning_runs_once(tmp_path, monkeypatch):
+    """It runs before every scrape, so rewriting a file that is already right is churn."""
+    monkeypatch.setattr(config, "RAW", tmp_path)
+    root = tmp_path / "battlestats" / "players"
+
+    ensure_players_table()
+    path = next(root.rglob("*.parquet"))
+    stamp = path.stat().st_mtime_ns
+
+    ensure_players_table()
+    assert path.stat().st_mtime_ns == stamp
+
+
+def test_a_new_year_file_keeps_the_declared_column_order(tmp_path, monkeypatch):
+    """The first report of a year is written from the incoming frame alone.
+
+    There is no file to concatenate against, so the columns land in whatever order the
+    parser built its rows in. That file then sits behind the same glob as every other
+    year, which is where an order that drifted from the schema stops being cosmetic.
+    """
+    monkeypatch.setattr(config, "RAW", tmp_path)
+    ensure_players_table()
+
+    _merge_player_rows(
+        pl.DataFrame(
+            [
+                {
+                    "BattleReportNumber": 1,
+                    "BattleDate": date(2019, 1, 1),
+                    "ZoneName": "a",
+                    "Faction": "Swarm",
+                    "FetchedAtUtc": datetime(2019, 1, 1, 0, 0, 0),
+                    "Rank": 1,
+                    "PlayerName": "x",
+                    "Launches": 10,
+                    "BotsKilled": 1,
+                    "BotsLost": 2,
+                    "TournamentMillionKills": False,
+                    "WeeklyMillionKills": False,
+                }
+            ]
+        )
+    )
+
+    path = tmp_path / "battlestats" / "players" / "year=2019" / "rows.parquet"
+    assert list(pl.read_parquet_schema(path)) == list(_PLAYER_SCHEMA)

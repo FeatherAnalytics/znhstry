@@ -67,6 +67,15 @@ numbers it does not already have. A normal run costs one index page and stops.
   explicit format, because for any day under 13 the wrong reading is also a valid date and
   the error would be silent and up to eleven months wrong.
 - **Numbers use a plain space for thousands** (`1 666`).
+- **`Faction` on a per-player row is the player's faction when the page was served, not
+  when the battle happened.** The portal renders it from the profile live, so the backfill
+  — which walks report numbers descending, a band a night — stamps every row it collects
+  with whatever faction each player holds that night. `FetchedAtUtc` records when the claim
+  was true; rows written before it exists are null. The report's own header totals are
+  historical, which is what makes the disagreement visible: sum the per-player launches by
+  row faction and compare against `Legion/Swarm/Faceless Total Launches`. Reports scraped
+  near their battle date match exactly; old ones put launches under factions the header
+  says never launched at all.
 - The parser builds column names from the page's own stat labels and each cell's CSS
   class, which is what makes new rows land in the seeded history's exact 77 columns.
   `pipeline/tests/test_portal.py` pins that contract against a real saved page.

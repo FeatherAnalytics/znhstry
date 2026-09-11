@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useEffect, type CSSProperties } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
+import { useChartHover, useBarHover } from "./useChartHover";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BASE } from "@/lib/dataOrigin";
 import { MAZ_AMBER } from "@/components/charts/palette";
@@ -90,8 +91,9 @@ function PlayerDetail({ name, isMercenary, onClose }: { name: string; isMercenar
   return (
     <div style={{ borderTop: "2px solid var(--hairline-bright)", padding: "16px 16px 24px" }}>
       <PlayerDetailHeader
-        name={name} factions={factions} isMercenary={isMercenary} factionFilter={factionFilter}
-        onFilterChange={f => setFactionFilter(factionFilter === f ? null : f)} onClose={onClose}
+        player={{ name, factions, isMercenary }}
+        filter={{ value: factionFilter, onChange: f => setFactionFilter(factionFilter === f ? null : f) }}
+        onClose={onClose}
       />
       <PlayerInfoRow data={data} />
       <PlayerCharts rows={data} />
@@ -182,52 +184,115 @@ function ChartYearLabels({ months, maxBarW }: { months: string[]; maxBarW?: numb
   );
 }
 
-function BarChart({ data, label }: { data: MonthVal[]; label: string }) {
+function barHeight(v: number, max: number, h: number): number {
+  return v > 0 ? (v / max) * (h - 14) : 0;
+}
+
+function median(nums: number[]): number {
+  const sorted = nums.filter(v => v > 0).sort((a, b) => a - b);
+  return sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 0;
+}
+
+function yearGap(m: string): number { return m.endsWith("-01") ? 4 : 0; }
+
+function BarChart({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
   if (data.length === 0) return null;
+  const months = allMonths ?? data.map(d => d.month);
+  const valMap = new Map(data.map(d => [d.month, d.value]));
   const maxV = Math.max(...data.map(d => d.value), 1);
-  const h = 120;
+  const medianV = median(data.map(d => d.value));
+  const h = 240;
   const maxBarW = 20;
+  const { index: hoverIdx, ref: barRef, onMouseMove: onBarMove, onMouseLeave: onBarLeave } = useBarHover(months.length);
+  const hm = hoverIdx != null ? months[hoverIdx] : null;
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
-      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
-        {data.map(d => (
-          <div key={d.month} title={`${d.month}: ${d.value.toLocaleString()}`} style={{
-            flex: "1 1 0", maxWidth: maxBarW,
-            height: (d.value / maxV) * (h - 14), background: "var(--text-dim)", opacity: 0.7, borderRadius: 1,
-            marginLeft: d.month.endsWith("-01") ? 4 : 0,
-          }} />
-        ))}
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span className="eyebrow" style={{ fontSize: 10 }}>{label}</span>
+        <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
       </div>
-      <ChartYearLabels months={data.map(d => d.month)} maxBarW={maxBarW} />
+      <div style={{ position: "relative" }}>
+        <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
+          <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
+        </div>
+        <div ref={barRef} onMouseMove={onBarMove} onMouseLeave={onBarLeave}
+          style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
+          {months.map((m, i) => (
+            <div key={m} style={{
+              flex: "1 1 0", maxWidth: maxBarW,
+              height: barHeight(valMap.get(m) ?? 0, maxV, h), background: "var(--text)", opacity: i === hoverIdx ? 0.9 : 0.6, borderRadius: 1,
+              marginLeft: yearGap(m),
+            }} />
+          ))}
+        </div>
+      </div>
+      <ChartYearLabels months={months} maxBarW={maxBarW} />
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hm ? <><span style={{ fontWeight: 600 }}>{hm}</span>: {(valMap.get(hm) ?? 0).toLocaleString()}</> : null}</div>
     </div>
   );
 }
 
-function CumulativeLine({ data, label }: { data: MonthVal[]; label: string }) {
+function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
+  const [w, setW] = useState(600);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(ref.current);
+    setW(ref.current.clientWidth);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
+}
+
+function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const w = useWidth(containerRef);
   if (data.length < 2) return null;
+  const months = allMonths ?? data.map(d => d.month);
+  const valMap = new Map(data.map(d => [d.month, d.value]));
   let cumMax = 0;
-  const cumVals = data.map(d => { cumMax += d.value; return cumMax; });
-  const h = 120;
-  const vbW = data.length * 2;
-  const step = vbW / Math.max(data.length - 1, 1);
-  const pts = cumVals.map((v, i) => `${i * step},${4 + (h - 18) - (v / cumMax) * (h - 18)}`).join(" ");
+  const cumVals = months.map(m => { cumMax += valMap.get(m) ?? 0; return cumMax; });
+  const h = 240;
+  const step = w / Math.max(months.length - 1, 1);
+  const ph = h - 18;
+  const pts = cumVals.map((v, i) => `${i * step},${4 + ph - (v / cumMax) * ph}`).join(" ");
+  const halfY = 4 + ph - (0.5 * ph);
+  const { hover, onMouseMove, onMouseLeave } = useChartHover(months.length, step);
 
   return (
-    <div style={{ flex: 1, minWidth: 0 }}>
+    <div style={{ flex: 1, minWidth: 0 }} ref={containerRef}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
       <div style={{ position: "relative" }}>
-        <svg width="100%" height={h} viewBox={`0 0 ${vbW} ${h}`} preserveAspectRatio="none" style={{ display: "block" }}>
-          <polyline points={pts} fill="none" stroke="var(--text-dim)" strokeWidth={0.8} opacity={0.8} vectorEffect="non-scaling-stroke" />
-          {data.map((d, i) => (
-            <rect key={d.month} x={i * step - step / 2} y={0} width={step} height={h} fill="transparent">
-              <title>{d.month}: {cumVals[i].toLocaleString()}</title>
-            </rect>
-          ))}
+        <svg width={w} height={h} style={{ display: "block" }} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+          <line x1={0} x2={w} y1={halfY} y2={halfY} stroke="var(--hairline)" strokeWidth={1} strokeDasharray="3,3" />
+          <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} opacity={0.8} />
+          {(() => {
+            const halfTarget = cumMax / 2;
+            for (let i = 0; i < cumVals.length; i++) {
+              if (cumVals[i] >= halfTarget) {
+                const cx = i * step;
+                return (
+                  <g>
+                    <line x1={cx} x2={cx} y1={halfY} y2={4 + ph} stroke="var(--text)" strokeWidth={0.5} opacity={0.4} />
+                    <circle cx={cx} cy={halfY} r={2.5} fill="var(--text)" opacity={0.8} />
+                  </g>
+                );
+              }
+            }
+            return null;
+          })()}
+          {hover ? (
+            <>
+              <line x1={hover.x} x2={hover.x} y1={0} y2={h} stroke="var(--text-dim)" strokeWidth={1} opacity={0.3} />
+              <circle cx={hover.x} cy={4 + ph - (cumVals[hover.index] / cumMax) * ph} r={3} fill="var(--text)" />
+            </>
+          ) : null}
         </svg>
-        <span className="tabular" style={{ position: "absolute", right: 0, top: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(cumMax)}</span>
+        <span className="tabular" style={{ position: "absolute", left: 0, top: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(cumMax)}</span>
+        <span className="tabular" style={{ position: "absolute", left: 0, top: `${(halfY / h) * 100}%`, fontSize: 7, color: "var(--text-dim)" }}>{compact(cumMax / 2)}</span>
       </div>
-      <ChartYearLabels months={data.map(d => d.month)} />
+      <ChartYearLabels months={months} />
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString()}</> : null}</div>
     </div>
   );
 }
@@ -249,19 +314,26 @@ function PlayerInfoRow({ data }: { data: PlayerMonthRow[] }) {
 
 function YearBars({ data }: { data: { year: string; count: number }[] }) {
   if (data.length === 0) return null;
+  const currentYear = new Date().getUTCFullYear();
+  const allYears: string[] = [];
+  for (let y = 2014; y <= currentYear; y++) allYears.push(String(y));
+  const countMap = new Map(data.map(d => [d.year, d.count]));
   const maxC = Math.max(...data.map(d => d.count), 1);
-  const h = 120;
+  const h = 240;
   return (
     <div>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: h }}>
-        {data.map(d => (
-          <div key={d.year} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 48 }}>
-            <div style={{ width: 32, height: (d.count / maxC) * (h - 20), background: "var(--text-dim)", borderRadius: 1 }}
-              title={`${d.year}: ${d.count}`} />
-            <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.year}</span>
-          </div>
-        ))}
+        {allYears.map(y => {
+          const c = countMap.get(y) ?? 0;
+          return (
+            <div key={y} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 32 }}>
+              <div style={{ width: 20, height: c > 0 ? (c / maxC) * (h - 20) : 0, background: "var(--text-dim)", borderRadius: 1 }}
+                title={c > 0 ? `${y}: ${c}` : y} />
+              <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{y}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -280,6 +352,7 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
 
   if (byMonth.length === 0) return null;
 
+  const allMonths = byMonth.map(d => d.month);
   const launchData = byMonth.map(d => ({ month: d.month, value: d.launches }));
   const killData = byMonth.map(d => ({ month: d.month, value: d.kills }));
   const bestLaunches = launchData.reduce((a, b) => b.value > a.value ? b : a);
@@ -290,37 +363,40 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div>
-          <BarChart data={launchData} label="Launches" />
+          <BarChart data={launchData} label="Launches" allMonths={allMonths} />
           <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
         </div>
         <div>
-          <BarChart data={killData} label="Kills" />
+          <BarChart data={killData} label="Kills" allMonths={allMonths} />
           {bestKills ? <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestKills.month} ({compact(bestKills.value)})</div> : null}
         </div>
-        <CumulativeLine data={launchData} label="Cumulative launches" />
-        <CumulativeLine data={killData} label="Cumulative kills" />
+        <CumulativeLine data={launchData} label="Cumulative launches" allMonths={allMonths} />
+        <CumulativeLine data={killData} label="Cumulative kills" allMonths={allMonths} />
       </div>
     </div>
   );
 }
 
-function PlayerDetailHeader({ name, factions, isMercenary, factionFilter, onFilterChange, onClose }: {
-  name: string; factions: string[]; isMercenary: boolean; factionFilter: string | null;
-  onFilterChange: (f: string) => void; onClose: () => void;
-}) {
+interface DetailHeaderProps {
+  player: { name: string; factions: string[]; isMercenary: boolean };
+  filter: { value: string | null; onChange: (f: string) => void };
+  onClose: () => void;
+}
+
+function PlayerDetailHeader({ player, filter, onClose }: DetailHeaderProps) {
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
       <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 16 }}>×</button>
-      <span className="display" style={{ fontSize: 16 }}>{name}</span>
-      <span style={{ fontSize: 12, color: factionFilter ? "var(--text-dim)" : "var(--text)", cursor: "pointer" }}
-        onClick={() => onFilterChange("")}>All</span>
-      {factions.map(f => (
+      <span className="display" style={{ fontSize: 16 }}>{player.name}</span>
+      <span style={{ fontSize: 12, color: filter.value ? "var(--text-dim)" : "var(--text)", cursor: "pointer" }}
+        onClick={() => filter.onChange("")}>All</span>
+      {player.factions.map(f => (
         <span key={f}
-          onClick={() => onFilterChange(f)}
-          style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !factionFilter || factionFilter === f ? 1 : 0.4 }}
+          onClick={() => filter.onChange(f)}
+          style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !filter.value || filter.value === f ? 1 : 0.4 }}
         >{f}</span>
       ))}
-      {isMercenary ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
+      {player.isMercenary ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
     </div>
   );
 }

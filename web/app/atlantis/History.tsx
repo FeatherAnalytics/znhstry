@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState, type CSSProperties } from "react";
+import PlacementStrips from "./PlacementStrips";
 import {
   factionColor,
-  factionHex,
   mergedTournaments,
   isDerived,
   type AtlantisIndex,
@@ -23,54 +23,9 @@ const cellStyle: CSSProperties = {
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
 
-function stripTitle(t: AnyTournament): string {
-  const zones = t.placements.map(p => `${p[0]}: ${p[1]} zones`).join("\n");
-  const derived = isDerived(t) || ("is_derived_placements" in t && t.is_derived_placements);
-  return `${t.month}${derived ? " (derived)" : ""}\n${zones}`;
-}
-
-function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
-  const sorted = [...tournaments].sort((a, b) => a.month.localeCompare(b.month));
-  const labelW = 24;
-  const labels = ["1st", "2nd", "3rd"] as const;
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      {labels.map((label, place) => (
-        <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 4 : 0 }}>
-          <span className="eyebrow" style={{ width: labelW, flexShrink: 0, fontSize: 10 }}>{label}</span>
-          <div style={{ display: "flex", flex: 1, gap: 1, minWidth: 0, overflow: "hidden" }}>
-            {sorted.map(t => {
-              const faction = t.placements[place]?.[0] ?? null;
-              const isYear = t.month.endsWith("-01");
-              return (
-                <div key={t.month} title={stripTitle(t)} style={{
-                  flex: "1 1 0", height: 16, borderRadius: 1, minWidth: 0,
-                  background: faction ? factionHex(faction) : "#333",
-                  marginLeft: isYear ? 6 : 0,
-                }} />
-              );
-            })}
-          </div>
-        </div>
-      ))}
-      <div style={{ display: "flex", paddingLeft: labelW, gap: 1, overflow: "hidden" }}>
-        {sorted.map(t => {
-          const isYear = t.month.endsWith("-01");
-          return (
-            <div key={t.month} style={{ flex: "1 1 0", marginLeft: isYear ? 6 : 0 }}>
-              {isYear ? <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{t.month.slice(0, 4)}</span> : null}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function PlacementCell({ placement }: { placement?: [string, number, number] }) {
-  if (!placement) return <>{"—"}</>;
-  return <span style={{ color: factionColor(placement[0]) }}>{placement[0]}</span>;
+function PlacementCell(props: { placement?: [string, number, number] }) {
+  if (!props.placement) return <>{"—"}</>;
+  return <span style={{ color: factionColor(props.placement[0]) }}>{props.placement[0]}</span>;
 }
 
 type TableSort = "month" | "players" | "stack" | "battle" | "length";
@@ -83,12 +38,17 @@ function sortVal(t: AnyTournament, col: TableSort): number | string {
   return t.stacking_days + t.battle_days;
 }
 
-function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
+function isDerivedRow(t: AnyTournament): boolean {
+  return isDerived(t) || ("is_derived_placements" in t && !!t.is_derived_placements);
+}
+
+function MonthRow(props: { t: AnyTournament; onClick: () => void }) {
+  const t = props.t;
   return (
-    <tr onClick={onClick} style={{ cursor: "pointer" }}>
+    <tr onClick={props.onClick} style={{ cursor: "pointer" }}>
       <td style={{ ...cellStyle, fontWeight: 600 }}>
         {t.month}
-        {isDerived(t) || ("is_derived_placements" in t && t.is_derived_placements) ? <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }}>derived</span> : null}
+        {isDerivedRow(t) ? <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 6, fontSize: 10 }}>derived</span> : null}
       </td>
       <td style={cellStyle}>
         {t.winner
@@ -108,7 +68,7 @@ function MonthRow({ t, onClick }: { t: AnyTournament; onClick: () => void }) {
 
 const ARROW_SLOT: CSSProperties = { display: "inline-block", width: 12, textAlign: "center" };
 
-function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[]; onMonthClick: (m: string) => void }) {
+function MonthTable(props: { tournaments: AnyTournament[]; onMonthClick: (m: string) => void }) {
   const [sortCol, setSortCol] = useState<TableSort>("month");
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -120,14 +80,14 @@ function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[
 
   const sorted = useMemo(() => {
     const dir = sortAsc ? 1 : -1;
-    return [...tournaments].sort((a, b) => {
+    return [...props.tournaments].sort((a, b) => {
       const av = sortVal(a, sortCol);
       const bv = sortVal(b, sortCol);
       if (av < bv) return -1 * dir;
       if (av > bv) return 1 * dir;
       return 0;
     });
-  }, [tournaments, sortCol, sortAsc]);
+  }, [props.tournaments, sortCol, sortAsc]);
 
   const sth: CSSProperties = { ...cellStyle, textAlign: "right", cursor: "pointer", userSelect: "none" };
 
@@ -149,7 +109,7 @@ function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[
         </thead>
         <tbody>
           {sorted.map(t => (
-            <MonthRow key={t.month} t={t} onClick={() => onMonthClick(t.month)} />
+            <MonthRow key={t.month} t={t} onClick={() => props.onMonthClick(t.month)} />
           ))}
         </tbody>
       </table>
@@ -157,10 +117,10 @@ function MonthTable({ tournaments, onMonthClick }: { tournaments: AnyTournament[
   );
 }
 
-export default function History({ index, onMonthClick }: Props) {
+export default function History(props: Props) {
   const tournaments = useMemo(
-    () => [...mergedTournaments(index)].reverse(),
-    [index],
+    () => [...mergedTournaments(props.index)].reverse(),
+    [props.index],
   );
 
   return (
@@ -170,7 +130,7 @@ export default function History({ index, onMonthClick }: Props) {
         {tournaments.length} months. Board months are exact; derived months estimated from battle reports.
       </div>
       <PlacementStrips tournaments={tournaments} />
-      <MonthTable tournaments={tournaments} onMonthClick={onMonthClick} />
+      <MonthTable tournaments={tournaments} onMonthClick={props.onMonthClick} />
     </div>
   );
 }

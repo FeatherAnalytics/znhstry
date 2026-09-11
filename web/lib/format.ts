@@ -188,7 +188,3 @@ export function lastCompleteDay(epoch: string, maxDay: number): number {
     newest.getUTCDate() === now.getUTCDate();
   return isToday ? maxDay - 1 : maxDay;
 }
-
-export function formatNumber(n: number): string {
-  return n.toLocaleString("en-US");
-}

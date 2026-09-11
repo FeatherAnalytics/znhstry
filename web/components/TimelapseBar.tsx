@@ -1,6 +1,6 @@
 "use client";
 
-import { dateToDay, dayToDate } from "@/lib/format" ;
+import { dateToDay, dayToDate } from "@/lib/format";
 import type { Backdrop } from "@/lib/timelapse";
 import type { Flashpoint } from "@/lib/flashpoints";
 

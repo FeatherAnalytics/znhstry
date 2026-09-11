@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BASE } from "@/lib/dataOrigin";
-import { dateToDay, loadJson } from "@/lib/format" ;
+import { dateToDay, loadJson } from "@/lib/format";
 import { dayToDate } from "@/lib/data";
 import type { Meta } from "@/lib/data";
 import { loadNames } from "@/lib/names";

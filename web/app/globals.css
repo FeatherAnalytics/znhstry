@@ -82,3 +82,22 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+.site-nav {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.site-nav a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.site-nav a:hover,
+.site-nav a[aria-current="page"] {
+  color: var(--text);
+}

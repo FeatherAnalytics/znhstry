@@ -34,6 +34,7 @@ export const metadata: Metadata = {
     description: "Historical QONQR data",
     siteName: "Zone History",
     type: "website",
+    images: [{ url: "/opengraph-image.svg", width: 1200, height: 630, type: "image/svg+xml" }],
   },
   twitter: {
     card: "summary_large_image",

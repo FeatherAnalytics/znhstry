@@ -1170,8 +1170,9 @@ export default function Page() {
       </span>
       {!compact && (
         <span className="eyebrow" style={{ fontSize: 9, color: "var(--text-dim)" }}>
-          Historical{" "}
-          <a href="https://www.qonqr.com" target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>QONQR</a>{" "}data
+          Every zone in{" "}
+          <a href="https://www.qonqr.com" target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>QONQR</a>
+          , colored by the faction holding it
         </span>
       )}
       <SiteNav />

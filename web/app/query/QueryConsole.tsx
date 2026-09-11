@@ -1,7 +1,7 @@
 "use client";
 
 import { SiteNav } from "@/components/SiteNav";
-import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { DATA_ROOT } from "@/lib/dataOrigin";
 import { openDuckDB, type MartsMeta, type ResultTable, type Warehouse } from "@/lib/duckdbWasm";
 
@@ -134,11 +134,11 @@ function useQuery(warehouse: Warehouse | null) {
       setRunning(true);
       const started = performance.now();
       try {
+        await warehouse.bind(sql);
         const table = await warehouse.conn.query(sql);
         setResult({ table, elapsedMs: performance.now() - started });
         setError(null);
       } catch (failure: unknown) {
-        // A stale grid under an error reads as the failed query's output.
         setResult(null);
         setError(errorText(failure));
       } finally {
@@ -226,11 +226,13 @@ interface EditorProps {
   sql: string;
   onChange: (sql: string) => void;
   onRun: () => void;
+  onCopyLink: () => void;
   onDownload: () => void;
   ready: boolean;
   running: boolean;
   status: string | null;
   hasResult: boolean;
+  copied: boolean;
 }
 
 function Editor(props: EditorProps) {
@@ -266,6 +268,9 @@ function Editor(props: EditorProps) {
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
         <button type="button" onClick={props.onRun} disabled={!props.ready || props.running} style={buttonStyle}>
           {props.running ? "Running…" : "Run"}
+        </button>
+        <button type="button" onClick={props.onCopyLink} disabled={!props.ready} style={buttonStyle}>
+          {props.copied ? "Copied" : "Copy link"}
         </button>
         <button type="button" onClick={props.onDownload} disabled={!props.hasResult} style={buttonStyle}>
           Download CSV
@@ -381,16 +386,44 @@ function Errors({ bootError, error }: { bootError: string | null; error: string 
   );
 }
 
+function initialSql(): string {
+  if (typeof window === "undefined") return STARTER_SQL;
+  const param = new URLSearchParams(window.location.search).get("sql");
+  return param ?? STARTER_SQL;
+}
+
+function sqlPermalink(sql: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("sql", sql);
+  return url.toString();
+}
+
 export default function QueryConsole() {
   const { warehouse, bootError } = useWarehouse();
   const { run, running, result, error } = useQuery(warehouse);
-  const [sql, setSql] = useState(STARTER_SQL);
+  const [sql, setSql] = useState(initialSql);
   const [csvNote, setCsvNote] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const autoRan = useRef(false);
   const meta = warehouse?.meta ?? null;
+
+  // Run the ?sql= query on first load once DuckDB is ready.
+  useEffect(() => {
+    if (!warehouse || autoRan.current) return;
+    autoRan.current = true;
+    void run(sql);
+  }, [warehouse]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRun = () => {
     setCsvNote(null);
+    window.history.replaceState(null, "", sqlPermalink(sql));
     void run(sql);
+  };
+  const onCopyLink = () => {
+    void navigator.clipboard.writeText(sqlPermalink(sql)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   };
   const onDownload = () => {
     if (result === null) return;
@@ -407,11 +440,13 @@ export default function QueryConsole() {
             sql={sql}
             onChange={setSql}
             onRun={onRun}
+            onCopyLink={onCopyLink}
             onDownload={onDownload}
             ready={meta !== null}
             running={running}
             status={statusFor(result, csvNote)}
             hasResult={result !== null}
+            copied={copied}
           />
           <Errors bootError={bootError} error={error} />
           <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>

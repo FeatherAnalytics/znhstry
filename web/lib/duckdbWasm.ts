@@ -36,6 +36,8 @@ export interface MartsMeta {
 export interface Warehouse {
   conn: Connection;
   meta: MartsMeta;
+  /** Bind any tables the SQL references that are not yet bound. */
+  bind: (sql: string) => Promise<void>;
 }
 
 const MARTS = `${DATA_ROOT}/marts`;
@@ -49,18 +51,12 @@ async function readMeta(): Promise<MartsMeta> {
 }
 
 async function instantiate(): Promise<Connection> {
-  // The browser entry by path: the bare package name resolves to the Node
-  // build in Next's server pass, whose dynamic requires make webpack warn on
-  // every build even though this import only ever runs in the browser. The
-  // package's exports map carries no types entry for the path, hence the cast.
   // @ts-expect-error TS7016: no declaration file is mapped for this path
   const duckdb = (await import("@duckdb/duckdb-wasm/dist/duckdb-browser")) as typeof duckdbTypes;
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
   if (bundle.mainWorker === null) {
     throw new Error("no DuckDB worker bundle fits this browser");
   }
-  // A Worker cannot be constructed from a cross-origin script URL, so a
-  // same-origin blob pulls the CDN script in instead.
   const workerUrl = URL.createObjectURL(
     new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }),
   );
@@ -77,47 +73,65 @@ async function instantiate(): Promise<Connection> {
 const quoteIdent = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 const quoteString = (text: string): string => `'${text.replaceAll("'", "''")}'`;
 
-/**
- * Name the stage a failure came from. DuckDB-WASM reports a failed HTTP request
- * inside `read_parquet` as a bare WebAssembly trap ("table index is out of
- * bounds"), which says nothing about which file or which step, so the stage has
- * to be put back by hand.
- */
-async function stage<T>(label: string, work: Promise<T>): Promise<T> {
-  try {
-    return await work;
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}: ${message}`);
-  }
+function referencedTables(sql: string, known: Set<string>): string[] {
+  const words = sql.match(/\b[a-z_][a-z0-9_]*\b/gi) ?? [];
+  return [...new Set(words.filter((w) => known.has(w)))];
+}
+
+function makeBinder(conn: Connection, meta: MartsMeta) {
+  const bound = new Set<string>();
+  const known = new Set(Object.keys(meta.tables));
+  const inflight = new Map<string, Promise<void>>();
+
+  return async function bind(sql: string): Promise<void> {
+    const needed = referencedTables(sql, known).filter((n) => !bound.has(n));
+    if (needed.length === 0) return;
+
+    await Promise.all(
+      needed.map((name) => {
+        const existing = inflight.get(name);
+        if (existing) return existing;
+        const table = meta.tables[name];
+        const url = `${MARTS}/${table.path}`;
+        const p = conn
+          .query(
+            `create or replace view ${quoteIdent(name)} as ` +
+              `select * from read_parquet(${quoteString(url)})`,
+          )
+          .then(() => {
+            bound.add(name);
+          })
+          .catch((error: unknown) => {
+            const msg = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not reach ${name} at ${url}: ${msg}`);
+          })
+          .finally(() => {
+            inflight.delete(name);
+          });
+        inflight.set(name, p);
+        return p;
+      }),
+    );
+  };
 }
 
 async function open(): Promise<Warehouse> {
-  const [conn, meta] = await Promise.all([
-    stage("loading DuckDB", instantiate()),
-    stage(`reading ${MARTS}/_meta.json`, readMeta()),
-  ]);
-  for (const [name, table] of Object.entries(meta.tables)) {
-    const url = `${MARTS}/${table.path}`;
-    await stage(
-      `binding ${name} from ${url}`,
-      conn.query(
-        `create or replace view ${quoteIdent(name)} as ` +
-          `select * from read_parquet(${quoteString(url)})`,
-      ),
-    );
-  }
-  return { conn, meta };
+  const conn = await instantiate().catch((error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Loading DuckDB: ${msg}`);
+  });
+  const meta = await readMeta().catch((error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Reading ${MARTS}/_meta.json: ${msg}`);
+  });
+  return { conn, meta, bind: makeBinder(conn, meta) };
 }
 
 let warehouse: Promise<Warehouse> | null = null;
 
-/** One database per page. A re-render must not instantiate a second one. */
 export function openDuckDB(): Promise<Warehouse> {
   if (warehouse === null) {
     warehouse = open().catch((error: unknown) => {
-      // A failed bootstrap is retried on the next call rather than cached for
-      // the life of the page.
       warehouse = null;
       throw error;
     });

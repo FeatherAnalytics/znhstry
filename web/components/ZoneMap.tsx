@@ -126,6 +126,7 @@ export interface ZoneMapProps {
    * in here.
    */
   overlays?: LayersList;
+  canvasSize: { width: number; height: number };
   onViewStateChange: (next: MapViewState, userInitiated: boolean) => void;
   /** Receives a zone idx, or null when the pointer leaves the dots. */
   onHover: (idx: number | null) => void;
@@ -146,6 +147,7 @@ export function ZoneMap({
   emphasis = EMPHASIS_ALL,
   ring,
   overlays,
+  canvasSize,
   onViewStateChange,
   onHover,
   onClickZone,
@@ -659,8 +661,8 @@ export function ZoneMap({
         // state: panning must not rebuild a 9.87M-event series every frame.
         const view = new WebMercatorViewport({
           ...vs,
-          width: window.innerWidth,
-          height: window.innerHeight,
+          width: canvasSize.width,
+          height: canvasSize.height,
         });
         const [west, south] = view.unproject([0, view.height]);
         const [east, north] = view.unproject([view.width, 0]);

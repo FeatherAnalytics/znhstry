@@ -316,11 +316,11 @@ export function StatsPanel({
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
         {changeLabel ? (
           <>
-            {pending ? "Reading" : `${exactNumber(totals.held)} zones moved`} &middot; {changeLabel}
+            {pending ? "Reading" : `${exactNumber(totals.held)} zone${totals.held === 1 ? "" : "s"} moved`} &middot; {changeLabel}
           </>
         ) : (
           <>
-            {exactNumber(zoneCount)} zones
+            {exactNumber(zoneCount)} zone{zoneCount === 1 ? "" : "s"}
             {pending ? " · reading" : stateReady ? "" : " · reading state"}
           </>
         )}

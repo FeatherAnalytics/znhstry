@@ -61,7 +61,9 @@ export default function AtlantisPage() {
 
   const selectedMonth = searchParams.get("t");
   const playerParam = searchParams.get("player");
-  const tabParam = (searchParams.get("tab") ?? "dashboard") as Tab;
+  const TABS: Tab[] = ["dashboard", "history", "alltime", "factions"];
+  const rawTab = searchParams.get("tab") ?? "dashboard";
+  const tabParam: Tab = TABS.includes(rawTab as Tab) ? (rawTab as Tab) : "dashboard";
 
   const setParam = useCallback(
     (key: string, value: string | null) => {

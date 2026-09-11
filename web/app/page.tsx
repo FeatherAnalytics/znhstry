@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MapViewState } from "@deck.gl/core";
+import { WebMercatorViewport, type MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import {
   StatsPanel,
@@ -175,11 +175,15 @@ export default function Page() {
       canvasSize.current = { width: w, height: h };
       if (hasInteracted.current) return;
       const zoom = Math.log2(w / 512);
-      setViewState((v) => ({
-        ...v,
-        zoom,
-        longitude: h > w ? -40 : INITIAL_VIEW.longitude,
-      }));
+      const lon = h > w ? -40 : INITIAL_VIEW.longitude;
+      setViewState((v) => {
+        const next = { ...v, zoom, longitude: lon };
+        const vp = new WebMercatorViewport({ ...next, width: w, height: h });
+        const [west, south] = vp.unproject([0, h]);
+        const [east, north] = vp.unproject([w, 0]);
+        viewportBounds.current = [west, south, east, north];
+        return next;
+      });
     };
     fit();
     const observer = new ResizeObserver(fit);
@@ -945,7 +949,7 @@ export default function Page() {
       title={
         geoStatus === "denied"
           ? "Location permission was declined. Enable it in the address bar to use this."
-          : "Centre the map on you and ring 1000 miles"
+          : "Center the map on you and ring 1000 miles"
       }
     >
       {geoStatus === "asking"
@@ -1232,6 +1236,7 @@ export default function Page() {
             display={display}
             version={data.version}
             boundaries={boundaries}
+            canvasSize={canvasSize.current}
             viewState={viewState}
             filter={mapFilter}
             draw={emptyOnly ? "empty" : "all"}

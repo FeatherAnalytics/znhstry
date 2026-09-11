@@ -318,7 +318,7 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   const maxC = Math.max(...data.map(d => d.count), 1);
   const h = 160;
   return (
-    <div style={{ flex: "1 1 0", minWidth: 0 }}>
+    <div style={{ flex: "1 1 320px", minWidth: 320 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
         {allYears.map(y => {

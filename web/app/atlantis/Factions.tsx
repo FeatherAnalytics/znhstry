@@ -9,6 +9,7 @@ import {
   factionHex,
   compact,
   mergedTournaments,
+  STALE_DATA_NOTICE,
   type AtlantisIndex,
   type AnyTournament,
   type AllTimePlayer,
@@ -656,6 +657,9 @@ export default function Factions({ index }: Props) {
         <div style={{ flex: "1 1 0", minWidth: 120 }}><Histogram values={data.map(d => d.battle)} label="Battle days" rangeMin={1} /></div>
       </div>
 
+      {data.every(d => Object.keys(d.launches).length === 0) ? (
+        <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 16 }}>{STALE_DATA_NOTICE}</div>
+      ) : null}
       <OverTime data={data} mode={mode} />
       <FirstLastSeen players={index.all_time.players} data={data} />
 

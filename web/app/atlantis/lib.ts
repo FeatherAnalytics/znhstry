@@ -110,8 +110,41 @@ export interface Interval {
 export async function fetchIndex(base: string): Promise<AtlantisIndex> {
   const res = await fetch(`${base}/atlantis/index.json.br`);
   if (!res.ok) throw new Error(`index: ${res.status}`);
-  return res.json();
+  return normalizeIndex(await res.json());
 }
+
+// The site and the data deploy separately: a merge redeploys the page at once while the
+// bucket keeps the previous nightly's index.json until 00:45 UTC. Everything this release
+// added must therefore be optional at the boundary, or one evening a year the page crashes.
+function normalizeIndex(raw: AtlantisIndex): AtlantisIndex {
+  const withMaps = <T extends { launches?: Record<string, number>; kills?: Record<string, number> }>(t: T): T => ({
+    ...t, launches: t.launches ?? {}, kills: t.kills ?? {},
+  });
+  const isPlayer = (p: unknown): p is AllTimePlayer =>
+    typeof p === "object" && p !== null && !Array.isArray(p) && typeof (p as AllTimePlayer).name === "string";
+  // JSON never carries undefined, so spreading the entry over the defaults fills only
+  // the keys an older export left out.
+  const playerDefaults: Omit<AllTimePlayer, "name"> = {
+    factions: {}, launches: 0, tournaments: 0, unattributed: 0,
+    first_month: "", last_month: "", qredits: null, is_mercenary: false,
+  };
+  const normalizePlayer = (p: AllTimePlayer): AllTimePlayer => ({ ...playerDefaults, ...p });
+  const players = (list: unknown): AllTimePlayer[] =>
+    Array.isArray(list) ? list.filter(isPlayer).map(normalizePlayer) : [];
+  const allTime = raw.all_time ?? { players: [], factions: {} };
+  return {
+    tournaments: (raw.tournaments ?? []).map(withMaps),
+    tournaments_derived: (raw.tournaments_derived ?? []).map(withMaps),
+    all_time: {
+      players: players(allTime.players),
+      factions: allTime.factions ?? {},
+      players_derived: allTime.players_derived ? players(allTime.players_derived) : undefined,
+      factions_derived: allTime.factions_derived,
+    },
+  };
+}
+
+export const STALE_DATA_NOTICE = "Data is updating; the newest export publishes overnight.";
 
 export async function fetchMonth(base: string, month: string): Promise<MonthPayload> {
   const res = await fetch(`${base}/atlantis/${month}.json.br`);

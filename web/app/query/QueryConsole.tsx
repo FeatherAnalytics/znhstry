@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { SiteNav } from "@/components/SiteNav";
 import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { DATA_ROOT } from "@/lib/dataOrigin";
 import { openDuckDB, type MartsMeta, type ResultTable, type Warehouse } from "@/lib/duckdbWasm";
@@ -167,14 +167,14 @@ function Header({ meta, loading }: { meta: MartsMeta | null; loading: boolean })
       ? "Zone History · Loading DuckDB…"
       : "Zone History";
   return (
-    <header style={{ ...panel, display: "flex", alignItems: "baseline", gap: 16 }}>
-      <h1 className="display" style={{ margin: 0, fontSize: 18 }}>
-        Query
-      </h1>
+    <header style={{ ...panel, display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <h1 className="display" style={{ margin: 0, fontSize: 18 }}>
+          Query
+        </h1>
+        <SiteNav />
+      </div>
       <span style={{ color: "var(--text-dim)" }}>{line}</span>
-      <Link href="/" style={{ marginLeft: "auto", color: "var(--text)" }}>
-        Back to the map
-      </Link>
     </header>
   );
 }

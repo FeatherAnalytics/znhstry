@@ -28,6 +28,7 @@ const sans = IBM_Plex_Sans({
 export const metadata: Metadata = {
   title: "Zone History",
   description: "Historical QONQR data",
+  icons: { icon: "/icon.svg" },
   openGraph: {
     title: "Zone History",
     description: "Historical QONQR data",
@@ -35,7 +36,7 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Zone History",
     description: "Historical QONQR data",
   },

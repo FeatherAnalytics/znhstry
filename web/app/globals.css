@@ -126,6 +126,18 @@ input[type="range"]::-moz-range-thumb {
   background: var(--text);
 }
 
+/* Native select and date inputs in the dark palette. colorScheme: dark handles
+   the calendar popover; this covers the control chrome that colorScheme misses. */
+select,
+input[type="date"] {
+  border-radius: 3px;
+}
+select:focus-visible,
+input[type="date"]:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
 /* Footnotes visible only on compact screens where title tooltips are
    unreachable. Desktop keeps the title attribute. */
 .compact-footnote {

@@ -54,6 +54,7 @@ const BACKDROPS: { key: Backdrop; label: string; title: string }[] = [
 const control: React.CSSProperties = {
   background: "rgba(14,18,24,0.82)",
   border: "1px solid var(--hairline-bright)",
+  borderRadius: 3,
   color: "var(--text)",
   font: "inherit",
   fontSize: 12,

@@ -669,10 +669,8 @@ export function ZoneMap({
       style={{ position: "absolute", inset: "0" }}
       getCursor={({ isDragging }) => (isDragging ? "grabbing" : "crosshair")}
     >
-      {/* Required by the basemap's license, not decoration. Kept small and
-          dim, but it has to be on screen wherever those tiles are. Left side
-          so the stats panel (desktop) never covers it; on compact screens
-          the bottom offset clears the bottom sheet at peek. */}
+      {/* Required by the basemap's license, not decoration. z-index 21 keeps
+          it above the bottom sheet (z-index 20) at half and full stops. */}
       <a
         href="https://carto.com/attributions"
         target="_blank"
@@ -682,7 +680,7 @@ export function ZoneMap({
           position: "absolute",
           left: 8,
           bottom: 6,
-          zIndex: 5,
+          zIndex: 21,
           fontSize: 9,
           color: "var(--text-dim)",
           textDecoration: "none",

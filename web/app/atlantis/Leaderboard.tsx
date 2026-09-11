@@ -157,6 +157,9 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
           </tbody>
         </table>
       </div>
+      <span className="compact-footnote eyebrow" style={{ color: "var(--text-dim)", marginTop: 6, fontSize: 9 }}>
+        ★ Tournament 1M = 1M kills this tournament · Weekly 1M = 1M kills this week (Sun–Sun)
+      </span>
     </div>
   );
 }

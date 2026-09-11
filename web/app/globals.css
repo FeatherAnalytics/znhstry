@@ -92,6 +92,17 @@ button {
   }
 }
 
+/* Footnotes visible only on compact screens where title tooltips are
+   unreachable. Desktop keeps the title attribute. */
+.compact-footnote {
+  display: none;
+}
+@media (max-width: 900px) {
+  .compact-footnote {
+    display: block;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

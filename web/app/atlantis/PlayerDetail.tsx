@@ -164,6 +164,9 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
 
       <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval (in coverage)</div>
       <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />
+      <span className="compact-footnote eyebrow" style={{ color: "var(--text-dim)", marginTop: 4, fontSize: 9 }}>
+        Gains cover observed hours only
+      </span>
 
       <BadgeMarkers data={data} obsTimestamps={obsTimestamps} />
 

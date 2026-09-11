@@ -33,6 +33,14 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Check the data origin is reachable
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+        run: |
+          test -n "$DATA_ORIGIN" || { echo "::error::DATA_ORIGIN variable is not set"; exit 1; }
+          curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
+            || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
+
       - name: Install web dependencies
         run: npm ci
         working-directory: web
@@ -45,21 +53,8 @@ jobs:
         run: npm run build
         working-directory: web
         env:
-          # Where the browser fetches payloads from. Set as a repository
-          # variable, not a secret: it is a public URL the page exposes anyway.
           NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
-          # Optional CARTO basemap API key. Without it tiles are watermarked.
           NEXT_PUBLIC_CARTO_API_KEY: ${{ vars.CARTO_API_KEY }}
-
-      # A site built against an empty or missing origin looks like a code bug
-      # rather than a configuration one, so fail here instead.
-      - name: Check the data origin is reachable
-        env:
-          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
-        run: |
-          test -n "$DATA_ORIGIN" || { echo "::error::DATA_ORIGIN variable is not set"; exit 1; }
-          curl -sfI "$DATA_ORIGIN/global/meta.json" > /dev/null \
-            || { echo "::error::$DATA_ORIGIN/global/meta.json is not reachable"; exit 1; }
 
       # The token needs Workers Scripts:Edit, Workers Routes:Edit and Zone DNS:Edit on
       # znhstry.com - the last two so the custom-domain route in wrangler.jsonc can

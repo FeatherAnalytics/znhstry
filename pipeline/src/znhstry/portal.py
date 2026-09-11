@@ -416,7 +416,10 @@ def _record_skip(brn: int, reason: str) -> None:
 
 
 def _backfill_targets() -> list[int]:
-    raw = pl.read_parquet(config.RAW / "battlestats" / "battlestats.parquet")
+    raw = pl.read_parquet(
+        config.RAW / "battlestats" / "battlestats.parquet",
+        columns=["Battle Report Number", "Country"],
+    )
     atlantis_brns = set(
         raw.filter(pl.col("Country") == "Atlantis")["Battle Report Number"].to_list()
     )

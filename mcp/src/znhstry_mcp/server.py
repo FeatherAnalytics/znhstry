@@ -204,9 +204,15 @@ def describe_table(name: str) -> dict[str, Any]:
 @mcp.tool()
 @_as_tool_error
 def freshness() -> dict[str, Any]:
-    """The newest event date in the published data."""
-    _, manifest = _connect()
-    return {"newest_event_date": manifest["newest_event_date"]}
+    """The newest event date in the published data (re-reads the manifest each call)."""
+    con, _ = _connect()
+    try:
+        (newest,) = con.execute(
+            "select newest_event_date from read_json_auto(?)", [MANIFEST_URL]
+        ).fetchone()
+    except duckdb.Error as exc:
+        raise ValueError(f"cannot read freshness from {MANIFEST_URL}: {exc}") from exc
+    return {"newest_event_date": str(newest)}
 
 
 @mcp.tool()

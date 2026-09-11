@@ -12,10 +12,12 @@ this is the last point where the real value still exists.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
-from znhstry.export import COUNT, DAY, IDX, _pack
+from znhstry.export import COUNT, DAY, IDX, _pack, _previous_index, _write
 
 
 def test_columns_are_written_back_to_back_in_the_order_the_manifest_lists():
@@ -66,3 +68,32 @@ def test_an_unsorted_index_cannot_be_delta_encoded():
     """For an unsigned column the encoding doubles as an assertion that it is sorted."""
     with pytest.raises(ValueError, match="sorted ascending"):
         _pack({"idx": np.array([5, 1], "int64")}, {"idx": IDX}, frozenset({"idx"}))
+
+
+def test_delta_overflow_is_caught():
+    """The bounds check must run after the delta transform, not before.
+
+    An absolute value that fits the dtype can produce a delta that does not.
+    """
+    values = np.array([0, 2**31], "int64")
+    with pytest.raises(OverflowError, match="does not fit int32"):
+        _pack({"x": values}, {"x": "int32"}, frozenset({"x"}))
+
+
+def test_previous_index_recovers_a_stable_assignment(tmp_path):
+    """New zones append above max(idx); existing zones keep theirs."""
+    zone_ids = np.array([100, 200, 300], dtype="int32")
+    payload, spec, rows = _pack(
+        {"zone_id": zone_ids.astype("int64")},
+        {"zone_id": IDX},
+        frozenset({"zone_id"}),
+    )
+    _write(tmp_path / "zone_ids.bin.br", payload)
+    meta = {"zone_ids": {"rows": rows, "columns": spec}}
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+
+    result = _previous_index(tmp_path)
+
+    assert result is not None
+    assert result["zone_id"].to_list() == [100, 200, 300]
+    assert result["idx"].to_list() == [0, 1, 2]

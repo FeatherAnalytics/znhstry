@@ -709,7 +709,7 @@ export default function Page() {
     if (from >= day) return null;
     const net = (key: "legion" | "swarm" | "faceless") => history[key][day] - history[key][from];
     return {
-      label: `Since ${dayToDate(meta!.day_epoch, from).toLocaleDateString("en-GB", {
+      label: `Since ${dayToDate(meta!.day_epoch, from).toLocaleDateString("en-US", {
         day: "2-digit",
         month: "short",
         year: "numeric",
@@ -923,6 +923,7 @@ export default function Page() {
         setHistoryMode("scope");
       }
       if (compact) setSheetStop(next === "timelapse" ? "peek" : "half");
+      if (next === "timelapse") setEmphasis(EMPHASIS_ALL);
       if (!dayBounds) return;
       if (next === "current") data.setDay(dayBounds.max);
       else data.setDay((d) => (d === null || d > dayBounds.lastComplete ? dayBounds.lastComplete : d));
@@ -1044,7 +1045,7 @@ export default function Page() {
             // the period the reader picked.
             changeStart !== null && timelapse
               ? `Net change since ${dayToDate(meta.day_epoch, changeStart).toLocaleDateString(
-                  "en-GB",
+                  "en-US",
                   { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" },
                 )}`
               : `Net change ${windowPhrase(span)}`
@@ -1133,7 +1134,7 @@ export default function Page() {
         {playing ? "❙❙" : "▶"}
       </button>
       <span className="display tabular" style={{ fontSize: 17, whiteSpace: "nowrap" }}>
-        {dayToDate(meta.day_epoch, day).toLocaleDateString("en-GB", {
+        {dayToDate(meta.day_epoch, day).toLocaleDateString("en-US", {
           day: "2-digit",
           month: "short",
           year: "numeric",
@@ -1167,6 +1168,12 @@ export default function Page() {
       <span className="display" style={{ fontSize: compact ? 15 : 18, whiteSpace: "nowrap" }}>
         Zone History
       </span>
+      {!compact && (
+        <span className="eyebrow" style={{ fontSize: 9, color: "var(--text-dim)" }}>
+          Historical{" "}
+          <a href="https://www.qonqr.com" target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>QONQR</a>{" "}data
+        </span>
+      )}
       <SiteNav />
     </div>
   );

@@ -27,8 +27,18 @@ const sans = IBM_Plex_Sans({
 
 export const metadata: Metadata = {
   title: "Zone History",
-  description:
-    "Fourteen years of territory control across 1.6 million zones — scrub any date, compare any period.",
+  description: "Historical QONQR data",
+  openGraph: {
+    title: "Zone History",
+    description: "Historical QONQR data",
+    siteName: "Zone History",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Zone History",
+    description: "Historical QONQR data",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

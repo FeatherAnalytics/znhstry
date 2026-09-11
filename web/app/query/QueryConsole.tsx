@@ -418,7 +418,12 @@ export default function QueryConsole() {
             {result && <ResultsGrid table={result.table} />}
           </div>
         </section>
-        <TableList meta={meta} onPick={(name) => setSql(`select * from ${name} limit 100`)} />
+        <TableList meta={meta} onPick={(name) => {
+          const q = `select * from ${name} limit 100`;
+          setSql(q);
+          setCsvNote(null);
+          void run(q);
+        }} />
       </div>
     </main>
   );

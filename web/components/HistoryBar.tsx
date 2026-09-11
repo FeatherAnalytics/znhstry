@@ -289,7 +289,7 @@ export function HistoryBar({
           label:
             cursor.getUTCMonth() === 0
               ? String(cursor.getUTCFullYear())
-              : cursor.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }),
+              : cursor.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }),
         });
         cursor.setUTCMonth(cursor.getUTCMonth() + stepMonths);
       }
@@ -502,7 +502,7 @@ export function HistoryBar({
               whiteSpace: "nowrap",
             }}
           >
-            {dayToDate(epoch, hoverDay).toLocaleDateString("en-GB", {
+            {dayToDate(epoch, hoverDay).toLocaleDateString("en-US", {
               day: "2-digit",
               month: "short",
               year: "numeric",

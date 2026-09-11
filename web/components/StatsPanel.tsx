@@ -149,7 +149,7 @@ function Delta({ now, then }: { now: number; then: number | undefined }) {
         : `${growth > 1 ? "+" : ""}${((growth - 1) * 100).toFixed(1)}%`;
   if (!label) return null;
   return (
-    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label}</span>
+    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label} vs. year ago</span>
   );
 }
 
@@ -303,7 +303,7 @@ export function StatsPanel({
           className="display tabular"
           style={{ fontSize: 26, lineHeight: 1.1, margin: "6px 0 2px" }}
         >
-          {date.toLocaleDateString("en-GB", {
+          {date.toLocaleDateString("en-US", {
             day: "2-digit",
             month: "short",
             year: "numeric",

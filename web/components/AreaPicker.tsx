@@ -143,6 +143,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
       ) : (
         <input
           value={query}
+          id="area-filter"
           placeholder="Filter by country or region"
           aria-label="Filter by country or region"
           onFocus={() => setOpen(true)}

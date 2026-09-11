@@ -27,19 +27,18 @@ const sans = IBM_Plex_Sans({
 
 export const metadata: Metadata = {
   title: "Zone History",
-  description: "Historical QONQR data",
+  description: "Every zone in QONQR, colored by the faction holding it",
   icons: { icon: "/icon.svg" },
   openGraph: {
     title: "Zone History",
-    description: "Historical QONQR data",
+    description: "Every zone in QONQR, colored by the faction holding it",
     siteName: "Zone History",
     type: "website",
-    images: [{ url: "/opengraph-image.svg", width: 1200, height: 630, type: "image/svg+xml" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Zone History",
-    description: "Historical QONQR data",
+    description: "Every zone in QONQR, colored by the faction holding it",
   },
 };
 

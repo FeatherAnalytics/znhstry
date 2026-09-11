@@ -467,13 +467,13 @@ export function ZoneMap({
 
   const graticuleData = useMemo(() => graticule(), []);
 
-  const basemapData = useMemo(
-    () =>
-      ["a", "b", "c", "d"].map(
-        (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png`,
-      ),
-    [],
-  );
+  const basemapData = useMemo(() => {
+    const key = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+    const suffix = key ? `?key=${key}` : "";
+    return ["a", "b", "c", "d"].map(
+      (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png${suffix}`,
+    );
+  }, []);
 
   const boundaryData = useMemo(
     () =>
@@ -493,7 +493,7 @@ export function ZoneMap({
     // zoom past a state line and there was nothing on screen to tell you where
     // you were. This is CARTO's dark basemap - coastlines, water, roads and
     // place names, drawn dark specifically to sit under data rather than
-    // compete with it. No API key, and attribution is rendered below.
+    // compete with it. Attribution is rendered below.
     new TileLayer({
       id: "basemap",
       data: basemapData,
@@ -667,16 +667,18 @@ export function ZoneMap({
       style={{ position: "absolute", inset: "0" }}
       getCursor={({ isDragging }) => (isDragging ? "grabbing" : "crosshair")}
     >
-      {/* Required by the basemap's licence, not decoration. Kept small and
-          dim, but it has to be on screen wherever those tiles are. */}
+      {/* Required by the basemap's license, not decoration. Kept small and
+          dim, but it has to be on screen wherever those tiles are. Left side
+          so the stats panel (desktop) never covers it; on compact screens
+          the bottom offset clears the bottom sheet at peek. */}
       <a
         href="https://carto.com/attributions"
         target="_blank"
         rel="noreferrer noopener"
-        className="eyebrow"
+        className="eyebrow basemap-attr"
         style={{
           position: "absolute",
-          right: 8,
+          left: 8,
           bottom: 6,
           zIndex: 5,
           fontSize: 9,

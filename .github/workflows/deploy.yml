@@ -48,6 +48,8 @@ jobs:
           # Where the browser fetches payloads from. Set as a repository
           # variable, not a secret: it is a public URL the page exposes anyway.
           NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+          # Optional CARTO basemap API key. Without it tiles are watermarked.
+          NEXT_PUBLIC_CARTO_API_KEY: ${{ vars.CARTO_API_KEY }}
 
       # A site built against an empty or missing origin looks like a code bug
       # rather than a configuration one, so fail here instead.

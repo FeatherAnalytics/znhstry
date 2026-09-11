@@ -74,6 +74,15 @@ button {
   outline-offset: 2px;
 }
 
+/* On compact screens the bottom sheet covers the map from the bottom up.
+   The peek stop is 14vh, so the attribution must sit above it. The 900 px
+   breakpoint matches COMPACT_MAX in useCompact.ts. */
+@media (max-width: 900px) {
+  .basemap-attr {
+    bottom: calc(14vh + 6px) !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

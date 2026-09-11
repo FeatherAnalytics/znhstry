@@ -78,25 +78,28 @@ function formatDelta(n: number): string {
 
 export default function ZoneDetail({ zoneKey, month, obsTimestamps, onClose }: Props) {
   const data = month.zones[zoneKey];
-  if (!data) return null;
-
-  const lastIdx = month.observations.length - 1;
-  const holder = holderOf(data, lastIdx);
 
   const series: Series[] = useMemo(
     () =>
-      FACTION_ORDER.map((f) => ({
-        label: f,
-        color: factionHex(f),
-        values: data[f.toLowerCase() as "legion" | "swarm" | "faceless"],
-      })),
+      data
+        ? FACTION_ORDER.map((f) => ({
+            label: f,
+            color: factionHex(f),
+            values: data[f.toLowerCase() as "legion" | "swarm" | "faceless"],
+          }))
+        : [],
     [data],
   );
 
   const deltas = useMemo(
-    () => computeDeltas(data.legion, data.swarm, data.faceless),
+    () => (data ? computeDeltas(data.legion, data.swarm, data.faceless) : []),
     [data],
   );
+
+  if (!data) return null;
+
+  const lastIdx = month.observations.length - 1;
+  const holder = holderOf(data, lastIdx);
 
   return (
     <div style={section}>

@@ -188,7 +188,7 @@ export default function Page() {
     const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Bounds are read when a series is built rather than tracked in state, so
   // panning does not rebuild a series on every frame.
@@ -717,7 +717,6 @@ export default function Page() {
       })}`,
       value: net("legion") + net("swarm") + net("faceless"),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timelapse, history, day, rangeStart, changing, meta]);
 
   // --- hover: the map's bucket now, the record a moment later ---------------

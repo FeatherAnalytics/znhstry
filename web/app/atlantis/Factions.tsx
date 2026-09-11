@@ -334,11 +334,11 @@ function bucketize(entries: BucketEntry[], isZones: boolean, bins: number) {
 function FactionHistogram({ data, field, label, perDay, bins }: { data: FM[]; field: "zones" | "kills"; label: string; perDay: boolean; bins?: number }) {
   const isZones = field === "zones";
   const entries = bucketEntries(data, field, perDay);
-  if (entries.length === 0) return null;
-
-  const { buckets, bucketCount, min, step } = bucketize(entries, isZones, bins ?? 10);
-  const maxStack = Math.max(...Array.from({ length: bucketCount }, (_, i) => FACTIONS.reduce((s, f) => s + buckets[f][i], 0)), 1);
+  const { buckets, bucketCount, min, step } = entries.length > 0 ? bucketize(entries, isZones, bins ?? 10) : { buckets: {}, bucketCount: 0, min: 0, step: 1 };
   const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(bucketCount);
+
+  if (entries.length === 0) return null;
+  const maxStack = Math.max(...Array.from({ length: bucketCount }, (_, i) => FACTIONS.reduce((s, f) => s + (buckets[f]?.[i] ?? 0), 0)), 1);
 
   return (
     <div style={{ flex: 1, minWidth: 180 }}>
@@ -424,8 +424,8 @@ interface GroupedBarsProps {
 
 function GroupedBars({ data, xField, yFn, label, xLabel }: GroupedBarsProps) {
   const { xVals, means, ns, maxMean } = groupMeans(data, xField, yFn);
-  if (xVals.length === 0) return null;
   const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(xVals.length);
+  if (xVals.length === 0) return null;
 
   return (
     <div style={{ flex: "1 1 320px", minWidth: 320 }}>

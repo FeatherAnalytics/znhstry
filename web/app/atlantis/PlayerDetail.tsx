@@ -132,12 +132,13 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
 
 export default function PlayerDetail({ faction, playerName, month, obsTimestamps, onClose }: Props) {
   const data = month.players[faction]?.[playerName];
-  if (!data) return null;
 
   const intervals = useMemo(
-    () => deriveIntervals(data.launches, obsTimestamps),
-    [data.launches, obsTimestamps],
+    () => (data ? deriveIntervals(data.launches, obsTimestamps) : []),
+    [data, obsTimestamps],
   );
+
+  if (!data) return null;
 
   const factionTotal = Object.values(month.players[faction] ?? {}).reduce(
     (sum, p) => sum + (p.qredits ?? 0), 0,

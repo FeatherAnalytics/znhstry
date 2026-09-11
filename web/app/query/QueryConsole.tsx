@@ -386,12 +386,6 @@ function Errors({ bootError, error }: { bootError: string | null; error: string 
   );
 }
 
-function initialSql(): string {
-  if (typeof window === "undefined") return STARTER_SQL;
-  const param = new URLSearchParams(window.location.search).get("sql");
-  return param ?? STARTER_SQL;
-}
-
 function sqlPermalink(sql: string): string {
   const url = new URL(window.location.href);
   url.searchParams.set("sql", sql);
@@ -401,17 +395,20 @@ function sqlPermalink(sql: string): string {
 export default function QueryConsole() {
   const { warehouse, bootError } = useWarehouse();
   const { run, running, result, error } = useQuery(warehouse);
-  const [sql, setSql] = useState(initialSql);
+  const [sql, setSql] = useState(STARTER_SQL);
   const [csvNote, setCsvNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const autoRan = useRef(false);
   const meta = warehouse?.meta ?? null;
 
-  // Run the ?sql= query on first load once DuckDB is ready.
+  // Read ?sql= after mount to avoid a hydration mismatch, then auto-run.
   useEffect(() => {
     if (!warehouse || autoRan.current) return;
     autoRan.current = true;
-    void run(sql);
+    const param = new URLSearchParams(window.location.search).get("sql");
+    const query = param ?? sql;
+    if (param) setSql(param);
+    void run(query);
   }, [warehouse]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRun = () => {
@@ -420,10 +417,10 @@ export default function QueryConsole() {
     void run(sql);
   };
   const onCopyLink = () => {
-    void navigator.clipboard.writeText(sqlPermalink(sql)).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard.writeText(sqlPermalink(sql)).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+      () => { setCopied(false); },
+    );
   };
   const onDownload = () => {
     if (result === null) return;

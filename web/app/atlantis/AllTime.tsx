@@ -184,14 +184,15 @@ function yearGap(m: string): number { return m.endsWith("-01") ? 4 : 0; }
 interface FactionMonthVal { month: string; total: number; byFaction: Record<string, number> }
 
 function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMonths: string[] }) {
-  if (props.data.length === 0) return null;
   const months = props.allMonths;
+  const bar = useBarHover(months.length);
+
+  if (props.data.length === 0) return null;
   const valMap = new Map(props.data.map(d => [d.month, d]));
   const maxV = Math.max(...props.data.map(d => d.total), 1);
   const medianV = median(props.data.map(d => d.total));
   const h = 240;
   const maxBarW = 20;
-  const bar = useBarHover(months.length);
   const hm = bar.index != null ? months[bar.index] : null;
   const hd = hm ? valMap.get(hm) : null;
   return (
@@ -244,17 +245,18 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
 function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const w = useWidth(containerRef);
-  if (data.length < 2) return null;
   const months = allMonths ?? data.map(d => d.month);
+  const step = w / Math.max(months.length - 1, 1);
+  const { hover, onPointerMove, onPointerLeave } = useChartHover(months.length, step);
+
+  if (data.length < 2) return null;
   const valMap = new Map(data.map(d => [d.month, d.value]));
   let cumMax = 0;
   const cumVals = months.map(m => { cumMax += valMap.get(m) ?? 0; return cumMax; });
   const h = 240;
-  const step = w / Math.max(months.length - 1, 1);
   const ph = h - 18;
   const pts = cumVals.map((v, i) => `${i * step},${4 + ph - (v / cumMax) * ph}`).join(" ");
   const halfY = 4 + ph - (0.5 * ph);
-  const { hover, onPointerMove, onPointerLeave } = useChartHover(months.length, step);
 
   return (
     <div style={{ flex: 1, minWidth: 0 }} ref={containerRef}>

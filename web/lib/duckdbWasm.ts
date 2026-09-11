@@ -36,7 +36,6 @@ export interface MartsMeta {
 export interface Warehouse {
   conn: Connection;
   meta: MartsMeta;
-  /** Bind any tables the SQL references that are not yet bound. */
   bind: (sql: string) => Promise<void>;
 }
 
@@ -75,7 +74,7 @@ const quoteString = (text: string): string => `'${text.replaceAll("'", "''")}'`;
 
 function referencedTables(sql: string, known: Set<string>): string[] {
   const words = sql.match(/\b[a-z_][a-z0-9_]*\b/gi) ?? [];
-  return [...new Set(words.filter((w) => known.has(w)))];
+  return [...new Set(words.map((w) => w.toLowerCase()).filter((w) => known.has(w)))];
 }
 
 function makeBinder(conn: Connection, meta: MartsMeta) {
@@ -116,14 +115,16 @@ function makeBinder(conn: Connection, meta: MartsMeta) {
 }
 
 async function open(): Promise<Warehouse> {
-  const conn = await instantiate().catch((error: unknown) => {
-    const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Loading DuckDB: ${msg}`);
-  });
-  const meta = await readMeta().catch((error: unknown) => {
-    const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Reading ${MARTS}/_meta.json: ${msg}`);
-  });
+  const [conn, meta] = await Promise.all([
+    instantiate().catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Loading DuckDB: ${msg}`);
+    }),
+    readMeta().catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Reading ${MARTS}/_meta.json: ${msg}`);
+    }),
+  ]);
   return { conn, meta, bind: makeBinder(conn, meta) };
 }
 

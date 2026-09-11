@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "data": "node ../tools/serve-data.mjs 3002 ../dist/data"
+    "data": "node ../tools/serve-data.mjs 3002 ../dist/data",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@deck.gl/core": "^9.3.8",
@@ -22,6 +23,8 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.5",
     "typescript": "^5.7.0"
   }
 }

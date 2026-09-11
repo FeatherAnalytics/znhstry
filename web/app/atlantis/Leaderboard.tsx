@@ -19,7 +19,7 @@ interface Row {
   faction: string;
   name: string;
   launches: number;
-  bestHr: number;
+  bestHr: number | null;
   tm: boolean;
   wm: boolean;
   qredits: number;
@@ -60,7 +60,7 @@ function playerToRow(faction: string, name: string, data: MonthPayload["players"
     faction,
     name,
     launches,
-    bestHr: intervals.reduce((m, iv) => Math.max(m, iv.perHour), 0),
+    bestHr: intervals.length > 0 ? intervals.reduce((m, iv) => Math.max(m, iv.perHour), 0) : null,
     tm: lastBool(data.tm, lastIdx),
     wm: lastBool(data.wm, lastIdx),
     qredits: data.qredits ?? 0,
@@ -89,7 +89,7 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
   const sorted = useMemo(() => {
     const filtered = filter ? rows.filter((r) => r.faction === filter) : rows;
     return [...filtered].sort((a, b) => {
-      const diff = (a[sortCol] as number) - (b[sortCol] as number);
+      const diff = ((a[sortCol] as number | null) ?? -1) - ((b[sortCol] as number | null) ?? -1);
       return sortAsc ? diff : -diff;
     });
   }, [rows, filter, sortCol, sortAsc]);
@@ -148,7 +148,7 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
                   </span>
                 </td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{Math.round(r.bestHr).toLocaleString()}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.bestHr != null ? Math.round(r.bestHr).toLocaleString() : "—"}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.tm ? "★" : ""}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.wm ? "★" : ""}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(r.qredits)}</td>

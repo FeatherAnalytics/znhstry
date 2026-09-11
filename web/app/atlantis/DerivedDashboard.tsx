@@ -153,7 +153,7 @@ function PlayersTable({ month }: { month: DerivedMonthPayload }) {
                 rows.push(
                   <tr key="unconfirmed-caveat">
                     <td colSpan={7} style={{ ...cellStyle, color: "var(--text-dim)", fontSize: 11 }}>
-                      Faction could not be established from the reports.
+                      Not yet attributed — faction could not be established from the reports.
                     </td>
                   </tr>,
                 );

@@ -108,7 +108,7 @@ function FactionBars({ month, tournament }: { month: MonthPayload; tournament: T
             <span className="tabular" style={{ fontSize: 11, width: 90, textAlign: "right" }}>
               {compact(totals[i])}
             </span>
-            <span className="tabular" style={{ fontSize: 10, color: "var(--text-dim)", width: 60, textAlign: "right" }}>
+            <span className="tabular" style={{ fontSize: 10, color: "var(--text-dim)", width: 90, textAlign: "right" }}>
               est. {compact(rate)}/hr
             </span>
           </div>

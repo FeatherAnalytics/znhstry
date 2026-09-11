@@ -45,7 +45,7 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
     return <span style={{ color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }}>not yet attributed</span>;
   }
   const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString()}`);
-  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} unattributed`);
+  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} not yet attributed`);
   return (
     <span style={{ display: "inline-flex", gap: 3 }} title={parts.join(", ")}>
       {entries.map(([f]) => (
@@ -144,7 +144,7 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
         <tbody>
           {entries.map(([f, d]) => (
             <tr key={f}>
-              <td style={{ ...cellStyle, padding: "4px 8px", color: factionColor(f) }}>{f}</td>
+              <td style={{ ...cellStyle, padding: "4px 8px", color: factionColor(f) }}>{f === "Unconfirmed" ? "Not yet attributed" : f}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString()}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.tournaments}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.qredits > 0 ? compact(d.qredits) : "—"}</td>

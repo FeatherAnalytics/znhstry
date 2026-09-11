@@ -39,13 +39,13 @@ function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
       {labels.map((label, place) => (
         <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 4 : 0 }}>
           <span className="eyebrow" style={{ width: labelW, flexShrink: 0, fontSize: 10 }}>{label}</span>
-          <div style={{ display: "flex", flex: 1, gap: 1 }}>
+          <div style={{ display: "flex", flex: 1, gap: 1, minWidth: 0, overflow: "hidden" }}>
             {sorted.map(t => {
               const faction = t.placements[place]?.[0] ?? null;
               const isYear = t.month.endsWith("-01");
               return (
                 <div key={t.month} title={stripTitle(t)} style={{
-                  flex: "1 1 0", height: 16, borderRadius: 1,
+                  flex: "1 1 0", height: 16, borderRadius: 1, minWidth: 0,
                   background: faction ? factionHex(faction) : "#333",
                   marginLeft: isYear ? 6 : 0,
                 }} />
@@ -54,7 +54,7 @@ function PlacementStrips({ tournaments }: { tournaments: AnyTournament[] }) {
           </div>
         </div>
       ))}
-      <div style={{ display: "flex", paddingLeft: labelW, gap: 1 }}>
+      <div style={{ display: "flex", paddingLeft: labelW, gap: 1, overflow: "hidden" }}>
         {sorted.map(t => {
           const isYear = t.month.endsWith("-01");
           return (

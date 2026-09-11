@@ -487,7 +487,7 @@ export default function Factions({ index }: Props) {
       </div>
 
       <div className="eyebrow" style={{ marginBottom: 8 }}>Length vs outcome</div>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24, overflowX: "auto" }}>
         <GroupedBars data={data} xField="length" yFn={(d, f) => d.zones[f] ?? 0} label="Zones held" xLabel="length (days)" />
         <GroupedBars data={data} xField="length" yFn={(d, f) => d.length > 0 ? (d.launches[f] ?? 0) / d.length : null} label="Launches /day" xLabel="length (days)" />
         <GroupedBars data={data} xField="battle" yFn={(d, f) => d.battle > 0 && f in d.kills ? (d.kills[f] ?? 0) / d.battle : null} label="Kills /battle day" xLabel="battle days" />

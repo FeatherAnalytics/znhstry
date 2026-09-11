@@ -49,8 +49,8 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
   if (entries.length === 0) {
     return <span style={{ color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }}>not yet attributed</span>;
   }
-  const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString()}`);
-  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} not yet attributed`);
+  const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString("en-US")}`);
+  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString("en-US")} not yet attributed`);
   return (
     <span style={{ display: "inline-flex", gap: 3 }} title={parts.join(", ")}>
       {entries.map(([f]) => (
@@ -151,14 +151,14 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
           {entries.map(([f, d]) => (
             <tr key={f}>
               <td style={{ ...cellStyle, padding: "4px 8px", color: factionColor(f) }}>{f === "Unconfirmed" ? "Not yet attributed" : f}</td>
-              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.tournaments}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.qredits > 0 ? compact(d.qredits) : "—"}</td>
             </tr>
           ))}
           <tr style={{ fontWeight: 600 }}>
             <td style={{ ...cellStyle, padding: "4px 8px" }}>Total</td>
-            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.launches.toLocaleString()}</td>
+            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.launches.toLocaleString("en-US")}</td>
             <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.tournaments}</td>
             <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.qredits > 0 ? compact(grand.qredits) : "—"}</td>
           </tr>
@@ -227,7 +227,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
       <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
         {hd ? (
           <>
-            <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString()}
+            <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString("en-US")}
             {FACTION_ORDER.map(f => {
               const v = hd.byFaction[f];
               return v ? <span key={f} style={{ marginLeft: 6, color: factionHex(f) }}>{compact(v)}</span> : null;
@@ -289,7 +289,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
         <span className="tabular" style={{ position: "absolute", left: 0, top: `${(halfY / h) * 100}%`, fontSize: 7, color: "var(--text-dim)" }}>{compact(cumMax / 2)}</span>
       </div>
       <YearLabels months={months} />
-      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString()}</> : null}</div>
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString("en-US")}</> : null}</div>
     </div>
   );
 }
@@ -434,9 +434,9 @@ function PlayerDetailTable({ rows, detailSort, toggleDetailSort, dArrow }: {
                   {faction}
                 </span>
               </td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString()}</td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString()}</td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString("en-US")}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString("en-US")}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
               <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
@@ -557,7 +557,7 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, a
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
                 <td style={{ ...cellStyle, cursor: "pointer" }} onClick={() => onPlayerClick(r.name)}>{r.name}</td>
                 <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.first_month}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.last_month}</td>

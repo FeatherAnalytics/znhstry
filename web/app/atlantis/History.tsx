@@ -58,7 +58,7 @@ function MonthRow(props: { t: AnyTournament; onClick: () => void }) {
       <td style={cellStyle}><PlacementCell placement={t.placements[0]} /></td>
       <td style={cellStyle}><PlacementCell placement={t.placements[1]} /></td>
       <td style={cellStyle}><PlacementCell placement={t.placements[2]} /></td>
-      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString()}</td>
+      <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.players.toLocaleString("en-US")}</td>
       <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.stacking_days}</td>
       <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.battle_days}</td>
       <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{t.stacking_days + t.battle_days}</td>

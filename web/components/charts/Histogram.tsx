@@ -229,7 +229,7 @@ export function Histogram({
         ) : (
           <span style={{ color: "var(--text)" }}>
             {format(bins[hover].lo)}–{format(bins[hover].hi)} {xLabel}:{" "}
-            {bins[hover].count.toLocaleString()} (
+            {bins[hover].count.toLocaleString("en-US")} (
             {((bins[hover].count / total) * 100).toFixed(1)}%)
           </span>
         )}

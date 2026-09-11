@@ -421,6 +421,7 @@ export function HistoryBar({
       <div
         ref={trackRef}
         tabIndex={0}
+        role="img"
         aria-label={`History chart. Showing ${title}. Click to set the date, or use the arrow keys.`}
         onPointerMove={(e) => setHoverDay(dayFromClientX(e.clientX))}
         onPointerLeave={() => setHoverDay(null)}

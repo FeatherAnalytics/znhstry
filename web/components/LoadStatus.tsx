@@ -35,8 +35,8 @@ export function LoadStatus({
 
   return (
     <div style={shell} role="status" aria-live="polite">
-      <span className="tabular">{progress.zones.toLocaleString()}</span>
-      <span style={{ color: "var(--text-dim)" }}> of {totalZones.toLocaleString()} zones</span>
+      <span className="tabular">{progress.zones.toLocaleString("en-US")}</span>
+      <span style={{ color: "var(--text-dim)" }}> of {totalZones.toLocaleString("en-US")} zones</span>
       <div style={track}>
         <div style={{ ...bar, width: `${pct}%` }} />
       </div>

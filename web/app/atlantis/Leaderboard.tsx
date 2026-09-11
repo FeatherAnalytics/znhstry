@@ -147,8 +147,8 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
                     {r.faction}
                   </span>
                 </td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.bestHr != null ? Math.round(r.bestHr).toLocaleString() : "—"}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.bestHr != null ? Math.round(r.bestHr).toLocaleString("en-US") : "—"}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.tm ? "★" : ""}</td>
                 <td style={{ ...cellStyle, textAlign: "center" }}>{r.wm ? "★" : ""}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{compact(r.qredits)}</td>

@@ -247,9 +247,9 @@ function BattleReports({ playerName, month }: { playerName: string; month: Month
                 <td style={btCell}>{btDateFmt.format(new Date(r.day + "T00:00:00Z"))}</td>
                 <td style={btCell}>{r.zone}</td>
                 <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.rank}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString()}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString("en-US")}</td>
               </tr>
             ))}
           </tbody>

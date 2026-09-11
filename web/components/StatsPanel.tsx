@@ -173,6 +173,7 @@ function Row({
   bar,
   strong = false,
   lit = true,
+  allLit = true,
   onSelect,
 }: {
   label: string;
@@ -182,8 +183,10 @@ function Row({
   zones?: string | null;
   bar?: React.ReactNode;
   strong?: boolean;
-  /** False while some other category is the one being emphasised. */
+  /** False while some other category is the one being emphasized. */
   lit?: boolean;
+  /** True when no category is isolated (all bits set). */
+  allLit?: boolean;
   onSelect?: () => void;
 }) {
   const body = (
@@ -227,7 +230,7 @@ function Row({
     <button
       type="button"
       onClick={onSelect}
-      aria-pressed={lit}
+      aria-pressed={lit && !allLit}
       title={lit ? `Isolate ${label} on the map` : `Add ${label} back to the map`}
       style={{
         display: "block",
@@ -336,6 +339,7 @@ export function StatsPanel({
             label={faction.label}
             swatch={faction.color}
             lit={(emphasis & EMPHASIS[faction.key]) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis(faction.key) : undefined}
             aside={!changeLabel ? <Delta now={value} then={previous?.[faction.key]} /> : undefined}
             bots={pending ? "—" : figure(value, changeLabel !== null)}
@@ -395,12 +399,14 @@ export function StatsPanel({
           <Row
             label="Empty"
             lit={(emphasis & EMPHASIS.empty) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis("empty") : undefined}
             zones={exactNumber(zones.emptied)}
           />
           <Row
             label="Never played"
             lit={(emphasis & EMPHASIS.neverPlayed) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis("neverPlayed") : undefined}
             zones={exactNumber(zones.neverPlayed)}
           />

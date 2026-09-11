@@ -205,7 +205,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
                 {area.detail}
               </span>
               <span className="tabular" style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                {area.zones.toLocaleString()}
+                {area.zones.toLocaleString("en-US")}
               </span>
             </button>
           ))}

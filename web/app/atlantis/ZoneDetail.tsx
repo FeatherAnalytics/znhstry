@@ -187,9 +187,9 @@ function ZoneBattleReports({ zoneKey, month }: { zoneKey: string; month: MonthPa
                 <td style={btCell}>{btDateFmt.format(new Date(r.day + "T00:00:00Z"))}</td>
                 <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.rank}</td>
                 <td style={btCell}>{r.player}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString()}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString("en-US")}</td>
               </tr>
             ))}
           </tbody>

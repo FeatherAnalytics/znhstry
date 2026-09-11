@@ -1,6 +1,6 @@
 "use client";
 
-import { dateToDay, dayToDate } from "@/lib/format";
+import { dateToDay, dayToDate } from "@/lib/format" ;
 import type { Backdrop } from "@/lib/timelapse";
 import type { Flashpoint } from "@/lib/flashpoints";
 
@@ -307,9 +307,9 @@ export function TimelapseBar({
               count of the amber rings: a MAZ ring is a trailing 30-day window, so
               the number rises and falls with the window rather than with anything
               happening, and it answers no question the rings do not answer better. */}
-          {bounds ? `${(bounds.max - bounds.min).toLocaleString()} days · ` : ""}
-          {flips.toLocaleString()} changed hands
-          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString()} claimed` : ""}
+          {bounds ? `${(bounds.max - bounds.min).toLocaleString("en-US")} days · ` : ""}
+          {flips.toLocaleString("en-US")} changed hands
+          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString("en-US")} claimed` : ""}
         </span>
       </div>
 

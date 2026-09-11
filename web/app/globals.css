@@ -92,6 +92,40 @@ button {
   }
 }
 
+/* Range slider in the site's dark palette so it does not flash browser-default
+   bright blue. */
+input[type="range"] {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 20px;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline-bright);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  margin-top: -5px;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline-bright);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: var(--text);
+}
+
 /* Footnotes visible only on compact screens where title tooltips are
    unreachable. Desktop keeps the title attribute. */
 .compact-footnote {

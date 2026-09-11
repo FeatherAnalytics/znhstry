@@ -222,7 +222,7 @@ export function TimeSeries({
           )
         ) : (
           <span style={{ color: "var(--text)" }}>
-            {labelOf(day[hover])}: {Math.round(value[hover]).toLocaleString()}
+            {labelOf(day[hover])}: {Math.round(value[hover]).toLocaleString("en-US")}
           </span>
         )}
       </div>

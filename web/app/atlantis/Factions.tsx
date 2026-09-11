@@ -599,7 +599,7 @@ function SeenBar({ counts, label, allMonths, maxY, data }: SeenBarProps) {
       <YearLabels months={data.map(d => d.month)} />
       <div style={readoutStyle}>
         {hoverIdx != null ? (
-          <><span style={{ fontWeight: 600 }}>{allMonths[hoverIdx]}</span>: {(counts[allMonths[hoverIdx]] ?? 0).toLocaleString()}</>
+          <><span style={{ fontWeight: 600 }}>{allMonths[hoverIdx]}</span>: {(counts[allMonths[hoverIdx]] ?? 0).toLocaleString("en-US")}</>
         ) : null}
       </div>
     </div>

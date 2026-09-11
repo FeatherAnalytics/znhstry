@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BASE } from "@/lib/dataOrigin";
-import { dateToDay, loadJson } from "@/lib/format";
+import { dateToDay, loadJson } from "@/lib/format" ;
 import { dayToDate } from "@/lib/data";
 import type { Meta } from "@/lib/data";
 import { loadNames } from "@/lib/names";
@@ -271,20 +271,20 @@ export default function PrototypePage() {
             <section style={{ marginBottom: 26 }}>
               <Tiles
                 items={[
-                  { label: "reports", value: stats.reports.reportCount.toLocaleString() },
-                  { label: "zones", value: derived.zones.toLocaleString() },
-                  { label: "days covered", value: derived.days.toLocaleString() },
+                  { label: "reports", value: stats.reports.reportCount.toLocaleString("en-US") },
+                  { label: "zones", value: derived.zones.toLocaleString("en-US") },
+                  { label: "days covered", value: derived.days.toLocaleString("en-US") },
                   {
                     label: "median launches / report",
-                    value: Math.round(derived.perReport.median).toLocaleString(),
+                    value: Math.round(derived.perReport.median).toLocaleString("en-US"),
                   },
                   {
                     label: "p99 launches / report",
-                    value: Math.round(derived.perReport.p99).toLocaleString(),
+                    value: Math.round(derived.perReport.p99).toLocaleString("en-US"),
                   },
                   {
                     label: "busiest single report",
-                    value: Math.round(derived.perReport.max).toLocaleString(),
+                    value: Math.round(derived.perReport.max).toLocaleString("en-US"),
                   },
                 ]}
               />
@@ -312,11 +312,11 @@ export default function PrototypePage() {
                 ]}
               />
               <Note>
-                Median {Math.round(derived.perReport.median).toLocaleString()} against a mean of{" "}
-                {Math.round(derived.perReport.mean).toLocaleString()} — the gap between the two
+                Median {Math.round(derived.perReport.median).toLocaleString("en-US")} against a mean of{" "}
+                {Math.round(derived.perReport.mean).toLocaleString("en-US")} — the gap between the two
                 rules is the tail, and it is why nothing here should ever be quoted as an
-                average. p90 is {Math.round(derived.perReport.p90).toLocaleString()}, p99 is{" "}
-                {Math.round(derived.perReport.p99).toLocaleString()}.
+                average. p90 is {Math.round(derived.perReport.p90).toLocaleString("en-US")}, p99 is{" "}
+                {Math.round(derived.perReport.p99).toLocaleString("en-US")}.
               </Note>
             </Card>
 
@@ -334,7 +334,7 @@ export default function PrototypePage() {
               />
               <Note>
                 Do not compare days on this chart. The top ten is exactly ten reports on{" "}
-                {derived.tenReportDays.toLocaleString()} of {derived.days.toLocaleString()} days
+                {derived.tenReportDays.toLocaleString("en-US")} of {derived.days.toLocaleString("en-US")} days
                 but runs from {derived.reportsPerDay.min} to {derived.reportsPerDay.max}, so a
                 raw sum lets a day out-total another by being bigger rather than busier. The
                 next card divides it out.
@@ -361,12 +361,12 @@ export default function PrototypePage() {
                 markers={[{ at: derived.rateSummary.median, label: "median" }]}
               />
               <Note>
-                Median {Math.round(derived.rateSummary.median).toLocaleString()} launches per
-                report on a typical day, p90 {Math.round(derived.rateSummary.p90).toLocaleString()}
-                , busiest day {Math.round(derived.rateSummary.max).toLocaleString()}. Tighter than
+                Median {Math.round(derived.rateSummary.median).toLocaleString("en-US")} launches per
+                report on a typical day, p90 {Math.round(derived.rateSummary.p90).toLocaleString("en-US")}
+                , busiest day {Math.round(derived.rateSummary.max).toLocaleString("en-US")}. Tighter than
                 the per-report distribution two cards up (median{" "}
-                {Math.round(derived.perReport.median).toLocaleString()}, p90{" "}
-                {Math.round(derived.perReport.p90).toLocaleString()}) because averaging ten zones
+                {Math.round(derived.perReport.median).toLocaleString("en-US")}, p90{" "}
+                {Math.round(derived.perReport.p90).toLocaleString("en-US")}) because averaging ten zones
                 pulls each day toward the middle — the spread that survives is between days, not
                 within them, and that is the quantity §7.2.3 regresses cluster size against.
               </Note>
@@ -397,21 +397,21 @@ export default function PrototypePage() {
               note="§7.2 — both lists are short enough to name every entry, which is the point of calling them out rather than leaving them in a tail."
             >
               <Table
-                caption={`Single reports at ${BIG_REPORT.toLocaleString()}+ launches`}
+                caption={`Single reports at ${BIG_REPORT.toLocaleString("en-US")}+ launches`}
                 head={["date", "zone", "launches", "players", "per player", ""]}
                 align={["left", "left"]}
                 rows={derived.bigReports.map((r) => [
                   labelOf(r.day),
                   names[r.idx] || `zone ${r.idx}`,
-                  r.launches.toLocaleString(),
-                  r.players.toLocaleString(),
-                  r.players ? Math.round(r.launches / r.players).toLocaleString() : "—",
+                  r.launches.toLocaleString("en-US"),
+                  r.players.toLocaleString("en-US"),
+                  r.players ? Math.round(r.launches / r.players).toLocaleString("en-US") : "—",
                   <PortalLink key="link" report={r.report} />,
                 ])}
               />
               <Note>
                 {derived.bigReports.length} reports, against a median of{" "}
-                {Math.round(derived.perReport.median).toLocaleString()} launches — roughly
+                {Math.round(derived.perReport.median).toLocaleString("en-US")} launches — roughly
                 eighteen times a normal day&rsquo;s fighting on one zone.{" "}
                 <strong>Read the last column before the third.</strong> The largest report in the
                 record came from two active players and the second largest from two hundred;
@@ -422,20 +422,20 @@ export default function PrototypePage() {
               <div style={{ height: 22 }} />
 
               <Table
-                caption={`Whole MAZ days at ${BIG_DAY.toLocaleString()}+ total launches`}
+                caption={`Whole MAZ days at ${BIG_DAY.toLocaleString("en-US")}+ total launches`}
                 head={["date", "launches", "reports", "players"]}
                 align={["left"]}
                 subject={0}
                 rows={derived.bigDays.map((d) => [
                   labelOf(d.day),
-                  d.launches.toLocaleString(),
+                  d.launches.toLocaleString("en-US"),
                   String(d.reports),
-                  d.players.toLocaleString(),
+                  d.players.toLocaleString("en-US"),
                 ])}
               />
               <Note>
-                {derived.bigDays.length} days out of {derived.days.toLocaleString()}, against a
-                median day of {Math.round(derived.dailySummary.median).toLocaleString()}. Players
+                {derived.bigDays.length} days out of {derived.days.toLocaleString("en-US")}, against a
+                median day of {Math.round(derived.dailySummary.median).toLocaleString("en-US")}. Players
                 are summed across the day&rsquo;s reports — there is no player key in this
                 payload, so somebody fighting two zones counts twice. No link column here: the
                 portal has a page per report and none for a day, and pointing at the day&rsquo;s
@@ -501,8 +501,8 @@ export default function PrototypePage() {
                       % of days have no two of the world&rsquo;s most active zones within thirty
                       miles of each other
                     </strong>{" "}
-                    — {(derived.days - clusters.largestByDay.length).toLocaleString()} of{" "}
-                    {derived.days.toLocaleString()}. Concentration is the exception, and that is
+                    — {(derived.days - clusters.largestByDay.length).toLocaleString("en-US")} of{" "}
+                    {derived.days.toLocaleString("en-US")}. Concentration is the exception, and that is
                     the honest headline for this section: a MAZ day is normally ten unrelated
                     fights.
                   </Note>
@@ -534,7 +534,7 @@ export default function PrototypePage() {
                     a state. A ⚑ marks a cluster spanning more than one region, which the old
                     grouping-by-region-name could only ever have seen as two smaller ones.
                     {clusters.missing > 0
-                      ? ` ${clusters.missing.toLocaleString()} reports had no coordinate loaded and were skipped.`
+                      ? ` ${clusters.missing.toLocaleString("en-US")} reports had no coordinate loaded and were skipped.`
                       : ""}
                   </Note>
                 </>
@@ -588,8 +588,8 @@ export default function PrototypePage() {
                   {((100 * derived.shape.oneSided) / derived.shape.total).toFixed(1)}% of reports
                   are one-sided
                 </strong>{" "}
-                — a single faction launching everything, {derived.shape.oneSided.toLocaleString()}{" "}
-                of {derived.shape.total.toLocaleString()}. Only{" "}
+                — a single faction launching everything, {derived.shape.oneSided.toLocaleString("en-US")}{" "}
+                of {derived.shape.total.toLocaleString("en-US")}. Only{" "}
                 {((100 * derived.shape.threeWay) / derived.shape.total).toFixed(1)}% have all
                 three factions launching at all. &ldquo;Most active zone&rdquo; means most
                 <em> activity</em>, and a garrison being built alone counts.
@@ -608,11 +608,11 @@ export default function PrototypePage() {
                 xLabel="days on the board"
               />
               <Note>
-                {derived.appearOnce.toLocaleString()} of {derived.zones.toLocaleString()} zones
+                {derived.appearOnce.toLocaleString("en-US")} of {derived.zones.toLocaleString("en-US")} zones
                 appear exactly once —{" "}
                 {((100 * derived.appearOnce) / derived.zones).toFixed(1)}% — while the leader
-                takes {derived.topAppearances.toLocaleString()} of{" "}
-                {derived.days.toLocaleString()} covered days. The mean of{" "}
+                takes {derived.topAppearances.toLocaleString("en-US")} of{" "}
+                {derived.days.toLocaleString("en-US")} covered days. The mean of{" "}
                 {(stats.reports.reportCount / derived.zones).toFixed(1)} describes neither end.
               </Note>
 
@@ -625,9 +625,9 @@ export default function PrototypePage() {
                 xLabel="consecutive days"
               />
               <Note>
-                {derived.streakOverOne.toLocaleString()} zones (
+                {derived.streakOverOne.toLocaleString("en-US")} zones (
                 {((100 * derived.streakOverOne) / derived.streakZones).toFixed(1)}%) ever managed
-                two days in a row; the record is {derived.longestStreak.toLocaleString()}. Streaks
+                two days in a row; the record is {derived.longestStreak.toLocaleString("en-US")}. Streaks
                 were built as a ring encoding for the timelapse and rejected for flickering —
                 that says nothing about their value as a statistic, which is this.
               </Note>
@@ -656,8 +656,8 @@ export default function PrototypePage() {
                 </li>
               </ul>
               <Note>
-                Top zone appears on {derived.topAppearances.toLocaleString()} of{" "}
-                {derived.days.toLocaleString()} covered days.
+                Top zone appears on {derived.topAppearances.toLocaleString("en-US")} of{" "}
+                {derived.days.toLocaleString("en-US")} covered days.
               </Note>
             </Card>
           </>
@@ -760,7 +760,7 @@ function PortalLink({ report }: { report: number }) {
       href={portalReportUrl(report)}
       target="_blank"
       rel="noreferrer"
-      title={`Battle report ${report.toLocaleString()} on portal.qonqr.com`}
+      title={`Battle report ${report.toLocaleString("en-US")} on portal.qonqr.com`}
       style={{ color: MAZ_AMBER, textDecoration: "none", whiteSpace: "nowrap" }}
     >
       report ↗

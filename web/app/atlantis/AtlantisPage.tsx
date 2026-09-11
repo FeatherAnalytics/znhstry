@@ -160,6 +160,7 @@ export default function AtlantisPage() {
           <select
             value={resolvedMonth ?? ""}
             onChange={(e) => setParam("t", e.target.value)}
+            aria-label="Tournament month"
             style={{ ...btnStyle, appearance: "auto" }}
           >
             {[...allTournaments].reverse().map((t) => {

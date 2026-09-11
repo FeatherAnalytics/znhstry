@@ -175,11 +175,10 @@ export default function Page() {
       canvasSize.current = { width: w, height: h };
       if (hasInteracted.current) return;
       const zoom = Math.log2(w / 512);
-      const portrait = h > w;
       setViewState((v) => ({
         ...v,
         zoom,
-        ...(portrait ? { longitude: -40 } : null),
+        longitude: h > w ? -40 : INITIAL_VIEW.longitude,
       }));
     };
     fit();

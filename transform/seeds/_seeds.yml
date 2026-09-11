@@ -1,0 +1,10 @@
+version: 2
+
+seeds:
+  - name: atlantis_player_faction_overrides
+    config:
+      column_types:
+        tournament_month: date
+        player_name: varchar
+        faction: varchar
+        note: varchar

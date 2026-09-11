@@ -50,3 +50,8 @@ export const FACTIONS = [
   { key: "swarm", label: "Swarm", token: "var(--swarm)", hex: "#22d07e" },
   { key: "faceless", label: "Faceless", token: "var(--faceless)", hex: "#9b6dff" },
 ] as const;
+
+/** Placement colors — not faction facts, so they are their own tokens. */
+export const PLACEMENT_GOLD = "#d4a017";
+export const PLACEMENT_SILVER = "#8a8a8a";
+export const PLACEMENT_BRONZE = "#a0522d";

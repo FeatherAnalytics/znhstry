@@ -132,7 +132,10 @@ month_agg as (
         tournament_month,
         count(distinct (reported_zone_name, reported_region_name)) as zone_count,
         count(distinct battle_report_number) as reports,
-        sum(total_launches) as launches_total
+        sum(total_launches) as launches_total,
+        sum(legion_total_launches) as legion_launches,
+        sum(swarm_total_launches) as swarm_launches,
+        sum(faceless_total_launches) as faceless_launches
     from reports
     group by 1
 ),
@@ -181,10 +184,14 @@ select
     s.reports,
     coalesce(p.players, 0) as players,
     s.launches_total,
+    s.legion_launches,
+    s.swarm_launches,
+    s.faceless_launches,
     t.tournament_month is not null as has_board,
     'reports' as source
 from (
-    select sc.*, ma.zone_count, ma.reports, ma.launches_total
+    select sc.*, ma.zone_count, ma.reports, ma.launches_total,
+           ma.legion_launches, ma.swarm_launches, ma.faceless_launches
     from schedule sc
     join month_agg ma on ma.tournament_month = sc.tournament_month
 ) s

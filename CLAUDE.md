@@ -52,6 +52,7 @@ uv run python -m znhstry restore          # pull data/raw back from R2 — first
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
+uv run python -m znhstry export --only atlantis  # rebuild only atlantis/; requires an existing meta.json from a full export
 
 cd web
 npm run data   # serve dist/data on :3002 — the map is empty without it
@@ -554,6 +555,8 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 **Placements are computed by the game's rule**, ranking factions by zones held at the last observation, with Prime as the first tiebreaker and total faction bots as the second (see "Atlantis marts" above). The label says "Final" on finished months and "If standings held" while one runs, because standings can change until the end and the label must say so.
 
 **Qredits are labeled "estimated" while a month runs.** The payout mart computes each player's share of their placement's pool, but placement is not settled until the last observation. A running month's qredits use the current standings, so the figure moves until the tournament ends.
+
+**Derived months render a static dashboard from battle report data.** No time-series charts (there are no hourly observations); a zones table ordered by triangle replaces the zone cards; players are grouped by attributed faction with an Unconfirmed group at the end; rows are not clickable (no player or zone detail). "Not yet attributed" appears where the backfill has not reached and all players are Unconfirmed. History and All Time merge derived months with collected ones, labeled "derived" in muted text.
 
 ## Where the data comes from
 
@@ -1169,6 +1172,16 @@ find dist/data/global -name '*.br' -exec md5sum {} + | sort | diff /tmp/a -
 
 `paint/`, the current year's `display/` shard and the touched `zone_history/` blocks will
 differ on any run that picks up new events. Nothing else may.
+
+For an atlantis-only change, the recipe scopes to that tree:
+
+```bash
+find dist/data/global/atlantis -name '*.br' -o -name '*.json' | sort | xargs md5 -r > /tmp/a
+cd pipeline && uv run python -m znhstry export --only atlantis && cd ..
+find dist/data/global/atlantis -name '*.br' -o -name '*.json' | sort | xargs md5 -r | diff /tmp/a -
+```
+
+The nightly keeps the full export; `--only atlantis` is for decoupled iteration.
 
 `_previous_index` hands the stable index to DuckDB **through a temporary Parquet file**, not
 `con.register`. Passing a polars frame directly goes through Arrow and so needs pyarrow, a

@@ -62,10 +62,16 @@ sources:
           external_location: "read_parquet('../data/raw/battlestats/players/**/*.parquet', hive_partitioning=true)"
       - name: battlestats_player_factions
         description: >
-          Per-player faction attribution from the solve algorithm. One row per
-          tournament month per player with their attributed faction and evidence.
+          Per-player faction attribution. One row per tournament month per player
+          with their attributed faction and evidence.
         meta:
-          external_location: "read_parquet('../data/raw/battlestats/player_factions/*.parquet')"
+          external_location: "read_parquet('../data/raw/battlestats/player_factions/rows.parquet')"
+      - name: battlestats_faction_review
+        description: >
+          Player-months where the scraped faction may be wrong: the header totals
+          contradict the scraped-faction sums and no reconciling report exists.
+        meta:
+          external_location: "read_parquet('../data/raw/battlestats/player_factions/review.parquet')"
       - name: atlantis_leaderboard
         description: >
           The monthly tournament leaderboard at `portal.qonqr.com/Atlantis`, one row per

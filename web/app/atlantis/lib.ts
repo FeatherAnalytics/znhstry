@@ -2,7 +2,13 @@ import { FACTIONS } from "@/components/charts/palette";
 
 export interface AtlantisIndex {
   tournaments: TournamentSummary[];
-  all_time: { players: AllTimePlayer[]; factions: Record<string, FactionAllTime> };
+  tournaments_derived?: DerivedTournamentSummary[];
+  all_time: {
+    players: AllTimePlayer[];
+    factions: Record<string, FactionAllTime>;
+    players_derived?: AllTimePlayer[];
+    factions_derived?: Record<string, FactionAllTime>;
+  };
 }
 
 export interface TournamentSummary {
@@ -20,14 +26,43 @@ export interface TournamentSummary {
   last_observed_at: string;
   placements: [string, number, number][];
   top: Record<string, [string, number]>;
+  launches: Record<string, number>;
+  kills: Record<string, number>;
+  faction_players?: Record<string, number>;
+  is_derived_placements?: boolean;
   source?: string;
 }
 
-export type AllTimePlayer = [string, string, number, number, number];
+export interface FactionDetail {
+  launches: number;
+  tournaments: number;
+  qredits: number;
+}
+
+export interface AllTimePlayer {
+  name: string;
+  factions: Record<string, FactionDetail>;
+  launches: number;
+  tournaments: number;
+  unattributed: number;
+  first_month: string;
+  last_month: string;
+  qredits: number | null;
+  is_mercenary: boolean;
+}
 
 export interface FactionAllTime {
   wins: number;
   qredits: number;
+  launches?: number;
+}
+
+export type PlayerMonthRow = [string, string, number, number, number, number | null, number | null, string];
+
+export async function fetchPlayersDetail(base: string): Promise<Record<string, PlayerMonthRow[]>> {
+  const res = await fetch(`${base}/atlantis/players.json.br`);
+  if (!res.ok) throw new Error(`players: ${res.status}`);
+  return res.json();
 }
 
 export interface MonthPayload {
@@ -186,7 +221,81 @@ export function computePerHourRates(
 
 export const FACTION_ORDER = ["Legion", "Swarm", "Faceless"] as const;
 
+export interface DerivedTournamentSummary {
+  month: string;
+  source: "reports";
+  has_board: boolean;
+  stacking_days: number;
+  battle_days: number;
+  starts_at: string;
+  ends_at: string;
+  end_tolerance_days: number;
+  placement_tiebreak: string | null;
+  schedule_note: string | null;
+  zone_count: number;
+  winner: string | null;
+  reports: number;
+  players: number;
+  launches_total: number;
+  first_report_date: string;
+  last_report_date: string;
+  placements: [string, number, number][];
+  top: Record<string, [string, number]>;
+  launches: Record<string, number>;
+  kills: Record<string, number>;
+  faction_players?: Record<string, number>;
+}
+
+export interface DerivedZone {
+  name: string;
+  triangle: string;
+  position: number | null;
+  legion: number;
+  swarm: number;
+  faceless: number;
+  holder: string | null;
+}
+
+export interface DerivedPlayerData {
+  launches: number;
+  bots_killed: number;
+  bots_lost: number;
+  reports: number;
+  faction_source: string;
+  is_mercenary: boolean;
+  qredits_estimate: number | null;
+}
+
+export interface DerivedMonthPayload {
+  month: string;
+  source: "reports";
+  placements: [string, number, number][];
+  zones: DerivedZone[];
+  players: Record<string, Record<string, DerivedPlayerData>>;
+}
+
+export type AnyTournament = (TournamentSummary & { source?: string }) | DerivedTournamentSummary;
+
+export function mergedTournaments(index: AtlantisIndex): AnyTournament[] {
+  const board: AnyTournament[] = index.tournaments.map((t) => ({ ...t }));
+  const derived: AnyTournament[] = index.tournaments_derived ?? [];
+  const boardMonths = new Set(board.map((t) => t.month));
+  const all = [...board, ...derived.filter((d) => !boardMonths.has(d.month))];
+  return all.sort((a, b) => a.month.localeCompare(b.month));
+}
+
+export function isDerived(t: AnyTournament): t is DerivedTournamentSummary {
+  return t.source === "reports";
+}
+
+export async function fetchDerivedMonth(base: string, month: string): Promise<DerivedMonthPayload> {
+  const res = await fetch(`${base}/atlantis/${month}.json.br`);
+  if (!res.ok) throw new Error(`${month}: ${res.status}`);
+  return res.json();
+}
+
 export function compact(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(n < 10_000 ? 1 : 0)}k`;
   return `${Math.round(n)}`;

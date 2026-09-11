@@ -81,6 +81,11 @@ def main() -> int:
         action="store_true",
         help="Backfill step only. Print targets without fetching.",
     )
+    parser.add_argument(
+        "--only",
+        choices=["atlantis"],
+        help="Export step only. Rebuild only the named tree and patch meta.json.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -112,7 +117,10 @@ def _run_wayback() -> None:
 
 
 _DISPATCH = {
-    "export": lambda a: export.export_all(a.scope),
+    "export": lambda a: (
+        export.export_atlantis_only(a.scope) if a.only == "atlantis"
+        else export.export_all(a.scope)
+    ),
     "ingest": _run_ingest,
     "battlestats": lambda _: _emit(reports=portal.scrape_battlestats()),
     "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),

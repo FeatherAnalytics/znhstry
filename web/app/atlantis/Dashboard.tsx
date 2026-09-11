@@ -64,28 +64,81 @@ function Placements({ month, tournament }: { month: MonthPayload; tournament: To
   );
 }
 
-function FactionCharts({ month }: { month: MonthPayload }) {
-  const obsTs = useMemo(() => parseObsTimestamps(month.observations), [month.observations]);
+function hasPositiveGain(month: MonthPayload): boolean {
+  for (const f of FACTION_ORDER) {
+    const fd = month.factions[f];
+    if (!fd) continue;
+    for (let i = 0; i < fd.launches_gained.length; i++) {
+      if ((fd.launches_gained[i] ?? 0) > 0) return true;
+    }
+  }
+  return false;
+}
 
-  const launchesSeries: Series[] = useMemo(
-    () =>
-      FACTION_ORDER.filter((f) => month.factions[f]).map((f) => ({
-        label: f,
-        color: factionHex(f),
-        values: month.factions[f].launches_total.map((v) => v ?? null),
-      })),
-    [month.factions],
-  );
+function FactionBars({ month, tournament }: { month: MonthPayload; tournament: TournamentSummary }) {
+  const length = tournament.stacking_days + tournament.battle_days;
+  const hours = length * 24;
+  const pairs = FACTION_ORDER.filter(f => month.players[f]).map(f => {
+    let sum = 0;
+    for (const p of Object.values(month.players[f] ?? {})) {
+      const arr = p.launches;
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] != null) { sum += arr[i]!; break; }
+      }
+    }
+    return { f, total: sum };
+  }).sort((a, b) => b.total - a.total);
+  const factions = pairs.map(p => p.f);
+  const totals = pairs.map(p => p.total);
+  const max = Math.max(...totals, 1);
 
-  const rateSeries: Series[] = useMemo(
-    () =>
-      FACTION_ORDER.filter((f) => month.factions[f]).map((f) => ({
-        label: f,
-        color: factionHex(f),
-        values: computePerHourRates(month.factions[f].launches_gained, obsTs),
-      })),
-    [month.factions, obsTs],
+  return (
+    <div style={section}>
+      <div className="eyebrow" style={{ marginBottom: 8 }}>Faction launches</div>
+      <div style={{ color: "var(--text-dim)", fontSize: 10, marginBottom: 12 }}>
+        Final-board launches over {length} days
+      </div>
+      {factions.map((f, i) => {
+        const rate = hours > 0 ? totals[i] / hours : 0;
+        return (
+          <div key={f} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ width: 60, fontSize: 11, color: factionColor(f), fontWeight: 600 }}>{f}</span>
+            <div style={{ flex: 1, height: 14, background: "var(--hairline)", borderRadius: 2, overflow: "hidden" }}>
+              <div style={{ width: `${(totals[i] / max) * 100}%`, height: "100%", background: factionHex(f), borderRadius: 2 }} />
+            </div>
+            <span className="tabular" style={{ fontSize: 11, width: 90, textAlign: "right" }}>
+              {compact(totals[i])}
+            </span>
+            <span className="tabular" style={{ fontSize: 10, color: "var(--text-dim)", width: 90, textAlign: "right" }}>
+              est. {compact(rate)}/hr
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
+}
+
+function FactionCharts({ month, tournament }: { month: MonthPayload; tournament: TournamentSummary }) {
+  if (!hasPositiveGain(month)) {
+    return <FactionBars month={month} tournament={tournament} />;
+  }
+
+  const obsTs = parseObsTimestamps(month.observations);
+
+  const launchesSeries: Series[] =
+    FACTION_ORDER.filter((f) => month.factions[f]).map((f) => ({
+      label: f,
+      color: factionHex(f),
+      values: month.factions[f].launches_total.map((v) => v ?? null),
+    }));
+
+  const rateSeries: Series[] =
+    FACTION_ORDER.filter((f) => month.factions[f]).map((f) => ({
+      label: f,
+      color: factionHex(f),
+      values: computePerHourRates(month.factions[f].launches_gained, obsTs),
+    }));
 
   return (
     <div style={{ ...section, display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -113,7 +166,7 @@ export default function Dashboard({ month, tournament, onPlayerClick, onZoneClic
     <>
       <Placements month={month} tournament={tournament} />
       <hr style={divider} />
-      <FactionCharts month={month} />
+      <FactionCharts month={month} tournament={tournament} />
       <hr style={divider} />
       <div style={section}>
         <Leaderboard month={month} obsTimestamps={obsTs} onPlayerClick={onPlayerClick} />

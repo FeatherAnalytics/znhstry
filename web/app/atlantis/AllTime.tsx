@@ -507,7 +507,7 @@ export default function AllTime({ index }: Props) {
       <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Players</div>
       <PlayersTable
         filtered={filtered} filter={filter} onFilterChange={setFilter}
-        sortCol={sortCol} toggleSort={toggleSort} arrow={arrow}
+        sortCol={sortCol} sortAsc={sortAsc} toggleSort={toggleSort} arrow={arrow}
         onPlayerClick={onPlayerClick}
       />
       {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
@@ -515,11 +515,12 @@ export default function AllTime({ index }: Props) {
   );
 }
 
-function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, arrow, onPlayerClick }: {
+function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, toggleSort, arrow, onPlayerClick }: {
   filtered: (AllTimePlayer & { rank: number })[];
   filter: string;
   onFilterChange: (v: string) => void;
   sortCol: SortCol;
+  sortAsc: boolean;
   toggleSort: (col: SortCol) => void;
   arrow: (col: SortCol) => React.ReactNode;
   onPlayerClick: (name: string) => void;
@@ -546,11 +547,11 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, a
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default", width: 40 }}>#</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Factions</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("tournaments")}>Tournaments{arrow("tournaments")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "launches" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("launches")} style={{ padding: 0 }}>Launches{arrow("launches")}</button></th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "tournaments" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("tournaments")} style={{ padding: 0 }}>Tournaments{arrow("tournaments")}</button></th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>First</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>Last</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "qredits" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("qredits")} style={{ padding: 0 }}>Qredits{arrow("qredits")}</button></th>
             </tr>
           </thead>
           <tbody>

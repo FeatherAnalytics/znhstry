@@ -155,7 +155,6 @@ export function ZoneMap({
 }: ZoneMapProps) {
   const colors = useRef(new Uint8Array(geometry.size * 4));
   const radii = useRef(new Float32Array(geometry.size));
-  const drawn = useRef(0);
 
   // The 1,087,356 zones never played in fourteen years. Their colour and radius
   // cannot change with the date - they are empty in every frame of every year -
@@ -194,7 +193,7 @@ export function ZoneMap({
    *
    * Zones the view is not showing keep their row at radius 0 and alpha 0. That
    * is not free - it is what compacting was introduced to avoid - so see
-   * `drawnRow` for how a pick is kept honest, and the terrain layer below for
+   * the pick logic below for how a pick is kept honest, and the terrain layer for
    * the 1,087,356 zones that stay out of here entirely.
    */
   const membership = useMemo(() => {
@@ -365,7 +364,6 @@ export function ZoneMap({
         radiusArray[r] = lit ? 900 : 400;
       }
     }
-    drawn.current = length;
   }, [geometry, membership, display, radiusFor, version, filter, draw, only, maskVersion, emphasis]);
 
   /**

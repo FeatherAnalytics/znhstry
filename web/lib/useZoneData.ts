@@ -471,7 +471,7 @@ export function useZoneData(
     loaderRef.current?.focus(lat, lon);
   }, []);
 
-  return {
+  return useMemo(() => ({
     meta,
     geometry,
     display,
@@ -490,5 +490,9 @@ export function useZoneData(
     progress,
     setDay,
     setFocus,
-  };
+  }), [
+    meta, geometry, display, lookups, zoneIds, series, day, dayBounds,
+    changeStart, shown, held, byFaction, version, flips, pending, progress,
+    setDay, setFocus,
+  ]);
 }

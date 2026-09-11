@@ -130,17 +130,17 @@ export default function Leaderboard({ month, obsTimestamps, onPlayerClick }: Pro
             <tr>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left" }}>Faction</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("bestHr")}>Best /hr{arrow("bestHr")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "launches" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("launches")} style={{ padding: 0 }}>Launches{arrow("launches")}</button></th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "bestHr" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("bestHr")} style={{ padding: 0 }}>Best /hr{arrow("bestHr")}</button></th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Tournament Million Kills: 1,000,000+ kills in the current tournament (atlantis-gold badge)">Tournament 1M</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "center" }} title="Weekly Million Kills: 1,000,000+ kills this week outside the tournament, weeks start 00:00 UTC Sunday (gold-star badge)">Weekly 1M</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}{!month.is_finished ? " (est.)" : ""}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "qredits" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("qredits")} style={{ padding: 0 }}>Qredits{arrow("qredits")}{!month.is_finished ? " (est.)" : ""}</button></th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((r) => (
               <tr key={`${r.faction}:${r.name}`}>
-                <td style={{ ...cellStyle, cursor: "pointer", color: "var(--text)" }} onClick={() => onPlayerClick(r.faction, r.name)}>{r.name}</td>
+                <td style={cellStyle}><button type="button" onClick={() => onPlayerClick(r.faction, r.name)} style={{ padding: 0, color: "var(--text)", cursor: "pointer" }}>{r.name}</button></td>
                 <td style={cellStyle}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                     <span style={{ width: 8, height: 8, borderRadius: 2, background: factionColor(r.faction) }} />

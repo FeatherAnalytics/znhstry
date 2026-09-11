@@ -20,7 +20,6 @@ import {
   inArea,
   radiusFilter,
   singleZoneFilter,
-  viewportFilter,
   type ZoneFilter,
 } from "@/lib/filters";
 import {
@@ -559,6 +558,15 @@ export default function Page() {
    */
   const changing = readMode === "change" && changeStart !== null;
 
+  const filterSlots = useMemo(() => {
+    if (!filter || !geometry) return null;
+    const slots: number[] = [];
+    for (let s = 0; s < geometry.count; s++) {
+      if (filter[geometry.slotToIdx[s]]) slots.push(s);
+    }
+    return slots;
+  }, [filter, geometry]);
+
   const shown = useMemo(() => {
     if (!display || day === null) {
       return {
@@ -612,19 +620,26 @@ export default function Page() {
       // the whole world.
       held = 0;
       drawn = 0;
-      const slots = geometry?.count ?? 0;
-      const toIdx = geometry?.slotToIdx;
+      const total = geometry?.count ?? 0;
       const everActive = geometry?.everActiveBySlot;
-      for (let slot = 0; slot < slots; slot++) {
-        if (filter && !filter[toIdx![slot]]) continue;
-        count++;
-        const packed = display.pk[slot];
-        byFaction[packed >> 6]++;
-        if (packed !== 0) held++;
-        // Slot-keyed like `pk`, so the two shades of grey the map already draws
-        // cost no extra indirection here.
-        else if (everActive && everActive[slot] === 0) neverPlayed++;
-        if (display.visible[slot] !== 0) drawn++;
+      if (filterSlots) {
+        for (const slot of filterSlots) {
+          count++;
+          const packed = display.pk[slot];
+          byFaction[packed >> 6]++;
+          if (packed !== 0) held++;
+          else if (everActive && everActive[slot] === 0) neverPlayed++;
+          if (display.visible[slot] !== 0) drawn++;
+        }
+      } else {
+        for (let slot = 0; slot < total; slot++) {
+          count++;
+          const packed = display.pk[slot];
+          byFaction[packed >> 6]++;
+          if (packed !== 0) held++;
+          else if (everActive && everActive[slot] === 0) neverPlayed++;
+          if (display.visible[slot] !== 0) drawn++;
+        }
       }
     }
 
@@ -680,7 +695,7 @@ export default function Page() {
     };
     // data.version so the counts follow the map as tiles land and dates change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
+  }, [filter, filterSlots, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
 
   /** A year earlier on the same series, for the growth figure. */
   const previous: Totals | null = useMemo(() => {

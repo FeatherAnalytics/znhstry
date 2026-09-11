@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MapViewState } from "@deck.gl/core";
+import { WebMercatorViewport, type MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import {
   StatsPanel,
@@ -65,6 +65,9 @@ import {
 } from "@/lib/timelapse";
 
 const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
+
+// The played world, used to fit the initial camera to the actual canvas.
+const WORLD_BOUNDS: [[number, number], [number, number]] = [[-170, -55], [180, 72]];
 
 // 1000 statute miles, the radius the game itself talks in.
 const NEAR_ME_KM = 1609.344;
@@ -155,9 +158,28 @@ export default function Page() {
     bearing: 0,
   });
 
-  // Fit the camera for portrait on mount, one frame after hydration.
+  // The single source of the map container's pixel dimensions. Updated by a
+  // ResizeObserver so both the initial camera fit and the bots-in-view bounds
+  // (Phase 3) read the same value without a second observer.
+  const mapRef = useRef<HTMLDivElement>(null);
+  const canvasSize = useRef({ width: 1280, height: 720 });
+
+  // Fit the camera to the played world using the actual canvas size on mount.
   useEffect(() => {
-    if (window.innerWidth < 900) setViewState((v) => ({ ...v, zoom: 0.9 }));
+    const el = mapRef.current;
+    if (!el) return;
+    const update = () => {
+      const { clientWidth: w, clientHeight: h } = el;
+      if (w > 0 && h > 0) canvasSize.current = { width: w, height: h };
+    };
+    update();
+    const { width, height } = canvasSize.current;
+    const vp = new WebMercatorViewport({ width, height });
+    const fitted = vp.fitBounds(WORLD_BOUNDS, { padding: 20 });
+    setViewState((v) => ({ ...v, zoom: fitted.zoom }));
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bounds are read when a series is built rather than tracked in state, so
@@ -1198,7 +1220,7 @@ export default function Page() {
         )}
       </header>
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div ref={mapRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
         {geometry && display && (
           <ZoneMap
             geometry={geometry}

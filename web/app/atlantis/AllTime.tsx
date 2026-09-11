@@ -11,6 +11,7 @@ import {
   factionHex,
   compact,
   fetchPlayersDetail,
+  STALE_DATA_NOTICE,
   type AtlantisIndex,
   type AllTimePlayer,
   type FactionDetail,
@@ -505,12 +506,16 @@ export default function AllTime({ index }: Props) {
   return (
     <div style={section}>
       <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Players</div>
-      <PlayersTable
-        filtered={filtered} filter={filter} onFilterChange={setFilter}
-        sortCol={sortCol} sortAsc={sortAsc} toggleSort={toggleSort} arrow={arrow}
-        onPlayerClick={onPlayerClick}
-      />
-      {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
+      {players.length === 0 ? (
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{STALE_DATA_NOTICE}</div>
+      ) : (
+        <PlayersTable
+          filtered={filtered} filter={filter} onFilterChange={setFilter}
+          sortCol={sortCol} sortAsc={sortAsc} toggleSort={toggleSort} arrow={arrow}
+          onPlayerClick={onPlayerClick}
+        />
+      )}
+      {playerParam && players.length > 0 ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
     </div>
   );
 }

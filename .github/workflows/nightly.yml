@@ -56,6 +56,11 @@ on:
         description: "Ring slots to read, e.g. 7 or 5,6,7. Blank = whatever the history is missing."
         required: false
         type: string
+      force_publish:
+        description: "Rebuild and publish even when ingest and battlestats found nothing new"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -138,10 +143,11 @@ jobs:
         env:
           INGEST_EVENTS: ${{ steps.ingest.outputs.events }}
           BATTLESTATS_REPORTS: ${{ steps.battlestats.outputs.reports }}
+          FORCE_PUBLISH: ${{ inputs.force_publish }}
         run: |
           events="$INGEST_EVENTS"
           reports="$BATTLESTATS_REPORTS"
-          if [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
+          if [ "$FORCE_PUBLISH" = "true" ] || [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
             echo "any=true" >> "$GITHUB_OUTPUT"
           else
             echo "any=false" >> "$GITHUB_OUTPUT"

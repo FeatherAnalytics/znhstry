@@ -247,6 +247,8 @@ function Editor(props: EditorProps) {
         onChange={(e) => props.onChange(e.target.value)}
         onKeyDown={onKeyDown}
         spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
         rows={8}
         aria-label="SQL"
         style={{
@@ -400,7 +402,6 @@ export default function QueryConsole() {
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
       <Header meta={meta} loading={meta === null && bootError === null} />
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "hidden" }}>
-        <TableList meta={meta} onPick={(name) => setSql(`select * from ${name} limit 100`)} />
         <section style={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexDirection: "column" }}>
           <Editor
             sql={sql}
@@ -417,6 +418,7 @@ export default function QueryConsole() {
             {result && <ResultsGrid table={result.table} />}
           </div>
         </section>
+        <TableList meta={meta} onPick={(name) => setSql(`select * from ${name} limit 100`)} />
       </div>
     </main>
   );

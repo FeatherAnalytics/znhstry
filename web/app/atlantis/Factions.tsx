@@ -136,7 +136,7 @@ function LineChart(props: LineChartProps) {
   const maxV = Math.max(...FACTIONS.flatMap(f => data.map((d, i) => getVal(d, f, i) ?? 0)), 1);
   const n = data.length;
   const step = w / Math.max(n - 1, 1);
-  const { hover, onMouseMove, onMouseLeave } = useChartHover(n, step);
+  const { hover, onPointerMove, onPointerLeave } = useChartHover(n, step);
   const ph = height - 18;
 
   return (
@@ -144,7 +144,7 @@ function LineChart(props: LineChartProps) {
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
       <div style={{ position: "relative" }}>
         <span className="tabular" style={{ position: "absolute", top: 0, left: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
-        <svg width={w} height={height} style={{ display: "block" }} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+        <svg width={w} height={height} style={{ display: "block" }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
           {FACTIONS.map(f => {
             const { segments, singles } = buildSegments(data, getVal, f, step, ph, maxV);
             return [
@@ -338,12 +338,12 @@ function FactionHistogram({ data, field, label, perDay, bins }: { data: FM[]; fi
 
   const { buckets, bucketCount, min, step } = bucketize(entries, isZones, bins ?? 10);
   const maxStack = Math.max(...Array.from({ length: bucketCount }, (_, i) => FACTIONS.reduce((s, f) => s + buckets[f][i], 0)), 1);
-  const { index: hoverIdx, ref: barRef, onMouseMove, onMouseLeave } = useBarHover(bucketCount);
+  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(bucketCount);
 
   return (
     <div style={{ flex: 1, minWidth: 180 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
+      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
         style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 280 }}>
         {Array.from({ length: bucketCount }, (_, i) => (
           <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", opacity: hoverIdx != null && hoverIdx !== i ? 0.4 : 1 }}>
@@ -425,12 +425,12 @@ interface GroupedBarsProps {
 function GroupedBars({ data, xField, yFn, label, xLabel }: GroupedBarsProps) {
   const { xVals, means, ns, maxMean } = groupMeans(data, xField, yFn);
   if (xVals.length === 0) return null;
-  const { index: hoverIdx, ref: barRef, onMouseMove, onMouseLeave } = useBarHover(xVals.length);
+  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(xVals.length);
 
   return (
     <div style={{ flex: "1 1 320px", minWidth: 320 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave} style={{ display: "flex", height: 160 }}>
+      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave} style={{ display: "flex", height: 160 }}>
         {xVals.map((x, xi) => (
           <div key={x} style={{ flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", opacity: hoverIdx != null && hoverIdx !== xi ? 0.4 : 1 }}>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 112 }}>
@@ -579,11 +579,11 @@ interface SeenBarProps {
 
 function SeenBar({ counts, label, allMonths, maxY, data }: SeenBarProps) {
   const h = 160;
-  const { index: hoverIdx, ref: barRef, onMouseMove, onMouseLeave } = useBarHover(allMonths.length);
+  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(allMonths.length);
   return (
     <div style={{ flex: 1, minWidth: 200 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}
+      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
         style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
         {allMonths.map((m, i) => {
           const c = counts[m] ?? 0;
@@ -649,7 +649,7 @@ export default function Factions({ index }: Props) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24, alignItems: "flex-start", overflowX: "auto" }}>
         <div style={{ flex: "0 0 auto" }}><StandingsTable factions={index.all_time.factions} tournaments={tournaments} /></div>
         <div style={{ flex: "0 0 auto" }}><StreaksTable data={data} /></div>
         <div style={{ flex: "1 1 0", minWidth: 120 }}><Histogram values={data.map(d => d.stacking)} label="Stacking days" rangeMin={0} /></div>

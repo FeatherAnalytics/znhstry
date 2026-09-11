@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type MouseEvent } from "react";
+import { useState, useCallback, useRef, type PointerEvent } from "react";
 
 export interface HoverState {
   index: number;
@@ -8,8 +8,8 @@ export interface HoverState {
 export function useChartHover(n: number, step: number) {
   const [hover, setHover] = useState<HoverState | null>(null);
 
-  const onMouseMove = useCallback(
-    (e: MouseEvent<SVGSVGElement>) => {
+  const onPointerMove = useCallback(
+    (e: PointerEvent<SVGSVGElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const idx = Math.round(x / step);
@@ -18,17 +18,17 @@ export function useChartHover(n: number, step: number) {
     [n, step],
   );
 
-  const onMouseLeave = useCallback(() => setHover(null), []);
+  const onPointerLeave = useCallback(() => setHover(null), []);
 
-  return { hover, onMouseMove, onMouseLeave };
+  return { hover, onPointerMove, onPointerLeave };
 }
 
 export function useBarHover(n: number) {
   const [index, setIndex] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  const onMouseMove = useCallback(
-    (e: MouseEvent<HTMLDivElement>) => {
+  const onPointerMove = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
       if (!ref.current) return;
       const cx = e.clientX;
       const children = ref.current.children;
@@ -45,7 +45,7 @@ export function useBarHover(n: number) {
     [n],
   );
 
-  const onMouseLeave = useCallback(() => setIndex(null), []);
+  const onPointerLeave = useCallback(() => setIndex(null), []);
 
-  return { index, ref, onMouseMove, onMouseLeave };
+  return { index, ref, onPointerMove, onPointerLeave };
 }

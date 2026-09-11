@@ -168,8 +168,9 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
           style={{
             position: "absolute",
             top: "calc(100% + 4px)",
-            left: 0,
+            right: 0,
             width: 280,
+            maxWidth: "calc(100vw - 24px)",
             maxHeight: 320,
             overflowY: "auto",
             background: "rgba(10,13,19,0.96)",

@@ -204,7 +204,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
         <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
           <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
         </div>
-        <div ref={bar.ref} onMouseMove={bar.onMouseMove} onMouseLeave={bar.onMouseLeave}
+        <div ref={bar.ref} onPointerMove={bar.onPointerMove} onPointerLeave={bar.onPointerLeave}
           style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
           {months.map((m, i) => {
             const entry = valMap.get(m);
@@ -254,13 +254,13 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
   const ph = h - 18;
   const pts = cumVals.map((v, i) => `${i * step},${4 + ph - (v / cumMax) * ph}`).join(" ");
   const halfY = 4 + ph - (0.5 * ph);
-  const { hover, onMouseMove, onMouseLeave } = useChartHover(months.length, step);
+  const { hover, onPointerMove, onPointerLeave } = useChartHover(months.length, step);
 
   return (
     <div style={{ flex: 1, minWidth: 0 }} ref={containerRef}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
       <div style={{ position: "relative" }}>
-        <svg width={w} height={h} style={{ display: "block" }} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+        <svg width={w} height={h} style={{ display: "block" }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
           <line x1={0} x2={w} y1={halfY} y2={halfY} stroke="var(--hairline)" strokeWidth={1} strokeDasharray="3,3" />
           <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} opacity={0.8} />
           {(() => {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type MouseEvent } from "react";
+import { useState, useCallback, useRef, type PointerEvent } from "react";
 import { factionHex, isDerived, type AnyTournament } from "./lib";
 
 function stripTitle(t: AnyTournament): string {
@@ -25,7 +25,7 @@ export default function PlacementStrips(props: { tournaments: AnyTournament[] })
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  const onMouseMove = useCallback((e: MouseEvent<HTMLDivElement>) => {
+  const onPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (!ref.current) return;
     const cx = e.clientX;
     const children = ref.current.children;
@@ -40,11 +40,11 @@ export default function PlacementStrips(props: { tournaments: AnyTournament[] })
     setHoverIdx(best >= 0 ? best : null);
   }, [sorted.length]);
 
-  const onMouseLeave = useCallback(() => setHoverIdx(null), []);
+  const onPointerLeave = useCallback(() => setHoverIdx(null), []);
   const hovered = hoverIdx != null ? sorted[hoverIdx] : null;
 
   return (
-    <div style={{ marginBottom: 16 }} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+    <div style={{ marginBottom: 16 }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
       {labels.map((label, place) => (
         <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 4 : 0 }}>
           <span className="eyebrow" style={{ width: 24, flexShrink: 0, fontSize: 10 }}>{label}</span>

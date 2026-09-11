@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { VIEWS, type ViewKey } from "@/lib/windows";
 
 interface Props {
@@ -17,6 +18,8 @@ interface Props {
    * screen; scrolling keeps every control one swipe away and the map intact.
    */
   scrollable?: boolean;
+  /** Extra controls appended to the end of the scrollable row. */
+  children?: ReactNode;
 }
 
 /**
@@ -59,6 +62,7 @@ export function WindowPicker({
   onEmptyOnly,
   pending,
   scrollable = false,
+  children,
 }: Props) {
   return (
     <div
@@ -139,6 +143,7 @@ export function WindowPicker({
           Reading&hellip;
         </span>
       )}
+      {children}
     </div>
   );
 }

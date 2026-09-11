@@ -155,6 +155,11 @@ export default function Page() {
     bearing: 0,
   });
 
+  // Fit the camera for portrait on mount, one frame after hydration.
+  useEffect(() => {
+    if (window.innerWidth < 900) setViewState((v) => ({ ...v, zoom: 0.9 }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Bounds are read when a series is built rather than tracked in state, so
   // panning does not rebuild a series on every frame.
   const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
@@ -230,26 +235,24 @@ export default function Page() {
       setFlashpoint(next);
       if (!next) return;
       setActivePeriod(null);
-      // Opens on the standings, not on the day's events. A flashpoint frames a few
-      // hundred zones, and the Daily backdrop draws only the ones with an event on
-      // the date - which on the first frame of the baseline is often none of them,
-      // so the reader arrives at an empty rectangle. Playback then shows the fight
-      // arriving over a neighborhood that is visible from the start.
+      // Opens on the standings, not on the day's events. A flashpoint frames a
+      // few hundred zones, and the Daily backdrop draws only the ones with an
+      // event on the date — which on the first frame of the baseline is often
+      // none of them, so the reader arrives at an empty rectangle.
       setBackdrop("all");
       setRangeStart(next.runStart);
       setRangeEnd(next.runEnd);
       data.setDay(next.runStart);
-      // A flashpoint is a third kind of focus; two of them at once means neither.
+      // A flashpoint is a third kind of focus; two at once means neither.
       setArea(null);
       setHome(null);
       setSelectedZone(null);
       setHistoryMode("viewport");
-      // Bring the tile queue to the flashpoint, so whatever has not arrived yet
-      // arrives nearest-first around it.
       data.setFocus(next.anchor.lat, next.anchor.lon);
       setViewState((v) => ({ ...v, ...framing(next, zoomFor) }));
+      if (compact) setSheetStop("half");
     },
-    [data],
+    [data, compact],
   );
 
   const applyPeriod = useCallback(
@@ -341,6 +344,7 @@ export default function Page() {
       setHistoryMode(next ? "area" : "scope");
       if (!next || !geometry) return;
       setHome(null);
+      if (compact) setSheetStop("half");
 
       let west = 180;
       let east = -180;
@@ -368,7 +372,7 @@ export default function Page() {
         zoom: zoomFor(east - west, north - south),
       }));
     },
-    [geometry, data],
+    [geometry, data, compact],
   );
 
   // --- which zones the readouts are about ---------------------------------
@@ -883,25 +887,24 @@ export default function Page() {
     (next: ViewKey) => {
       setView(next);
       // A flashpoint belongs to the timelapse: it owns a range, a camera and a
-      // dimming mask, none of which the windows have a way to express. Leaving it
-      // set behind a window keeps the map framed on one neighborhood and the panel
-      // reading a viewport aggregate under a heading that says Global.
+      // dimming mask, none of which the windows can express.
       if (next !== "timelapse") {
         setFlashpoint(null);
         setHistoryMode("scope");
       }
+      if (compact) setSheetStop(next === "timelapse" ? "peek" : "half");
       if (!dayBounds) return;
       if (next === "current") data.setDay(dayBounds.max);
       else data.setDay((d) => (d === null || d > dayBounds.lastComplete ? dayBounds.lastComplete : d));
     },
-    [dayBounds, data],
+    [dayBounds, data, compact],
   );
 
   const ready = meta && geometry && display && day !== null && dayBounds;
 
   const locateButton = (
     <button
-      className="eyebrow"
+      className="eyebrow touch-target"
       onClick={home ? clearFocus : locate}
       disabled={geoStatus === "asking"}
       style={{
@@ -1153,7 +1156,6 @@ export default function Page() {
       >
         {compact ? (
           <>
-            {/* Title row, then the controls get the full width to scroll in. */}
             <div
               style={{
                 display: "flex",
@@ -1166,7 +1168,6 @@ export default function Page() {
               {masthead}
               <div style={{ flex: 1, minWidth: 8 }} />
               {areaPicker}
-              {locateButton}
             </div>
             <WindowPicker
               view={view}
@@ -1175,7 +1176,9 @@ export default function Page() {
               onEmptyOnly={setEmptyOnly}
               pending={changing && data.shown === null}
               scrollable
-            />
+            >
+              {locateButton}
+            </WindowPicker>
           </>
         ) : (
           <>

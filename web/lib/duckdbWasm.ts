@@ -50,12 +50,15 @@ async function readMeta(): Promise<MartsMeta> {
 }
 
 async function instantiate(): Promise<Connection> {
+  // The browser entry by path: the bare package name resolves to the Node
+  // build in Next's server pass, whose dynamic requires make webpack warn.
   // @ts-expect-error TS7016: no declaration file is mapped for this path
   const duckdb = (await import("@duckdb/duckdb-wasm/dist/duckdb-browser")) as typeof duckdbTypes;
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
   if (bundle.mainWorker === null) {
     throw new Error("no DuckDB worker bundle fits this browser");
   }
+  // A Worker cannot be constructed from a cross-origin script URL.
   const workerUrl = URL.createObjectURL(
     new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }),
   );
@@ -114,22 +117,22 @@ function makeBinder(conn: Connection, meta: MartsMeta) {
   };
 }
 
+const wrapError = (label: string) => (error: unknown) => {
+  const msg = error instanceof Error ? error.message : String(error);
+  throw new Error(`${label}: ${msg}`);
+};
+
 async function open(): Promise<Warehouse> {
   const [conn, meta] = await Promise.all([
-    instantiate().catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Loading DuckDB: ${msg}`);
-    }),
-    readMeta().catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Reading ${MARTS}/_meta.json: ${msg}`);
-    }),
+    instantiate().catch(wrapError("Loading DuckDB")),
+    readMeta().catch(wrapError(`Reading ${MARTS}/_meta.json`)),
   ]);
   return { conn, meta, bind: makeBinder(conn, meta) };
 }
 
 let warehouse: Promise<Warehouse> | null = null;
 
+// One database per page. A failed bootstrap is retried on the next call.
 export function openDuckDB(): Promise<Warehouse> {
   if (warehouse === null) {
     warehouse = open().catch((error: unknown) => {

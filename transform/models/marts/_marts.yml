@@ -261,7 +261,7 @@ models:
           - not_null
           - accepted_values:
               arguments:
-                values: ['board', 'zone-name', 'override', 'scraped', 'confirmed', 'reconciled', 'none']
+                values: ['board', 'zone-name', 'override', 'scraped', 'none']
 
   - name: fct_atlantis_zone_month_derived
     description: >

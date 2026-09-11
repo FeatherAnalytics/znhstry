@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
 import { useChartHover, useBarHover } from "./useChartHover";
+import { useWidth, YearLabels } from "./chartUtils";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BASE } from "@/lib/dataOrigin";
 import { FACTIONS as FACTION_DEFS } from "@/components/charts/palette";
@@ -87,7 +88,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
 
   const toggleDetailSort = (col: DetailSort) => {
     if (col === detailSort) setDetailAsc(!detailAsc);
-    else { setDetailSort(col); setDetailAsc(col === "month" ? false : false); }
+    else { setDetailSort(col); setDetailAsc(false); }
   };
   const dArrow = (col: DetailSort) => <span style={ARROW_SLOT}>{col === detailSort ? (detailAsc ? "▲" : "▼") : ""}</span>;
 
@@ -169,24 +170,6 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
 
 interface MonthVal { month: string; value: number }
 
-function ChartYearLabels({ months, maxBarW }: { months: string[]; maxBarW?: number }) {
-  let firstLabeled = false;
-  return (
-    <div style={{ display: "flex", gap: 1 }}>
-      {months.map((m, i) => {
-        const isJan = m.endsWith("-01");
-        const show = isJan || (!firstLabeled && i === 0);
-        if (show) firstLabeled = true;
-        return (
-          <div key={m} style={{ flex: "1 1 0", maxWidth: maxBarW, marginLeft: isJan ? 4 : 0 }}>
-            {show ? <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{m.slice(0, 4)}</span> : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function barHeight(v: number, max: number, h: number): number {
   return v > 0 ? (v / max) * (h - 14) : 0;
 }
@@ -197,43 +180,6 @@ function median(nums: number[]): number {
 }
 
 function yearGap(m: string): number { return m.endsWith("-01") ? 4 : 0; }
-
-function BarChart({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
-  if (data.length === 0) return null;
-  const months = allMonths ?? data.map(d => d.month);
-  const valMap = new Map(data.map(d => [d.month, d.value]));
-  const maxV = Math.max(...data.map(d => d.value), 1);
-  const medianV = median(data.map(d => d.value));
-  const h = 240;
-  const maxBarW = 20;
-  const { index: hoverIdx, ref: barRef, onMouseMove: onBarMove, onMouseLeave: onBarLeave } = useBarHover(months.length);
-  const hm = hoverIdx != null ? months[hoverIdx] : null;
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span className="eyebrow" style={{ fontSize: 10 }}>{label}</span>
-        <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
-      </div>
-      <div style={{ position: "relative" }}>
-        <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
-          <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
-        </div>
-        <div ref={barRef} onMouseMove={onBarMove} onMouseLeave={onBarLeave}
-          style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
-          {months.map((m, i) => (
-            <div key={m} style={{
-              flex: "1 1 0", maxWidth: maxBarW,
-              height: barHeight(valMap.get(m) ?? 0, maxV, h), background: "var(--text)", opacity: i === hoverIdx ? 0.9 : 0.6, borderRadius: 1,
-              marginLeft: yearGap(m),
-            }} />
-          ))}
-        </div>
-      </div>
-      <ChartYearLabels months={months} maxBarW={maxBarW} />
-      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hm ? <><span style={{ fontWeight: 600 }}>{hm}</span>: {(valMap.get(hm) ?? 0).toLocaleString()}</> : null}</div>
-    </div>
-  );
-}
 
 interface FactionMonthVal { month: string; total: number; byFaction: Record<string, number> }
 
@@ -277,7 +223,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
           })}
         </div>
       </div>
-      <ChartYearLabels months={months} maxBarW={maxBarW} />
+      <YearLabels months={months} maxBarW={maxBarW} />
       <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
         {hd ? (
           <>
@@ -294,17 +240,6 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
   );
 }
 
-function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
-  const [w, setW] = useState(600);
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    ro.observe(ref.current);
-    setW(ref.current.clientWidth);
-    return () => ro.disconnect();
-  }, [ref]);
-  return w;
-}
 
 function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -353,7 +288,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
         <span className="tabular" style={{ position: "absolute", left: 0, top: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(cumMax)}</span>
         <span className="tabular" style={{ position: "absolute", left: 0, top: `${(halfY / h) * 100}%`, fontSize: 7, color: "var(--text-dim)" }}>{compact(cumMax / 2)}</span>
       </div>
-      <ChartYearLabels months={months} />
+      <YearLabels months={months} />
       <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString()}</> : null}</div>
     </div>
   );

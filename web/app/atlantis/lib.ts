@@ -57,7 +57,7 @@ export interface FactionAllTime {
   launches?: number;
 }
 
-export type PlayerMonthRow = [string, string, number, number, number, number | null, number, string];
+export type PlayerMonthRow = [string, string, number, number, number, number | null, number | null, string];
 
 export async function fetchPlayersDetail(base: string): Promise<Record<string, PlayerMonthRow[]>> {
   const res = await fetch(`${base}/atlantis/players.json.br`);

@@ -2113,44 +2113,43 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
         combined as (
             select * from board union all select * from derived
         )
-        select player_name, faction,
-               sum(launches) as launches,
-               count(distinct tournament_month) as tournaments,
-               min(tournament_month) as first_month,
-               max(tournament_month) as last_month,
-               sum(qredits) as qredits
+        select player_name, faction, tournament_month,
+               launches, qredits
         from combined
-        group by 1, 2
-        order by player_name, launches desc
+        order by player_name, faction
     """).fetchall()
 
     merged: dict[str, dict] = {}
-    for name, faction, launches, tournaments, first_m, last_m, qredits in rows:
+    player_months: dict[str, set] = {}
+    for name, faction, month, launches, qredits in rows:
+        month_str = month.strftime("%Y-%m")
         if name not in merged:
             merged[name] = {
                 "name": name, "factions": {},
                 "launches": 0, "tournaments": 0, "unattributed": 0,
-                "first_month": first_m.strftime("%Y-%m"),
-                "last_month": last_m.strftime("%Y-%m"),
+                "first_month": month_str, "last_month": month_str,
                 "qredits": 0.0,
             }
+            player_months[name] = set()
         entry = merged[name]
         entry["launches"] += int(launches)
-        entry["tournaments"] += int(tournaments)
-        if first_m.strftime("%Y-%m") < entry["first_month"]:
-            entry["first_month"] = first_m.strftime("%Y-%m")
-        if last_m.strftime("%Y-%m") > entry["last_month"]:
-            entry["last_month"] = last_m.strftime("%Y-%m")
+        player_months[name].add(month_str)
+        if month_str < entry["first_month"]:
+            entry["first_month"] = month_str
+        if month_str > entry["last_month"]:
+            entry["last_month"] = month_str
         if faction == "Unconfirmed":
             entry["unattributed"] += int(launches)
         else:
             prev = entry["factions"].get(faction, {"launches": 0, "tournaments": 0, "qredits": 0.0})
             entry["factions"][faction] = {
                 "launches": prev["launches"] + int(launches),
-                "tournaments": prev["tournaments"] + int(tournaments),
+                "tournaments": prev["tournaments"] + 1,
                 "qredits": round(prev["qredits"] + float(qredits or 0), 1),
             }
             entry["qredits"] = round(entry["qredits"] + float(qredits or 0), 1)
+    for name, entry in merged.items():
+        entry["tournaments"] = len(player_months[name])
 
     _FACTION_ORDER = ("Legion", "Swarm", "Faceless")
     for entry in merged.values():
@@ -2497,5 +2496,7 @@ def export_atlantis_only(scope_name: str | None = None) -> None:
         con.close()
 
     meta["atlantis"] = atlantis
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    tmp = meta_path.with_name(meta_path.name + ".tmp")
+    tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    tmp.replace(meta_path)
     log.info("atlantis-only export complete")

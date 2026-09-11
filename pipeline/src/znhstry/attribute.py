@@ -226,7 +226,7 @@ def _review_month(
         {"tournament_month": month_val, "player_name": n,
          "scraped_faction": info["faction"], "launches": info["launches"],
          "reports": len(info["reports"]), "failing_reports": info["failing"],
-         "has_reconciling_report": False}
+         "has_reconciling_report": info["has_reconciling"]}
         for n, info in player_info.items()
         if info["failing"] > 0 and not info["has_reconciling"]
     ]
@@ -258,6 +258,7 @@ def attribute_factions() -> None:
     if players is None or players.height == 0:
         log.info("attribute: no player rows available, nothing to do")
         _write_empty(out_path)
+        _atomic_write_parquet(pl.DataFrame(schema=_REVIEW_SCHEMA), review_path)
         return
 
     board, board_multi = _load_board_evidence(lb_dir)
@@ -296,7 +297,7 @@ def attribute_factions() -> None:
     _detect_mercenary(results, board_multi, zn_mercs, board, zn_evidence)
 
     review_df = _build_review_list(players)
-    _write_review(review_df, review_path)
+    _atomic_write_parquet(review_df, review_path)
 
     _write_results(results, out_path)
     log.info(
@@ -305,26 +306,22 @@ def attribute_factions() -> None:
     )
 
 
+def _atomic_write_parquet(df: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    df.write_parquet(tmp, compression="zstd")
+    tmp.replace(path)
+
+
 def _write_results(results: list[dict[str, Any]], path: Path) -> None:
     df = pl.DataFrame(results, schema=ATLANTIS_PLAYER_FACTION_DTYPES)
     df = df.unique(subset=list(ATLANTIS_PLAYER_FACTION_KEY), keep="last").sort(
         list(ATLANTIS_PLAYER_FACTION_KEY)
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    df.write_parquet(tmp, compression="zstd")
-    tmp.replace(path)
-
-
-def _write_review(df: pl.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    df.write_parquet(tmp, compression="zstd")
-    tmp.replace(path)
+    _atomic_write_parquet(df, path)
 
 
 def _write_empty(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(schema=ATLANTIS_PLAYER_FACTION_DTYPES).write_parquet(
-        path, compression="zstd"
+    _atomic_write_parquet(
+        pl.DataFrame(schema=ATLANTIS_PLAYER_FACTION_DTYPES), path
     )

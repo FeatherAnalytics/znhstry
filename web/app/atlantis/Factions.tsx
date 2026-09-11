@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState, useRef, useEffect, useCallback, type CSSProperties } from "react";
+import { useMemo, useState, useRef, type CSSProperties } from "react";
 import { useChartHover, useBarHover } from "./useChartHover";
+import { useWidth, YearLabels } from "./chartUtils";
 import { FACTIONS as FACTION_DEFS, PLACEMENT_GOLD, PLACEMENT_SILVER, PLACEMENT_BRONZE } from "@/components/charts/palette";
 import {
   factionColor,
@@ -58,53 +59,24 @@ function buildFM(tournaments: AnyTournament[]): FM[] {
 
 type Mode = "tournament" | "perday" | "cumulative";
 
-function YearLabels({ data }: { data: FM[] }) {
-  let firstLabeled = false;
-  return (
-    <div style={{ display: "flex", gap: 1 }}>
-      {data.map((d, i) => {
-        const isJan = d.month.endsWith("-01");
-        const showLabel = isJan || (!firstLabeled && i === 0);
-        if (showLabel) firstLabeled = true;
-        return (
-          <div key={d.month} style={{ flex: "1 1 0", marginLeft: isJan ? 6 : 0, minWidth: 0 }}>
-            {showLabel ? <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{d.month.slice(0, 4)}</span> : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
-  const [w, setW] = useState(800);
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
-    ro.observe(ref.current);
-    setW(ref.current.clientWidth);
-    return () => ro.disconnect();
-  }, [ref]);
-  return w;
-}
 
 interface LineChartProps {
   data: FM[];
-  getVal: (d: FM, f: string) => number | null;
+  getVal: (d: FM, f: string, i: number) => number | null;
   label: string;
   height: number;
   halfMark?: boolean;
   crossings?: Record<string, number>;
 }
 
-function buildSegments(data: FM[], getVal: (d: FM, f: string) => number | null, f: string, step: number, ph: number, maxV: number) {
+function buildSegments(data: FM[], getVal: (d: FM, f: string, i: number) => number | null, f: string, step: number, ph: number, maxV: number) {
   const segments: string[] = [];
   const singles: { x: number; y: number }[] = [];
   let cur = "";
   let curCount = 0;
   let curStart = 0;
   for (let i = 0; i < data.length; i++) {
-    const v = getVal(data[i], f);
+    const v = getVal(data[i], f, i);
     if (v != null) {
       const x = i * step;
       const y = 4 + ph - (v / maxV) * ph;
@@ -124,12 +96,12 @@ function buildSegments(data: FM[], getVal: (d: FM, f: string) => number | null, 
   return { segments, singles };
 }
 
-function findCrossing(data: FM[], getVal: (d: FM, f: string) => number | null, f: string, halfV: number, crossings?: Record<string, number>): number {
+function findCrossing(data: FM[], getVal: (d: FM, f: string, i: number) => number | null, f: string, halfV: number, crossings?: Record<string, number>): number {
   const preset = crossings?.[f] ?? -1;
   if (preset >= 0) return preset;
   let prev: number | null = null;
   for (let i = 0; i < data.length; i++) {
-    const v = getVal(data[i], f);
+    const v = getVal(data[i], f, i);
     if (v != null && v >= halfV && (prev == null || prev < halfV)) return i;
     if (v != null) prev = v;
   }
@@ -161,7 +133,7 @@ function LineChart(props: LineChartProps) {
   const { data, getVal, label, height, halfMark, crossings } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const w = useWidth(containerRef);
-  const maxV = Math.max(...FACTIONS.flatMap(f => data.map(d => getVal(d, f) ?? 0)), 1);
+  const maxV = Math.max(...FACTIONS.flatMap(f => data.map((d, i) => getVal(d, f, i) ?? 0)), 1);
   const n = data.length;
   const step = w / Math.max(n - 1, 1);
   const { hover, onMouseMove, onMouseLeave } = useChartHover(n, step);
@@ -189,7 +161,7 @@ function LineChart(props: LineChartProps) {
             <>
               <line x1={hover.x} x2={hover.x} y1={0} y2={height} stroke="var(--text-dim)" strokeWidth={1} opacity={0.3} />
               {FACTIONS.map(f => {
-                const v = getVal(data[hover.index], f);
+                const v = getVal(data[hover.index], f, hover.index);
                 if (v == null) return null;
                 const y = 4 + ph - (v / maxV) * ph;
                 return <circle key={f} cx={hover.x} cy={y} r={3} fill={factionHex(f)} />;
@@ -198,13 +170,13 @@ function LineChart(props: LineChartProps) {
           ) : null}
         </svg>
       </div>
-      <YearLabels data={data} />
+      <YearLabels months={data.map(d => d.month)} />
       <div style={readoutStyle}>
         {hover ? (
           <>
             <span style={{ fontWeight: 600 }}>{data[hover.index].month}</span>
             {FACTIONS.map(f => {
-              const v = getVal(data[hover.index], f);
+              const v = getVal(data[hover.index], f, hover.index);
               return v != null ? <span key={f} style={{ marginLeft: 8, color: factionHex(f) }}>{compact(v)}</span> : null;
             })}
           </>
@@ -236,26 +208,22 @@ function cumAccum(data: FM[], key: CumKey): Record<string, number | null>[] {
   });
 }
 
-function launchVal(data: FM[], cumLaunches: Record<string, number | null>[], mode: Mode, d: FM, f: string): number | null {
-  if (mode === "cumulative") return cumLaunches[data.indexOf(d)]?.[f] ?? 0;
+function launchValAt(cumLaunches: Record<string, number | null>[], mode: Mode, i: number, d: FM, f: string): number | null {
+  if (mode === "cumulative") return cumLaunches[i]?.[f] ?? 0;
   const v = d.launches[f] ?? 0;
   return mode === "perday" && d.length > 0 ? v / d.length : v;
 }
 
-function killVal(data: FM[], cumKills: Record<string, number | null>[], mode: Mode, d: FM, f: string): number | null {
-  if (mode === "cumulative") return cumKills[data.indexOf(d)]?.[f] ?? null;
+function killValAt(cumKills: Record<string, number | null>[], mode: Mode, i: number, d: FM, f: string): number | null {
+  if (mode === "cumulative") return cumKills[i]?.[f] ?? null;
   if (!(f in d.kills)) return null;
   const v = d.kills[f] ?? 0;
   if (mode !== "perday") return v;
   return d.battle > 0 ? v / d.battle : null;
 }
 
-function playerVal(data: FM[], mode: Mode, d: FM, f: string): number | null {
-  if (mode === "cumulative") {
-    const idx = data.indexOf(d);
-    const cum = cumAccum(data.slice(0, idx + 1), "factionPlayers");
-    return cum[idx]?.[f] ?? null;
-  }
+function playerValAt(cumPlayers: Record<string, number | null>[], mode: Mode, i: number, d: FM, f: string): number | null {
+  if (mode === "cumulative") return cumPlayers[i]?.[f] ?? null;
   const v = d.factionPlayers[f];
   if (v == null) return null;
   return mode === "perday" && d.length > 0 ? v / d.length : v;
@@ -286,16 +254,18 @@ function OverTime({ data, mode }: { data: FM[]; mode: Mode }) {
     return result;
   }, [cumQredits]);
 
+  const cumPlayers = useMemo(() => cumAccum(data, "factionPlayers"), [data]);
+
   return (
     <div style={{ marginBottom: 24 }}>
       <div className="eyebrow" style={{ marginBottom: 8 }}>Over time</div>
-      <LineChart data={data} label={mode === "perday" ? "Launches /day" : "Launches"} height={320} halfMark={mode === "cumulative"} getVal={(d, f) => launchVal(data, cumLaunches, mode, d, f)} />
-      <LineChart data={data} label={mode === "perday" ? "Kills /battle day" : "Kills"} height={320} halfMark={mode === "cumulative"} getVal={(d, f) => killVal(data, cumKills, mode, d, f)} />
+      <LineChart data={data} label={mode === "perday" ? "Launches /day" : "Launches"} height={320} halfMark={mode === "cumulative"} getVal={(d, f, i) => launchValAt(cumLaunches, mode, i, d, f)} />
+      <LineChart data={data} label={mode === "perday" ? "Kills /battle day" : "Kills"} height={320} halfMark={mode === "cumulative"} getVal={(d, f, i) => killValAt(cumKills, mode, i, d, f)} />
       {data.some(d => Object.keys(d.factionPlayers).length > 0) ? (
-        <LineChart data={data} label={mode === "perday" ? "Players /day" : "Players"} height={320} halfMark={mode === "cumulative"} getVal={(d, f) => playerVal(data, mode, d, f)} />
+        <LineChart data={data} label={mode === "perday" ? "Players /day" : "Players"} height={320} halfMark={mode === "cumulative"} getVal={(d, f, i) => playerValAt(cumPlayers, mode, i, d, f)} />
       ) : null}
-      <LineChart data={data} label="Qredits (cumulative)" height={320} halfMark crossings={qrCrossings} getVal={(d, f) => {
-        return cumQredits[data.indexOf(d)]?.[f] ?? 0;
+      <LineChart data={data} label="Qredits (cumulative)" height={320} halfMark crossings={qrCrossings} getVal={(_d, f, i) => {
+        return cumQredits[i]?.[f] ?? 0;
       }} />
     </div>
   );
@@ -626,7 +596,7 @@ function SeenBar({ counts, label, allMonths, maxY, data }: SeenBarProps) {
           );
         })}
       </div>
-      <YearLabels data={data} />
+      <YearLabels months={data.map(d => d.month)} />
       <div style={readoutStyle}>
         {hoverIdx != null ? (
           <><span style={{ fontWeight: 600 }}>{allMonths[hoverIdx]}</span>: {(counts[allMonths[hoverIdx]] ?? 0).toLocaleString()}</>

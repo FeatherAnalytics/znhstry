@@ -154,7 +154,7 @@ export function Histogram({
           const barHeight = (bin.count / tallest) * plotHeight;
           const x = PAD.left + i * step;
           return (
-            <g key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+            <g key={i} onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}>
               {/* A full-height target, so a one-pixel bar is still hoverable. */}
               <rect x={x} y={PAD.top} width={step} height={plotHeight} fill="transparent" />
               <rect
@@ -229,7 +229,7 @@ export function Histogram({
         ) : (
           <span style={{ color: "var(--text)" }}>
             {format(bins[hover].lo)}–{format(bins[hover].hi)} {xLabel}:{" "}
-            {bins[hover].count.toLocaleString()} (
+            {bins[hover].count.toLocaleString("en-US")} (
             {((bins[hover].count / total) * 100).toFixed(1)}%)
           </span>
         )}

@@ -156,8 +156,8 @@ export function StackedShare({
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         style={{ width: "100%", height: "auto", overflow: "visible" }}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHover(null)}
         role="img"
         aria-label={title}
       >

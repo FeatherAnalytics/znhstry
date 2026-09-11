@@ -149,7 +149,7 @@ function Delta({ now, then }: { now: number; then: number | undefined }) {
         : `${growth > 1 ? "+" : ""}${((growth - 1) * 100).toFixed(1)}%`;
   if (!label) return null;
   return (
-    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label}</span>
+    <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 11 }}>{label} vs. year ago</span>
   );
 }
 
@@ -173,6 +173,7 @@ function Row({
   bar,
   strong = false,
   lit = true,
+  allLit = true,
   onSelect,
 }: {
   label: string;
@@ -182,8 +183,10 @@ function Row({
   zones?: string | null;
   bar?: React.ReactNode;
   strong?: boolean;
-  /** False while some other category is the one being emphasised. */
+  /** False while some other category is the one being emphasized. */
   lit?: boolean;
+  /** True when no category is isolated (all bits set). */
+  allLit?: boolean;
   onSelect?: () => void;
 }) {
   const body = (
@@ -227,7 +230,7 @@ function Row({
     <button
       type="button"
       onClick={onSelect}
-      aria-pressed={lit}
+      aria-pressed={lit && !allLit}
       title={lit ? `Isolate ${label} on the map` : `Add ${label} back to the map`}
       style={{
         display: "block",
@@ -303,7 +306,7 @@ export function StatsPanel({
           className="display tabular"
           style={{ fontSize: 26, lineHeight: 1.1, margin: "6px 0 2px" }}
         >
-          {date.toLocaleDateString("en-GB", {
+          {date.toLocaleDateString("en-US", {
             day: "2-digit",
             month: "short",
             year: "numeric",
@@ -316,11 +319,11 @@ export function StatsPanel({
       <div style={{ color: "var(--text-dim)", fontSize: 11 }}>
         {changeLabel ? (
           <>
-            {pending ? "Reading" : `${exactNumber(totals.held)} zones moved`} &middot; {changeLabel}
+            {pending ? "Reading" : `${exactNumber(totals.held)} zone${totals.held === 1 ? "" : "s"} moved`} &middot; {changeLabel}
           </>
         ) : (
           <>
-            {exactNumber(zoneCount)} zones
+            {exactNumber(zoneCount)} zone{zoneCount === 1 ? "" : "s"}
             {pending ? " · reading" : stateReady ? "" : " · reading state"}
           </>
         )}
@@ -336,6 +339,7 @@ export function StatsPanel({
             label={faction.label}
             swatch={faction.color}
             lit={(emphasis & EMPHASIS[faction.key]) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis(faction.key) : undefined}
             aside={!changeLabel ? <Delta now={value} then={previous?.[faction.key]} /> : undefined}
             bots={pending ? "—" : figure(value, changeLabel !== null)}
@@ -395,12 +399,14 @@ export function StatsPanel({
           <Row
             label="Empty"
             lit={(emphasis & EMPHASIS.empty) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis("empty") : undefined}
             zones={exactNumber(zones.emptied)}
           />
           <Row
             label="Never played"
             lit={(emphasis & EMPHASIS.neverPlayed) !== 0}
+            allLit={emphasis === EMPHASIS_ALL}
             onSelect={onEmphasis ? () => onEmphasis("neverPlayed") : undefined}
             zones={exactNumber(zones.neverPlayed)}
           />

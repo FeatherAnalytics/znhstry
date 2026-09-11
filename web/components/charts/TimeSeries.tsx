@@ -123,8 +123,8 @@ export function TimeSeries({
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         style={{ width: "100%", height: "auto", overflow: "visible" }}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHover(null)}
         role="img"
         aria-label={title}
       >
@@ -222,7 +222,7 @@ export function TimeSeries({
           )
         ) : (
           <span style={{ color: "var(--text)" }}>
-            {labelOf(day[hover])}: {Math.round(value[hover]).toLocaleString()}
+            {labelOf(day[hover])}: {Math.round(value[hover]).toLocaleString("en-US")}
           </span>
         )}
       </div>

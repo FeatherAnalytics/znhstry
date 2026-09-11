@@ -138,8 +138,8 @@ export function Scatter({
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         style={{ width: "100%", height: "auto", overflow: "visible" }}
-        onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
+        onPointerMove={onMove}
+        onPointerLeave={() => setHover(null)}
         role="img"
         aria-label={`${title}. ${points.length} days.`}
       >
@@ -219,13 +219,13 @@ export function Scatter({
         style={{ fontSize: 11, color: "var(--text-dim)", minHeight: 16, marginTop: 2 }}
       >
         {hover === null ? (
-          `${points.length.toLocaleString()} days · dot area is the zone count`
+          `${points.length.toLocaleString("en-US")} days · dot area is the zone count`
         ) : (
           <span style={{ color: "var(--text)" }}>
             {labelOf(points[hover].day)}: {points[hover].count} zones across{" "}
             {points[hover].km < 10
               ? points[hover].km.toFixed(1)
-              : Math.round(points[hover].km).toLocaleString()}{" "}
+              : Math.round(points[hover].km).toLocaleString("en-US")}{" "}
             km
           </span>
         )}

@@ -74,6 +74,81 @@ button {
   outline-offset: 2px;
 }
 
+/* Touch target minimum for the controls that need it on compact screens.
+   Scoped to .touch-target so it does not inflate the one-row view chips,
+   the nav links, or the Atlantis tabs. */
+@media (max-width: 900px) and (pointer: coarse) {
+  .touch-target {
+    min-height: 44px;
+  }
+}
+
+/* On compact screens the bottom sheet covers the map from the bottom up.
+   The peek stop is 14vh, so the attribution must sit above it. The 900 px
+   breakpoint matches COMPACT_MAX in useCompact.ts. */
+@media (max-width: 900px) {
+  .basemap-attr {
+    bottom: calc(14vh + 6px) !important;
+  }
+}
+
+/* Range slider in the site's dark palette so it does not flash browser-default
+   bright blue. */
+input[type="range"] {
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 20px;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline-bright);
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  margin-top: -5px;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hairline-bright);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: var(--text);
+}
+
+/* Native select and date inputs in the dark palette. colorScheme: dark handles
+   the calendar popover; this covers the control chrome that colorScheme misses. */
+select,
+input[type="date"] {
+  border-radius: 3px;
+}
+select:focus-visible,
+input[type="date"]:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+/* Footnotes visible only on compact screens where title tooltips are
+   unreachable. Desktop keeps the title attribute. */
+.compact-footnote {
+  display: none;
+}
+@media (max-width: 900px) {
+  .compact-footnote {
+    display: block;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

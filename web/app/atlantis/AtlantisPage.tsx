@@ -49,6 +49,7 @@ const activeBtnStyle: CSSProperties = {
 };
 
 type Tab = "dashboard" | "history" | "alltime" | "factions";
+const VALID_TABS = new Set<string>(["dashboard", "history", "alltime", "factions"]);
 
 export default function AtlantisPage() {
   const searchParams = useSearchParams();
@@ -61,7 +62,8 @@ export default function AtlantisPage() {
 
   const selectedMonth = searchParams.get("t");
   const playerParam = searchParams.get("player");
-  const tabParam = (searchParams.get("tab") ?? "dashboard") as Tab;
+  const rawTab = searchParams.get("tab") ?? "dashboard";
+  const tabParam: Tab = VALID_TABS.has(rawTab) ? (rawTab as Tab) : "dashboard";
 
   const setParam = useCallback(
     (key: string, value: string | null) => {
@@ -158,6 +160,7 @@ export default function AtlantisPage() {
           <select
             value={resolvedMonth ?? ""}
             onChange={(e) => setParam("t", e.target.value)}
+            aria-label="Tournament month"
             style={{ ...btnStyle, appearance: "auto" }}
           >
             {[...allTournaments].reverse().map((t) => {

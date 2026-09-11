@@ -171,9 +171,9 @@ function PlayersTable({ month }: { month: DerivedMonthPayload }) {
                         {faction}
                       </span>
                     </td>
-                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.launches.toLocaleString()}</td>
-                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.bots_killed.toLocaleString()}</td>
-                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.bots_lost.toLocaleString()}</td>
+                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.launches.toLocaleString("en-US")}</td>
+                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.bots_killed.toLocaleString("en-US")}</td>
+                    <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.bots_lost.toLocaleString("en-US")}</td>
                     <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{p.reports}</td>
                     <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>
                       {p.qredits_estimate !== null ? compact(p.qredits_estimate) : "—"}

@@ -486,15 +486,7 @@ def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     # The skip compares bodies, not headers, so an object whose Cache-Control
     # policy changed but whose bytes did not would keep the old header forever.
     # That is what the force flag is for.
-    force = os.environ.get("ZNHSTRY_UPLOAD_FORCE") == "1"
-
-    def unchanged(path: Path) -> bool:
-        if force:
-            return False
-        etag = remote.get(key_of[path])
-        return etag is not None and etag == md5(path.read_bytes()).hexdigest()
-
-    pending = [p for p in shards if not unchanged(p)]
+    pending = _changed(shards, remote, key_of)
     skipped = len(shards) - len(pending)
 
     log.info(

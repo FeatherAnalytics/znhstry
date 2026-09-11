@@ -62,6 +62,10 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_DATA_ORIGIN: dataOrigin,
     // Which export under that origin to read. Only `global` exists.
     NEXT_PUBLIC_DATA_SCOPE: process.env.NEXT_PUBLIC_DATA_SCOPE ?? "global",
+    // Optional CARTO basemap API key. Without it tiles are watermarked.
+    ...(process.env.NEXT_PUBLIC_CARTO_API_KEY
+      ? { NEXT_PUBLIC_CARTO_API_KEY: process.env.NEXT_PUBLIC_CARTO_API_KEY }
+      : {}),
   },
 };
 

@@ -90,10 +90,12 @@ def _ingest_one(path: Path) -> bool:
     ends_at = page.tournament["EndsAtUtc"][0]
     naive_at = observed_at.replace(tzinfo=None)
     if winner is not None and ends_at is not None and naive_at < ends_at:
-        raise ValueError(
-            f"{ts}: banner says winner {winner} but observed_at {naive_at} < "
-            f"ends_at {ends_at}; this is the previous month's frozen board"
+        log.warning(
+            "wayback: %s banner says winner %s but observed_at %s < ends_at %s; "
+            "skipping (previous month's frozen board)",
+            ts, winner, naive_at, ends_at,
         )
+        return False
 
     atlantis._store(page, observed_at.replace(tzinfo=None))
 

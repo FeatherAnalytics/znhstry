@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 
 from znhstry import config
-from znhstry.ingest import RingGapError, plan_slots, read_daily
+from znhstry.ingest import RingGapError, merge, plan_slots, read_daily
 from znhstry.schema import CHANGELOG_DTYPES, conform
 
 _DAILY_HEADER = (
@@ -206,3 +206,32 @@ def test_conform_refuses_to_invent_a_missing_column():
     """
     with pytest.raises(ValueError, match="missing"):
         conform(pl.DataFrame({"ZoneId": [1]}), CHANGELOG_DTYPES)
+
+
+def test_merge_is_idempotent(tmp_path, monkeypatch):
+    """Re-reading a slot adds nothing — the merge is keyed, not appended."""
+    monkeypatch.setattr(config, "RAW", tmp_path)
+    events = conform(
+        pl.DataFrame({
+            "ZoneId": [1, 2],
+            "LastUpdateDateUtc": [
+                datetime(2026, 8, 7, 0, 1, 21),
+                datetime(2026, 8, 7, 0, 2, 0),
+            ],
+            "DateCapturedUtc": [
+                datetime(2026, 8, 1, 9, 0, 0),
+                datetime(2026, 8, 1, 9, 0, 0),
+            ],
+            "ZoneControlState": [2, 1],
+            "LegionCount": [10, 0],
+            "SwarmCount": [0, 20],
+            "FacelessCount": [0, 0],
+        }),
+        CHANGELOG_DTYPES,
+    )
+
+    first = merge(events)
+    second = merge(events)
+
+    assert first == {2026: 2}
+    assert second == {2026: 0}

@@ -47,7 +47,9 @@ export const VIEWS: { key: ViewKey; label: string; title: string }[] = [
   ...WINDOWS.map((w) => ({
     key: w.key as ViewKey,
     label: w.label,
-    title: `Zones that saw any activity in the last ${w.label.toLowerCase()}`,
+    title: w.key === "all"
+      ? "Every zone that saw any activity in the record"
+      : `Zones that saw any activity in the last ${w.label.toLowerCase()}`,
   })),
 ];
 

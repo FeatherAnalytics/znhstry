@@ -80,10 +80,8 @@ const control: React.CSSProperties = {
   font: "inherit",
   fontSize: 12,
   padding: "5px 9px",
-  // Shrinks with the header rather than forcing the title to wrap. 190px is
-  // what it wants; on a phone it takes whatever is left after the title and
-  // the locate button.
   width: 190,
+  maxWidth: "100%",
   minWidth: 0,
   flexShrink: 1,
 };
@@ -131,7 +129,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
   };
 
   return (
-    <div ref={boxRef} style={{ position: "relative" }}>
+    <div ref={boxRef} style={{ position: "relative", minWidth: 0, flexShrink: 1 }}>
       {selected ? (
         <button
           className="eyebrow"
@@ -145,6 +143,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
       ) : (
         <input
           value={query}
+          id="area-filter"
           placeholder="Filter by country or region"
           aria-label="Filter by country or region"
           onFocus={() => setOpen(true)}
@@ -168,8 +167,9 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
           style={{
             position: "absolute",
             top: "calc(100% + 4px)",
-            left: 0,
+            right: 0,
             width: 280,
+            maxWidth: "calc(100vw - 24px)",
             maxHeight: 320,
             overflowY: "auto",
             background: "rgba(10,13,19,0.96)",
@@ -206,7 +206,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
                 {area.detail}
               </span>
               <span className="tabular" style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                {area.zones.toLocaleString()}
+                {area.zones.toLocaleString("en-US")}
               </span>
             </button>
           ))}

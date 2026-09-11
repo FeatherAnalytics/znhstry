@@ -1,7 +1,7 @@
 "use client";
 
 import { SiteNav } from "@/components/SiteNav";
-import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { DATA_ROOT } from "@/lib/dataOrigin";
 import { openDuckDB, type MartsMeta, type ResultTable, type Warehouse } from "@/lib/duckdbWasm";
 
@@ -134,11 +134,11 @@ function useQuery(warehouse: Warehouse | null) {
       setRunning(true);
       const started = performance.now();
       try {
+        await warehouse.bind(sql);
         const table = await warehouse.conn.query(sql);
         setResult({ table, elapsedMs: performance.now() - started });
         setError(null);
       } catch (failure: unknown) {
-        // A stale grid under an error reads as the failed query's output.
         setResult(null);
         setError(errorText(failure));
       } finally {
@@ -226,11 +226,13 @@ interface EditorProps {
   sql: string;
   onChange: (sql: string) => void;
   onRun: () => void;
+  onCopyLink: () => void;
   onDownload: () => void;
   ready: boolean;
   running: boolean;
   status: string | null;
   hasResult: boolean;
+  copied: boolean;
 }
 
 function Editor(props: EditorProps) {
@@ -247,6 +249,8 @@ function Editor(props: EditorProps) {
         onChange={(e) => props.onChange(e.target.value)}
         onKeyDown={onKeyDown}
         spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
         rows={8}
         aria-label="SQL"
         style={{
@@ -264,6 +268,9 @@ function Editor(props: EditorProps) {
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
         <button type="button" onClick={props.onRun} disabled={!props.ready || props.running} style={buttonStyle}>
           {props.running ? "Running…" : "Run"}
+        </button>
+        <button type="button" onClick={props.onCopyLink} disabled={!props.ready} style={buttonStyle}>
+          {props.copied ? "Copied" : "Copy link"}
         </button>
         <button type="button" onClick={props.onDownload} disabled={!props.hasResult} style={buttonStyle}>
           Download CSV
@@ -379,16 +386,41 @@ function Errors({ bootError, error }: { bootError: string | null; error: string 
   );
 }
 
+function sqlPermalink(sql: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("sql", sql);
+  return url.toString();
+}
+
 export default function QueryConsole() {
   const { warehouse, bootError } = useWarehouse();
   const { run, running, result, error } = useQuery(warehouse);
   const [sql, setSql] = useState(STARTER_SQL);
   const [csvNote, setCsvNote] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const autoRan = useRef(false);
   const meta = warehouse?.meta ?? null;
+
+  // Read ?sql= after mount to avoid a hydration mismatch, then auto-run.
+  useEffect(() => {
+    if (!warehouse || autoRan.current) return;
+    autoRan.current = true;
+    const param = new URLSearchParams(window.location.search).get("sql");
+    const query = param ?? sql;
+    if (param) setSql(param);
+    void run(query);
+  }, [warehouse]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRun = () => {
     setCsvNote(null);
+    window.history.replaceState(null, "", sqlPermalink(sql));
     void run(sql);
+  };
+  const onCopyLink = () => {
+    navigator.clipboard.writeText(sqlPermalink(sql)).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+      () => { setCopied(false); },
+    );
   };
   const onDownload = () => {
     if (result === null) return;
@@ -400,23 +432,30 @@ export default function QueryConsole() {
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
       <Header meta={meta} loading={meta === null && bootError === null} />
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "hidden" }}>
-        <TableList meta={meta} onPick={(name) => setSql(`select * from ${name} limit 100`)} />
         <section style={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexDirection: "column" }}>
           <Editor
             sql={sql}
             onChange={setSql}
             onRun={onRun}
+            onCopyLink={onCopyLink}
             onDownload={onDownload}
             ready={meta !== null}
             running={running}
             status={statusFor(result, csvNote)}
             hasResult={result !== null}
+            copied={copied}
           />
           <Errors bootError={bootError} error={error} />
           <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
             {result && <ResultsGrid table={result.table} />}
           </div>
         </section>
+        <TableList meta={meta} onPick={(name) => {
+          const q = `select * from ${name} limit 100`;
+          setSql(q);
+          setCsvNote(null);
+          void run(q);
+        }} />
       </div>
     </main>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MapViewState } from "@deck.gl/core";
+import { WebMercatorViewport, type MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import {
   StatsPanel,
@@ -20,7 +20,6 @@ import {
   inArea,
   radiusFilter,
   singleZoneFilter,
-  viewportFilter,
   type ZoneFilter,
 } from "@/lib/filters";
 import {
@@ -155,6 +154,41 @@ export default function Page() {
     bearing: 0,
   });
 
+  // The single source of the map container's pixel dimensions. Updated by a
+  // ResizeObserver so both the initial camera fit and the bots-in-view bounds
+  // (Phase 3) read the same value without a second observer.
+  const mapRef = useRef<HTMLDivElement>(null);
+  const canvasSize = useRef({ width: 1280, height: 720 });
+  const hasInteracted = useRef(false);
+
+  // Fit the camera width so 360° of longitude fills the canvas. In portrait
+  // deck.gl's MapView clamps zoom to log2(height/512) so the map is never
+  // shorter than the viewport; 360° cannot fit, so we center on the Americas
+  // and Europe instead. Refits on orientation change until the reader interacts.
+  useEffect(() => {
+    const el = mapRef.current;
+    if (!el) return;
+    const fit = () => {
+      const { clientWidth: w, clientHeight: h } = el;
+      if (w <= 0 || h <= 0) return;
+      canvasSize.current = { width: w, height: h };
+      if (hasInteracted.current) return;
+      const zoom = Math.log2(w / 512);
+      const lon = h > w ? -40 : INITIAL_VIEW.longitude;
+      setViewState((v) => ({ ...v, zoom, longitude: lon }));
+      const vp = new WebMercatorViewport({
+        ...INITIAL_VIEW, zoom, longitude: lon, width: w, height: h, pitch: 0, bearing: 0,
+      });
+      const [west, south] = vp.unproject([0, h]);
+      const [east, north] = vp.unproject([w, 0]);
+      viewportBounds.current = [west, south, east, north];
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // Bounds are read when a series is built rather than tracked in state, so
   // panning does not rebuild a series on every frame.
   const viewportBounds = useRef<[number, number, number, number]>([-180, -85, 180, 85]);
@@ -230,26 +264,24 @@ export default function Page() {
       setFlashpoint(next);
       if (!next) return;
       setActivePeriod(null);
-      // Opens on the standings, not on the day's events. A flashpoint frames a few
-      // hundred zones, and the Daily backdrop draws only the ones with an event on
-      // the date - which on the first frame of the baseline is often none of them,
-      // so the reader arrives at an empty rectangle. Playback then shows the fight
-      // arriving over a neighborhood that is visible from the start.
+      // Opens on the standings, not on the day's events. A flashpoint frames a
+      // few hundred zones, and the Daily backdrop draws only the ones with an
+      // event on the date — which on the first frame of the baseline is often
+      // none of them, so the reader arrives at an empty rectangle.
       setBackdrop("all");
       setRangeStart(next.runStart);
       setRangeEnd(next.runEnd);
       data.setDay(next.runStart);
-      // A flashpoint is a third kind of focus; two of them at once means neither.
+      // A flashpoint is a third kind of focus; two at once means neither.
       setArea(null);
       setHome(null);
       setSelectedZone(null);
       setHistoryMode("viewport");
-      // Bring the tile queue to the flashpoint, so whatever has not arrived yet
-      // arrives nearest-first around it.
       data.setFocus(next.anchor.lat, next.anchor.lon);
       setViewState((v) => ({ ...v, ...framing(next, zoomFor) }));
+      if (compact) setSheetStop("half");
     },
-    [data],
+    [data, compact],
   );
 
   const applyPeriod = useCallback(
@@ -341,6 +373,7 @@ export default function Page() {
       setHistoryMode(next ? "area" : "scope");
       if (!next || !geometry) return;
       setHome(null);
+      if (compact) setSheetStop("half");
 
       let west = 180;
       let east = -180;
@@ -368,7 +401,7 @@ export default function Page() {
         zoom: zoomFor(east - west, north - south),
       }));
     },
-    [geometry, data],
+    [geometry, data, compact],
   );
 
   // --- which zones the readouts are about ---------------------------------
@@ -525,6 +558,15 @@ export default function Page() {
    */
   const changing = readMode === "change" && changeStart !== null;
 
+  const filterSlots = useMemo(() => {
+    if (!filter || !geometry) return null;
+    const slots: number[] = [];
+    for (let s = 0; s < geometry.count; s++) {
+      if (filter[geometry.slotToIdx[s]]) slots.push(s);
+    }
+    return slots;
+  }, [filter, geometry]);
+
   const shown = useMemo(() => {
     if (!display || day === null) {
       return {
@@ -578,19 +620,26 @@ export default function Page() {
       // the whole world.
       held = 0;
       drawn = 0;
-      const slots = geometry?.count ?? 0;
-      const toIdx = geometry?.slotToIdx;
+      const total = geometry?.count ?? 0;
       const everActive = geometry?.everActiveBySlot;
-      for (let slot = 0; slot < slots; slot++) {
-        if (filter && !filter[toIdx![slot]]) continue;
-        count++;
-        const packed = display.pk[slot];
-        byFaction[packed >> 6]++;
-        if (packed !== 0) held++;
-        // Slot-keyed like `pk`, so the two shades of grey the map already draws
-        // cost no extra indirection here.
-        else if (everActive && everActive[slot] === 0) neverPlayed++;
-        if (display.visible[slot] !== 0) drawn++;
+      if (filterSlots) {
+        for (const slot of filterSlots) {
+          count++;
+          const packed = display.pk[slot];
+          byFaction[packed >> 6]++;
+          if (packed !== 0) held++;
+          else if (everActive && everActive[slot] === 0) neverPlayed++;
+          if (display.visible[slot] !== 0) drawn++;
+        }
+      } else {
+        for (let slot = 0; slot < total; slot++) {
+          count++;
+          const packed = display.pk[slot];
+          byFaction[packed >> 6]++;
+          if (packed !== 0) held++;
+          else if (everActive && everActive[slot] === 0) neverPlayed++;
+          if (display.visible[slot] !== 0) drawn++;
+        }
       }
     }
 
@@ -646,7 +695,7 @@ export default function Page() {
     };
     // data.version so the counts follow the map as tiles land and dates change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
+  }, [filter, filterSlots, display, geometry, history, day, changing, changeStart, data.version, data.held, data.shown]);
 
   /** A year earlier on the same series, for the growth figure. */
   const previous: Totals | null = useMemo(() => {
@@ -675,7 +724,7 @@ export default function Page() {
     if (from >= day) return null;
     const net = (key: "legion" | "swarm" | "faceless") => history[key][day] - history[key][from];
     return {
-      label: `Since ${dayToDate(meta!.day_epoch, from).toLocaleDateString("en-GB", {
+      label: `Since ${dayToDate(meta!.day_epoch, from).toLocaleDateString("en-US", {
         day: "2-digit",
         month: "short",
         year: "numeric",
@@ -683,7 +732,6 @@ export default function Page() {
       })}`,
       value: net("legion") + net("swarm") + net("faceless"),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timelapse, history, day, rangeStart, changing, meta]);
 
   // --- hover: the map's bucket now, the record a moment later ---------------
@@ -883,25 +931,25 @@ export default function Page() {
     (next: ViewKey) => {
       setView(next);
       // A flashpoint belongs to the timelapse: it owns a range, a camera and a
-      // dimming mask, none of which the windows have a way to express. Leaving it
-      // set behind a window keeps the map framed on one neighborhood and the panel
-      // reading a viewport aggregate under a heading that says Global.
+      // dimming mask, none of which the windows can express.
       if (next !== "timelapse") {
         setFlashpoint(null);
         setHistoryMode("scope");
       }
+      if (compact) setSheetStop(next === "timelapse" ? "peek" : "half");
+      if (next === "timelapse") setEmphasis(EMPHASIS_ALL);
       if (!dayBounds) return;
       if (next === "current") data.setDay(dayBounds.max);
       else data.setDay((d) => (d === null || d > dayBounds.lastComplete ? dayBounds.lastComplete : d));
     },
-    [dayBounds, data],
+    [dayBounds, data, compact],
   );
 
   const ready = meta && geometry && display && day !== null && dayBounds;
 
   const locateButton = (
     <button
-      className="eyebrow"
+      className="eyebrow touch-target"
       onClick={home ? clearFocus : locate}
       disabled={geoStatus === "asking"}
       style={{
@@ -915,7 +963,7 @@ export default function Page() {
       title={
         geoStatus === "denied"
           ? "Location permission was declined. Enable it in the address bar to use this."
-          : "Centre the map on you and ring 1000 miles"
+          : "Center the map on you and ring 1000 miles"
       }
     >
       {geoStatus === "asking"
@@ -1011,7 +1059,7 @@ export default function Page() {
             // the period the reader picked.
             changeStart !== null && timelapse
               ? `Net change since ${dayToDate(meta.day_epoch, changeStart).toLocaleDateString(
-                  "en-GB",
+                  "en-US",
                   { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" },
                 )}`
               : `Net change ${windowPhrase(span)}`
@@ -1100,7 +1148,7 @@ export default function Page() {
         {playing ? "❙❙" : "▶"}
       </button>
       <span className="display tabular" style={{ fontSize: 17, whiteSpace: "nowrap" }}>
-        {dayToDate(meta.day_epoch, day).toLocaleDateString("en-GB", {
+        {dayToDate(meta.day_epoch, day).toLocaleDateString("en-US", {
           day: "2-digit",
           month: "short",
           year: "numeric",
@@ -1134,6 +1182,13 @@ export default function Page() {
       <span className="display" style={{ fontSize: compact ? 15 : 18, whiteSpace: "nowrap" }}>
         Zone History
       </span>
+      {!compact && (
+        <span className="eyebrow" style={{ fontSize: 9, color: "var(--text-dim)" }}>
+          Every zone in{" "}
+          <a href="https://www.qonqr.com" target="_blank" rel="noreferrer noopener" style={{ color: "inherit" }}>QONQR</a>
+          , colored by the faction holding it
+        </span>
+      )}
       <SiteNav />
     </div>
   );
@@ -1153,7 +1208,6 @@ export default function Page() {
       >
         {compact ? (
           <>
-            {/* Title row, then the controls get the full width to scroll in. */}
             <div
               style={{
                 display: "flex",
@@ -1166,7 +1220,6 @@ export default function Page() {
               {masthead}
               <div style={{ flex: 1, minWidth: 8 }} />
               {areaPicker}
-              {locateButton}
             </div>
             <WindowPicker
               view={view}
@@ -1175,7 +1228,9 @@ export default function Page() {
               onEmptyOnly={setEmptyOnly}
               pending={changing && data.shown === null}
               scrollable
-            />
+            >
+              {locateButton}
+            </WindowPicker>
           </>
         ) : (
           <>
@@ -1195,13 +1250,14 @@ export default function Page() {
         )}
       </header>
 
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div ref={mapRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
         {geometry && display && (
           <ZoneMap
             geometry={geometry}
             display={display}
             version={data.version}
             boundaries={boundaries}
+            canvasSize={canvasSize.current}
             viewState={viewState}
             filter={mapFilter}
             draw={emptyOnly ? "empty" : "all"}
@@ -1220,7 +1276,10 @@ export default function Page() {
                   ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM }
                   : null
             }
-            onViewStateChange={setViewState}
+            onViewStateChange={(vs, userInitiated) => {
+              if (userInitiated) hasInteracted.current = true;
+              setViewState(vs);
+            }}
             onHover={handleHover}
             onClickZone={(idx) => {
               // A touch screen has no hover, so the tap has to do both jobs:

@@ -56,6 +56,9 @@ function fetchColumns(url: string, spec: ColumnSpec[], rows: number): Promise<Co
   const existing = cache.get(url);
   if (existing) return existing;
   const promise = fetchBytes(url).then((buffer) => decodeColumns(buffer, spec, rows));
+  promise.catch(() => {
+    if (cache.get(url) === promise) cache.delete(url);
+  });
   cache.set(url, promise);
   return promise;
 }

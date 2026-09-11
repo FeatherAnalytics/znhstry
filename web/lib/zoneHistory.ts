@@ -69,10 +69,6 @@ export function zoneBlock(
   return promise;
 }
 
-export function loadedBlock(meta: ZoneHistoryMeta, idx: number): Promise<Columns> | undefined {
-  return blocks.get(blockOf(meta, idx));
-}
-
 /** Row range for one zone in a block ordered by idx. */
 function rangeFor(columns: Columns, idx: number): [number, number] {
   const { idx: key } = columns;

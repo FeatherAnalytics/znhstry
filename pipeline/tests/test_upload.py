@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from znhstry.upload import _refuse_a_half_written_export
+from znhstry.upload import ARCHIVE_PREFIX, MARTS_PREFIX, _refuse_a_half_written_export
 
 
 def _export(tmp_path: Path, manifest_ns: int, shard_ns: int) -> tuple[Path, list[Path]]:
@@ -52,3 +52,24 @@ def test_a_tree_with_no_manifest_stops_the_upload(tmp_path):
     (source / "global" / "meta.json").unlink()
     with pytest.raises(SystemExit, match="has not finished"):
         _refuse_a_half_written_export(source, [p for p in files if p.name != "meta.json"])
+
+
+def test_orphan_sweep_fences_raw_and_marts():
+    """The sweep must never delete keys under raw/ or marts/."""
+    fenced = (ARCHIVE_PREFIX, MARTS_PREFIX)
+    remote = {
+        "display/2026.bin.br",
+        "meta.json",
+        "raw/changelog/year=2026/events.parquet",
+        "raw/_manifest.json",
+        "marts/fct_zone_events.parquet",
+        "marts/_meta.json",
+        "old_shard.bin.br",
+    }
+    key_of_values = {"display/2026.bin.br", "meta.json"}
+
+    stale = {k for k in remote if not k.startswith(fenced)} - key_of_values
+
+    assert "old_shard.bin.br" in stale
+    assert not any(k.startswith("raw/") for k in stale)
+    assert not any(k.startswith("marts/") for k in stale)

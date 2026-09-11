@@ -49,8 +49,8 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
   if (entries.length === 0) {
     return <span style={{ color: "var(--text-dim)", fontStyle: "italic", fontSize: 11 }}>not yet attributed</span>;
   }
-  const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString()}`);
-  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString()} not yet attributed`);
+  const parts = entries.map(([f, d]) => `${f}: ${d.launches.toLocaleString("en-US")}`);
+  if (unattributed > 0) parts.push(`+ ${unattributed.toLocaleString("en-US")} not yet attributed`);
   return (
     <span style={{ display: "inline-flex", gap: 3 }} title={parts.join(", ")}>
       {entries.map(([f]) => (
@@ -151,14 +151,14 @@ function FactionBreakdown({ data }: { data: PlayerMonthRow[] }) {
           {entries.map(([f, d]) => (
             <tr key={f}>
               <td style={{ ...cellStyle, padding: "4px 8px", color: factionColor(f) }}>{f === "Unconfirmed" ? "Not yet attributed" : f}</td>
-              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.launches.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.tournaments}</td>
               <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{d.qredits > 0 ? compact(d.qredits) : "—"}</td>
             </tr>
           ))}
           <tr style={{ fontWeight: 600 }}>
             <td style={{ ...cellStyle, padding: "4px 8px" }}>Total</td>
-            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.launches.toLocaleString()}</td>
+            <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.launches.toLocaleString("en-US")}</td>
             <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.tournaments}</td>
             <td className="tabular" style={{ ...cellStyle, padding: "4px 8px", textAlign: "right" }}>{grand.qredits > 0 ? compact(grand.qredits) : "—"}</td>
           </tr>
@@ -184,14 +184,15 @@ function yearGap(m: string): number { return m.endsWith("-01") ? 4 : 0; }
 interface FactionMonthVal { month: string; total: number; byFaction: Record<string, number> }
 
 function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMonths: string[] }) {
-  if (props.data.length === 0) return null;
   const months = props.allMonths;
+  const bar = useBarHover(months.length);
+
+  if (props.data.length === 0) return null;
   const valMap = new Map(props.data.map(d => [d.month, d]));
   const maxV = Math.max(...props.data.map(d => d.total), 1);
   const medianV = median(props.data.map(d => d.total));
   const h = 240;
   const maxBarW = 20;
-  const bar = useBarHover(months.length);
   const hm = bar.index != null ? months[bar.index] : null;
   const hd = hm ? valMap.get(hm) : null;
   return (
@@ -204,7 +205,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
         <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
           <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
         </div>
-        <div ref={bar.ref} onMouseMove={bar.onMouseMove} onMouseLeave={bar.onMouseLeave}
+        <div ref={bar.ref} onPointerMove={bar.onPointerMove} onPointerLeave={bar.onPointerLeave}
           style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
           {months.map((m, i) => {
             const entry = valMap.get(m);
@@ -227,7 +228,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
       <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
         {hd ? (
           <>
-            <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString()}
+            <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString("en-US")}
             {FACTION_ORDER.map(f => {
               const v = hd.byFaction[f];
               return v ? <span key={f} style={{ marginLeft: 6, color: factionHex(f) }}>{compact(v)}</span> : null;
@@ -244,23 +245,24 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
 function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: string; allMonths?: string[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const w = useWidth(containerRef);
-  if (data.length < 2) return null;
   const months = allMonths ?? data.map(d => d.month);
+  const step = w / Math.max(months.length - 1, 1);
+  const { hover, onPointerMove, onPointerLeave } = useChartHover(months.length, step);
+
+  if (data.length < 2) return null;
   const valMap = new Map(data.map(d => [d.month, d.value]));
   let cumMax = 0;
   const cumVals = months.map(m => { cumMax += valMap.get(m) ?? 0; return cumMax; });
   const h = 240;
-  const step = w / Math.max(months.length - 1, 1);
   const ph = h - 18;
   const pts = cumVals.map((v, i) => `${i * step},${4 + ph - (v / cumMax) * ph}`).join(" ");
   const halfY = 4 + ph - (0.5 * ph);
-  const { hover, onMouseMove, onMouseLeave } = useChartHover(months.length, step);
 
   return (
     <div style={{ flex: 1, minWidth: 0 }} ref={containerRef}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
       <div style={{ position: "relative" }}>
-        <svg width={w} height={h} style={{ display: "block" }} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+        <svg width={w} height={h} style={{ display: "block" }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
           <line x1={0} x2={w} y1={halfY} y2={halfY} stroke="var(--hairline)" strokeWidth={1} strokeDasharray="3,3" />
           <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} opacity={0.8} />
           {(() => {
@@ -289,7 +291,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
         <span className="tabular" style={{ position: "absolute", left: 0, top: `${(halfY / h) * 100}%`, fontSize: 7, color: "var(--text-dim)" }}>{compact(cumMax / 2)}</span>
       </div>
       <YearLabels months={months} />
-      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString()}</> : null}</div>
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>{hover ? <><span style={{ fontWeight: 600 }}>{months[hover.index]}</span>: {cumVals[hover.index].toLocaleString("en-US")}</> : null}</div>
     </div>
   );
 }
@@ -434,9 +436,9 @@ function PlayerDetailTable({ rows, detailSort, toggleDetailSort, dArrow }: {
                   {faction}
                 </span>
               </td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString()}</td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString()}</td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString()}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString("en-US")}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString("en-US")}</td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
               <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
@@ -505,7 +507,7 @@ export default function AllTime({ index }: Props) {
       <div className="display" style={{ fontSize: 13, marginBottom: 12 }}>Players</div>
       <PlayersTable
         filtered={filtered} filter={filter} onFilterChange={setFilter}
-        sortCol={sortCol} toggleSort={toggleSort} arrow={arrow}
+        sortCol={sortCol} sortAsc={sortAsc} toggleSort={toggleSort} arrow={arrow}
         onPlayerClick={onPlayerClick}
       />
       {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
@@ -513,11 +515,12 @@ export default function AllTime({ index }: Props) {
   );
 }
 
-function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, arrow, onPlayerClick }: {
+function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, toggleSort, arrow, onPlayerClick }: {
   filtered: (AllTimePlayer & { rank: number })[];
   filter: string;
   onFilterChange: (v: string) => void;
   sortCol: SortCol;
+  sortAsc: boolean;
   toggleSort: (col: SortCol) => void;
   arrow: (col: SortCol) => React.ReactNode;
   onPlayerClick: (name: string) => void;
@@ -544,11 +547,11 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, a
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default", width: 40 }}>#</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Factions</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("launches")}>Launches{arrow("launches")}</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("tournaments")}>Tournaments{arrow("tournaments")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "launches" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("launches")} style={{ padding: 0 }}>Launches{arrow("launches")}</button></th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "tournaments" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("tournaments")} style={{ padding: 0 }}>Tournaments{arrow("tournaments")}</button></th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>First</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>Last</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} onClick={() => toggleSort("qredits")}>Qredits{arrow("qredits")}</th>
+              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "qredits" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("qredits")} style={{ padding: 0 }}>Qredits{arrow("qredits")}</button></th>
             </tr>
           </thead>
           <tbody>
@@ -557,7 +560,7 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, toggleSort, a
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.rank}</td>
                 <td style={{ ...cellStyle, cursor: "pointer" }} onClick={() => onPlayerClick(r.name)}>{r.name}</td>
                 <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
-                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.first_month}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.last_month}</td>

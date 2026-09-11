@@ -54,6 +54,7 @@ const BACKDROPS: { key: Backdrop; label: string; title: string }[] = [
 const control: React.CSSProperties = {
   background: "rgba(14,18,24,0.82)",
   border: "1px solid var(--hairline-bright)",
+  borderRadius: 3,
   color: "var(--text)",
   font: "inherit",
   fontSize: 12,
@@ -307,9 +308,9 @@ export function TimelapseBar({
               count of the amber rings: a MAZ ring is a trailing 30-day window, so
               the number rises and falls with the window rather than with anything
               happening, and it answers no question the rings do not answer better. */}
-          {bounds ? `${(bounds.max - bounds.min).toLocaleString()} days · ` : ""}
-          {flips.toLocaleString()} changed hands
-          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString()} claimed` : ""}
+          {bounds ? `${(bounds.max - bounds.min).toLocaleString("en-US")} days · ` : ""}
+          {flips.toLocaleString("en-US")} changed hands
+          {backdrop === "cumulative" ? ` · ${claimed.toLocaleString("en-US")} claimed` : ""}
         </span>
       </div>
 

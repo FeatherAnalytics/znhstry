@@ -132,12 +132,13 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
 
 export default function PlayerDetail({ faction, playerName, month, obsTimestamps, onClose }: Props) {
   const data = month.players[faction]?.[playerName];
-  if (!data) return null;
 
   const intervals = useMemo(
-    () => deriveIntervals(data.launches, obsTimestamps),
-    [data.launches, obsTimestamps],
+    () => (data ? deriveIntervals(data.launches, obsTimestamps) : []),
+    [data, obsTimestamps],
   );
+
+  if (!data) return null;
 
   const factionTotal = Object.values(month.players[faction] ?? {}).reduce(
     (sum, p) => sum + (p.qredits ?? 0), 0,
@@ -164,6 +165,9 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
 
       <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval (in coverage)</div>
       <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />
+      <span className="compact-footnote eyebrow" style={{ color: "var(--text-dim)", marginTop: 4, fontSize: 9 }}>
+        Gains cover observed hours only
+      </span>
 
       <BadgeMarkers data={data} obsTimestamps={obsTimestamps} />
 
@@ -244,9 +248,9 @@ function BattleReports({ playerName, month }: { playerName: string; month: Month
                 <td style={btCell}>{btDateFmt.format(new Date(r.day + "T00:00:00Z"))}</td>
                 <td style={btCell}>{r.zone}</td>
                 <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.rank}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString()}</td>
-                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString()}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.killed.toLocaleString("en-US")}</td>
+                <td className="tabular" style={{ ...btCell, textAlign: "right" }}>{r.lost.toLocaleString("en-US")}</td>
               </tr>
             ))}
           </tbody>

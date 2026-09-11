@@ -87,9 +87,7 @@ export function BottomSheet({ stop, onStop, summary, children }: Props) {
         WebkitBackdropFilter: "var(--panel-blur)",
         borderTop: "1px solid var(--hairline-bright)",
         zIndex: 20,
-        // Snapping should glide; dragging must not lag the finger.
         transition: dragging ? "none" : "height 180ms ease-out",
-        touchAction: "none",
       }}
     >
       <div
@@ -97,34 +95,53 @@ export function BottomSheet({ stop, onStop, summary, children }: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        style={{ padding: "8px 16px 6px", cursor: "grab", flexShrink: 0 }}
+        style={{
+          padding: "0 16px 6px",
+          cursor: "grab",
+          flexShrink: 0,
+          touchAction: "none",
+        }}
       >
-        {/* Tapping the handle cycles the stops, so the sheet is usable without
-            a drag - and reachable by keyboard. */}
         <button
           onClick={cycle}
           aria-label={`Details panel, ${stop}. Activate to expand.`}
           style={{
-            display: "block",
-            width: 40,
-            height: 4,
-            margin: "0 auto 8px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 48,
+            height: 44,
+            margin: "0 auto",
             border: "none",
             padding: 0,
-            borderRadius: 2,
-            background: "var(--text-dim)",
-            opacity: 0.6,
+            background: "transparent",
             cursor: "pointer",
           }}
-        />
+        >
+          <span
+            style={{
+              display: "block",
+              width: 40,
+              height: 4,
+              borderRadius: 2,
+              background: "var(--text-dim)",
+              opacity: 0.6,
+            }}
+          />
+        </button>
         {summary}
       </div>
 
-      {/* At peek the sheet is only tall enough for the summary, and rendering
-          the body anyway leaves a sliver of half-cut headings under it. Show it
-          from half upward, and during a drag so the sheet fills as it rises. */}
       {(stop !== "peek" || dragging) && (
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            touchAction: "pan-y",
+          }}
+        >
           {children}
         </div>
       )}

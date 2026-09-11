@@ -14,26 +14,6 @@ import { haversineKm } from "./series";
 export type ZoneFilter = Uint8Array | null;
 
 /**
- * Mask of zones inside the current map bounds.
- *
- * Zones whose tile has not landed yet hold NaN coordinates, and every
- * comparison against NaN is false, so they fall out without a separate check.
- */
-export function viewportFilter(
-  geometry: ZoneGeometry,
-  [west, south, east, north]: [number, number, number, number],
-): ZoneFilter {
-  const { latitude, longitude, size } = geometry;
-  const mask = new Uint8Array(size);
-  for (let i = 0; i < size; i++) {
-    const lon = longitude[i];
-    const lat = latitude[i];
-    mask[i] = lon >= west && lon <= east && lat >= south && lat <= north ? 1 : 0;
-  }
-  return mask;
-}
-
-/**
  * Mask of zones in one country, or in one region.
  *
  * The two are separate questions and the game answers them from separate fields:

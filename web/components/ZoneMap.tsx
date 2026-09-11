@@ -126,7 +126,8 @@ export interface ZoneMapProps {
    * in here.
    */
   overlays?: LayersList;
-  onViewStateChange: (next: MapViewState) => void;
+  canvasSize: { width: number; height: number };
+  onViewStateChange: (next: MapViewState, userInitiated: boolean) => void;
   /** Receives a zone idx, or null when the pointer leaves the dots. */
   onHover: (idx: number | null) => void;
   onClickZone: (idx: number | null) => void;
@@ -146,6 +147,7 @@ export function ZoneMap({
   emphasis = EMPHASIS_ALL,
   ring,
   overlays,
+  canvasSize,
   onViewStateChange,
   onHover,
   onClickZone,
@@ -153,7 +155,6 @@ export function ZoneMap({
 }: ZoneMapProps) {
   const colors = useRef(new Uint8Array(geometry.size * 4));
   const radii = useRef(new Float32Array(geometry.size));
-  const drawn = useRef(0);
 
   // The 1,087,356 zones never played in fourteen years. Their colour and radius
   // cannot change with the date - they are empty in every frame of every year -
@@ -192,7 +193,7 @@ export function ZoneMap({
    *
    * Zones the view is not showing keep their row at radius 0 and alpha 0. That
    * is not free - it is what compacting was introduced to avoid - so see
-   * `drawnRow` for how a pick is kept honest, and the terrain layer below for
+   * the pick logic below for how a pick is kept honest, and the terrain layer for
    * the 1,087,356 zones that stay out of here entirely.
    */
   const membership = useMemo(() => {
@@ -363,7 +364,6 @@ export function ZoneMap({
         radiusArray[r] = lit ? 900 : 400;
       }
     }
-    drawn.current = length;
   }, [geometry, membership, display, radiusFor, version, filter, draw, only, maskVersion, emphasis]);
 
   /**
@@ -467,13 +467,13 @@ export function ZoneMap({
 
   const graticuleData = useMemo(() => graticule(), []);
 
-  const basemapData = useMemo(
-    () =>
-      ["a", "b", "c", "d"].map(
-        (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png`,
-      ),
-    [],
-  );
+  const basemapData = useMemo(() => {
+    const key = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+    const suffix = key ? `?key=${key}` : "";
+    return ["a", "b", "c", "d"].map(
+      (s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png${suffix}`,
+    );
+  }, []);
 
   const boundaryData = useMemo(
     () =>
@@ -493,7 +493,7 @@ export function ZoneMap({
     // zoom past a state line and there was nothing on screen to tell you where
     // you were. This is CARTO's dark basemap - coastlines, water, roads and
     // place names, drawn dark specifically to sit under data rather than
-    // compete with it. No API key, and attribution is rendered below.
+    // compete with it. Attribution is rendered below.
     new TileLayer({
       id: "basemap",
       data: basemapData,
@@ -652,13 +652,15 @@ export function ZoneMap({
       onClick={(info) => onClickZone(picked(info))}
       onViewStateChange={(e) => {
         const vs = e.viewState as MapViewState;
-        onViewStateChange(vs);
+        const is = e.interactionState as Record<string, boolean> | undefined;
+        const user = !!(is?.isDragging || is?.isPanning || is?.isZooming || is?.isRotating);
+        onViewStateChange(vs, user);
         // Bounds are pushed to a callback that writes a ref rather than React
         // state: panning must not rebuild a 9.87M-event series every frame.
         const view = new WebMercatorViewport({
           ...vs,
-          width: window.innerWidth,
-          height: window.innerHeight,
+          width: canvasSize.width,
+          height: canvasSize.height,
         });
         const [west, south] = view.unproject([0, view.height]);
         const [east, north] = view.unproject([view.width, 0]);
@@ -667,18 +669,18 @@ export function ZoneMap({
       style={{ position: "absolute", inset: "0" }}
       getCursor={({ isDragging }) => (isDragging ? "grabbing" : "crosshair")}
     >
-      {/* Required by the basemap's licence, not decoration. Kept small and
-          dim, but it has to be on screen wherever those tiles are. */}
+      {/* Required by the basemap's license, not decoration. z-index 21 keeps
+          it above the bottom sheet (z-index 20) at half and full stops. */}
       <a
         href="https://carto.com/attributions"
         target="_blank"
         rel="noreferrer noopener"
-        className="eyebrow"
+        className="eyebrow basemap-attr"
         style={{
           position: "absolute",
-          right: 8,
+          left: 8,
           bottom: 6,
-          zIndex: 5,
+          zIndex: 21,
           fontSize: 9,
           color: "var(--text-dim)",
           textDecoration: "none",

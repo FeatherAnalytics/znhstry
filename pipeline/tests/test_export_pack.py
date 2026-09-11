@@ -70,7 +70,7 @@ def test_an_unsorted_index_cannot_be_delta_encoded():
         _pack({"idx": np.array([5, 1], "int64")}, {"idx": IDX}, frozenset({"idx"}))
 
 
-def test_delta_overflow_is_caught(self=None):
+def test_delta_overflow_is_caught():
     """The bounds check must run after the delta transform, not before.
 
     An absolute value that fits the dtype can produce a delta that does not.

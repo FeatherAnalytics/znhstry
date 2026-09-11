@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,7 @@ log = logging.getLogger(__name__)
 # most of the export's running time. Decompression is fast at every level.
 BROTLI_QUALITY = 11
 BROTLI_QUALITY_BULK = 10
+_COMPRESS_WORKERS = min(8, os.cpu_count() or 1)
 
 
 def _write(path: Path, payload: bytes, quality: int = BROTLI_QUALITY) -> int:
@@ -777,45 +780,31 @@ def _export_geometry(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any
         )
         return payload, spec
 
-    for key, start, end in zip(unique, starts, ends, strict=True):
-        member = order[start:end]
-        row, col = int(key // 1000), int(key % 1000)
-        name = f"{row:02d}_{col:02d}"
+    with ThreadPoolExecutor(max_workers=_COMPRESS_WORKERS) as pool:
+        for key, start, end in zip(unique, starts, ends, strict=True):
+            member = order[start:end]
+            row, col = int(key // 1000), int(key % 1000)
+            name = f"{row:02d}_{col:02d}"
 
-        # Every zone in the tile, in one file, in the tile's spatial order.
-        #
-        # These used to be split by whether the zone had ever been played, so the
-        # played world could paint before the grey arrived. It bought about a
-        # second and cost three things worth more than that:
-        #
-        #   * ~24,000 zones a year are played for the first time, and each one
-        #     moved between the two files. Both changed, both are served
-        #     `immutable`, and a reader holding one and not the other sees a tile
-        #     whose row count disagrees with the manifest.
-        #   * Terrain loaded second, so every grey dot drew on top of every
-        #     coloured one. Merged and sorted by position, they interleave.
-        #   * Two files per tile to keep row-aligned with one paint file.
-        #
-        # A first play is now a change to one byte of `paint/`, which revalidates
-        # normally, and the positions only change when a zone genuinely appears.
-        payload, position_spec = pack_positions(member)
-        tile_bytes = _write(out / "tiles" / f"{name}.bin.br", payload)
-        paint_payload, paint_spec, _ = _pack({"pk": display_pk[member]}, paint_columns)
-        paint_bytes = _write(out / "paint" / f"{name}.bin.br", paint_payload)
+            payload, position_spec = pack_positions(member)
+            tile_f = pool.submit(_write, out / "tiles" / f"{name}.bin.br", payload)
+            paint_payload, paint_spec, _ = _pack({"pk": display_pk[member]}, paint_columns)
+            paint_f = pool.submit(_write, out / "paint" / f"{name}.bin.br", paint_payload)
 
-        tiles.append(
-            [
-                name,
-                len(member),
-                int(played[member].sum()),
-                tile_bytes,
-                paint_bytes,
-                # South-west corner in degrees. The client derives the rest from
-                # tile_degrees rather than carrying four floats per tile.
-                row * TILE_DEGREES - 90,
-                col * TILE_DEGREES - 180,
-            ]
-        )
+            tiles.append(
+                [
+                    name,
+                    len(member),
+                    int(played[member].sum()),
+                    tile_f,
+                    paint_f,
+                    row * TILE_DEGREES - 90,
+                    col * TILE_DEGREES - 180,
+                ]
+            )
+
+        for t in tiles:
+            t[3], t[4] = t[3].result(), t[4].result()
 
     first_paint = sum(t[3] + t[4] for t in tiles)
     names_manifest = _export_names(idx, names, out)
@@ -887,19 +876,23 @@ def _export_names(idx: np.ndarray, names: np.ndarray, out: Path) -> dict[str, An
     by_idx = np.full(int(idx.max()) + 1, "", dtype=object)
     by_idx[idx] = names
 
-    total = 0
     blocks: list[list[Any]] = []
-    for start in range(0, len(by_idx), _NAME_BLOCK):
-        block = start // _NAME_BLOCK
-        chunk = [str(n) for n in by_idx[start : start + _NAME_BLOCK]]
-        size = _write(
-            out / "names" / f"{block:04d}.json.br",
-            json.dumps(chunk, ensure_ascii=False).encode("utf-8"),
-            BROTLI_QUALITY_BULK,
-        )
-        blocks.append([block, len(chunk), size])
-        total += size
+    with ThreadPoolExecutor(max_workers=_COMPRESS_WORKERS) as pool:
+        for start in range(0, len(by_idx), _NAME_BLOCK):
+            block = start // _NAME_BLOCK
+            chunk = [str(n) for n in by_idx[start : start + _NAME_BLOCK]]
+            future = pool.submit(
+                _write,
+                out / "names" / f"{block:04d}.json.br",
+                json.dumps(chunk, ensure_ascii=False).encode("utf-8"),
+                BROTLI_QUALITY_BULK,
+            )
+            blocks.append([block, len(chunk), future])
 
+        for b in blocks:
+            b[2] = b[2].result()
+
+    total = sum(b[2] for b in blocks)
     return {
         "path": "names",
         "block_size": _NAME_BLOCK,
@@ -1100,22 +1093,26 @@ def _export_zone_history(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str,
     ends = np.append(starts[1:], len(rows["block"]))
 
     entries: list[dict[str, Any]] = []
-    for block, start, end in zip(blocks, starts, ends, strict=True):
-        payload, spec, count = _pack(
-            {name: rows[name][start:end] for name in columns},
-            columns,
-            frozenset({"idx"}),
-        )
-        path = out / "zone_history" / f"{int(block):04d}.bin.br"
-        entries.append(
-            {
-                "path": path.name,
-                "rows": count,
-                "columns": spec,
-                "bytes": _write(path, payload, BROTLI_QUALITY_BULK),
-                "block": int(block),
-            }
-        )
+    with ThreadPoolExecutor(max_workers=_COMPRESS_WORKERS) as pool:
+        for block, start, end in zip(blocks, starts, ends, strict=True):
+            payload, spec, count = _pack(
+                {name: rows[name][start:end] for name in columns},
+                columns,
+                frozenset({"idx"}),
+            )
+            path = out / "zone_history" / f"{int(block):04d}.bin.br"
+            entries.append(
+                {
+                    "path": path.name,
+                    "rows": count,
+                    "columns": spec,
+                    "bytes": pool.submit(_write, path, payload, BROTLI_QUALITY_BULK),
+                    "block": int(block),
+                }
+            )
+
+        for e in entries:
+            e["bytes"] = e["bytes"].result()
 
     total = sum(e["bytes"] for e in entries)
     log.info(
@@ -1323,18 +1320,27 @@ def _export_area_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, 
 
     cell_shards: list[list[Any]] = []
     cell_spec: list[list[Any]] = []
-    for key, start, end in zip(unique, starts, ends, strict=True):
-        name = f"{int(key // 1000):02d}_{int(key % 1000):02d}"
-        payload, cell_spec, rows = _pack(
-            {n: cells[n][start:end] for n in cell_columns}, cell_columns
-        )
-        cell_shards.append(
-            [
-                name,
-                rows,
-                _write(out / "series" / "cells" / f"{name}.bin.br", payload, BROTLI_QUALITY_BULK),
-            ]
-        )
+    with ThreadPoolExecutor(max_workers=_COMPRESS_WORKERS) as pool:
+        for key, start, end in zip(unique, starts, ends, strict=True):
+            name = f"{int(key // 1000):02d}_{int(key % 1000):02d}"
+            payload, cell_spec, rows = _pack(
+                {n: cells[n][start:end] for n in cell_columns}, cell_columns
+            )
+            cell_shards.append(
+                [
+                    name,
+                    rows,
+                    pool.submit(
+                        _write,
+                        out / "series" / "cells" / f"{name}.bin.br",
+                        payload,
+                        BROTLI_QUALITY_BULK,
+                    ),
+                ]
+            )
+
+        for s in cell_shards:
+            s[2] = s[2].result()
 
     cell_bytes = sum(shard[2] for shard in cell_shards)
     log.info(

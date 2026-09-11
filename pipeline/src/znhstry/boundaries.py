@@ -157,6 +157,17 @@ def _flatten(geojson: dict[str, Any], tolerance: float) -> tuple[np.ndarray, np.
 def export_boundaries(out: Path | None = None) -> None:
     out = out or config.WEB_DATA
     out.mkdir(parents=True, exist_ok=True)
+
+    cache_paths = [config.RAW / "boundaries" / f"{src}.geojson" for src in LAYERS.values()]
+    output_paths = [out / f"boundaries_{key}.bin.br" for key in LAYERS]
+    manifest_path = out / "boundaries.json"
+    if manifest_path.exists() and all(o.exists() for o in output_paths):
+        newest_source = max((p.stat().st_mtime for p in cache_paths if p.exists()), default=0)
+        oldest_output = min(p.stat().st_mtime for p in output_paths)
+        if oldest_output > newest_source > 0:
+            log.info("boundaries: outputs newer than cached GeoJSON, skipping rebuild")
+            return
+
     manifest: dict[str, Any] = {
         "source": "Natural Earth (public domain), polygon rings traced as lines",
         "simplify_tolerance_deg": SIMPLIFY_TOLERANCE,
@@ -167,8 +178,6 @@ def export_boundaries(out: Path | None = None) -> None:
         positions, starts, dropped = _flatten(_fetch(source), SIMPLIFY_TOLERANCE)
         payload = positions.tobytes() + starts.tobytes()
         path = out / f"boundaries_{key}.bin.br"
-        # Brotli, like everything else in the export: served with
-        # Content-Encoding: br so the browser unpacks it for us.
         path.write_bytes(brotli.compress(payload, quality=11))
 
         manifest["layers"][key] = {

@@ -1,0 +1,39 @@
+name: Republish on merge
+
+# The nightly's data gate asks whether new events arrived, not whether the shape of what
+# we publish moved. A merge that changes published bytes therefore sits unpublished until
+# some later night happens to bring new data - and the site stays deployed against a
+# manifest that predates it. The `republish` label on a pull request says this merge is
+# one of those, and dispatches the nightly with `republish: true` so the rebuild happens
+# on merge rather than whenever the gate next opens on its own.
+#
+# The label is for changes to what the export writes: payload shape, mart values, the
+# derived history. Not for a change confined to the raw layer, which the next archive
+# picks up on its own, and not for the viewer, which `deploy.yml` handles.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    if: >-
+      github.event.pull_request.merged == true
+      && contains(github.event.pull_request.labels.*.name, 'republish')
+      && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Dispatched against the default branch, so it runs the merged code. The default
+      # GITHUB_TOKEN cannot start another workflow; this is the same fine-grained token
+      # (Actions: read and write) the trigger Worker dispatches the nightly with.
+      - name: Dispatch the nightly with republish
+        env:
+          GH_TOKEN: ${{ secrets.ATLANTIS_DISPATCH_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh workflow run nightly.yml --repo "$GITHUB_REPOSITORY" -f republish=true
+          echo "dispatched nightly.yml with republish=true for #$PR" >> "$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { SiteNav } from "@/components/SiteNav";
 import { BASE } from "@/lib/dataOrigin";
 import {
   fetchIndex,
@@ -147,8 +148,11 @@ export default function AtlantisPage() {
 
   return (
     <main style={{ height: "100dvh", overflow: "auto", background: "var(--ink)", color: "var(--text)" }}>
-      <header style={{ ...panel, display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>
-        <h1 className="display" style={{ margin: 0, fontSize: 18 }}>Atlantis</h1>
+      <header style={{ ...panel, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <h1 className="display" style={{ margin: 0, fontSize: 18 }}>Atlantis</h1>
+          <SiteNav />
+        </div>
 
         {allTournaments.length > 1 ? (
           <select
@@ -156,11 +160,10 @@ export default function AtlantisPage() {
             onChange={(e) => setParam("t", e.target.value)}
             style={{ ...btnStyle, appearance: "auto" }}
           >
-            {[...allTournaments].reverse().map((t) => (
-              <option key={t.month} value={t.month}>
-                {t.month}{t.winner ? ` — ${t.winner}` : ""}{isDerived(t) ? " derived" : ""}
-              </option>
-            ))}
+            {[...allTournaments].reverse().map((t) => {
+              const suffix = (t.winner ? " — " + t.winner : "") + (isDerived(t) ? " derived" : "");
+              return <option key={t.month} value={t.month}>{t.month}{suffix}</option>;
+            })}
           </select>
         ) : null}
 

@@ -4,9 +4,10 @@ import { useMemo, useState, useEffect, useRef, useCallback, type CSSProperties }
 import { useChartHover, useBarHover } from "./useChartHover";
 import { useSearchParams, useRouter } from "next/navigation";
 import { BASE } from "@/lib/dataOrigin";
-import { MAZ_AMBER } from "@/components/charts/palette";
+import { FACTIONS as FACTION_DEFS } from "@/components/charts/palette";
 import {
   factionColor,
+  factionHex,
   compact,
   fetchPlayersDetail,
   type AtlantisIndex,
@@ -14,6 +15,8 @@ import {
   type FactionDetail,
   type PlayerMonthRow,
 } from "./lib";
+
+const FACTION_ORDER = FACTION_DEFS.map(f => f.label);
 
 interface Props {
   index: AtlantisIndex;
@@ -59,7 +62,7 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
 type DetailSort = "month" | "launches" | "kills" | "lost" | "rank" | "qredits";
 const DETAIL_COL_INDEX: Record<Exclude<DetailSort, "month">, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
 
-function PlayerDetail({ name, isMercenary, onClose }: { name: string; isMercenary: boolean; onClose: () => void }) {
+function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) {
   const [data, setData] = useState<PlayerMonthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
@@ -91,7 +94,7 @@ function PlayerDetail({ name, isMercenary, onClose }: { name: string; isMercenar
   return (
     <div style={{ borderTop: "2px solid var(--hairline-bright)", padding: "16px 16px 24px" }}>
       <PlayerDetailHeader
-        player={{ name, factions, isMercenary }}
+        player={{ name, factions }}
         filter={{ value: factionFilter, onChange: f => setFactionFilter(factionFilter === f ? null : f) }}
         onClose={onClose}
       />
@@ -232,6 +235,65 @@ function BarChart({ data, label, allMonths }: { data: MonthVal[]; label: string;
   );
 }
 
+interface FactionMonthVal { month: string; total: number; byFaction: Record<string, number> }
+
+function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMonths: string[] }) {
+  if (props.data.length === 0) return null;
+  const months = props.allMonths;
+  const valMap = new Map(props.data.map(d => [d.month, d]));
+  const maxV = Math.max(...props.data.map(d => d.total), 1);
+  const medianV = median(props.data.map(d => d.total));
+  const h = 240;
+  const maxBarW = 20;
+  const bar = useBarHover(months.length);
+  const hm = bar.index != null ? months[bar.index] : null;
+  const hd = hm ? valMap.get(hm) : null;
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span className="eyebrow" style={{ fontSize: 10 }}>{props.label}</span>
+        <span className="tabular" style={{ fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
+      </div>
+      <div style={{ position: "relative" }}>
+        <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
+          <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
+        </div>
+        <div ref={bar.ref} onMouseMove={bar.onMouseMove} onMouseLeave={bar.onMouseLeave}
+          style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
+          {months.map((m, i) => {
+            const entry = valMap.get(m);
+            const total = entry?.total ?? 0;
+            const opacity = bar.index != null && bar.index !== i ? 0.4 : 0.8;
+            return (
+              <div key={m} style={{ flex: "1 1 0", maxWidth: maxBarW, height: barHeight(total, maxV, h), display: "flex", flexDirection: "column", marginLeft: yearGap(m), borderRadius: 1, overflow: "hidden" }}>
+                {entry ? FACTION_ORDER.map(f => {
+                  const v = entry.byFaction[f] ?? 0;
+                  return v > 0 ? <div key={f} style={{ flex: `${v} 0 0`, background: factionHex(f), opacity }} /> : null;
+                }).concat(
+                  (() => { const grey = (entry.byFaction["Unconfirmed"] ?? 0); return grey > 0 ? [<div key="grey" style={{ flex: `${grey} 0 0`, background: "#7c8798", opacity }} />] : []; })()
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <ChartYearLabels months={months} maxBarW={maxBarW} />
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
+        {hd ? (
+          <>
+            <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString()}
+            {FACTION_ORDER.map(f => {
+              const v = hd.byFaction[f];
+              return v ? <span key={f} style={{ marginLeft: 6, color: factionHex(f) }}>{compact(v)}</span> : null;
+            })}
+            {hd.byFaction["Unconfirmed"] ? <span style={{ marginLeft: 6, color: "#7c8798" }}>{compact(hd.byFaction["Unconfirmed"])}</span> : null}
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function useWidth(ref: React.RefObject<HTMLDivElement | null>): number {
   const [w, setW] = useState(600);
   useEffect(() => {
@@ -339,46 +401,53 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   );
 }
 
+function buildFactionMonthData(rows: PlayerMonthRow[], field: 2 | 3): FactionMonthVal[] {
+  const map: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    const m = r[0];
+    const f = r[1];
+    if (!map[m]) map[m] = {};
+    map[m][f] = (map[m][f] ?? 0) + r[field];
+  }
+  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([m, byFaction]) => {
+    const total = Object.values(byFaction).reduce((s, v) => s + v, 0);
+    return { month: m, total, byFaction };
+  });
+}
+
 function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
-  const byMonth = useMemo(() => {
-    const map: Record<string, { launches: number; kills: number }> = {};
-    for (const r of rows) {
-      const m = r[0];
-      const prev = map[m] ?? { launches: 0, kills: 0 };
-      map[m] = { launches: prev.launches + r[2], kills: prev.kills + r[3] };
-    }
-    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([m, v]) => ({ month: m, ...v }));
-  }, [rows]);
+  const launchData = useMemo(() => buildFactionMonthData(rows, 2), [rows]);
+  const killData = useMemo(() => buildFactionMonthData(rows, 3), [rows]);
 
-  if (byMonth.length === 0) return null;
+  if (launchData.length === 0) return null;
 
-  const allMonths = byMonth.map(d => d.month);
-  const launchData = byMonth.map(d => ({ month: d.month, value: d.launches }));
-  const killData = byMonth.map(d => ({ month: d.month, value: d.kills }));
-  const bestLaunches = launchData.reduce((a, b) => b.value > a.value ? b : a);
-  const bestKills = killData.filter(d => d.value > 0).length > 0
-    ? killData.reduce((a, b) => b.value > a.value ? b : a) : null;
+  const allMonths = launchData.map(d => d.month);
+  const launchMV = launchData.map(d => ({ month: d.month, value: d.total }));
+  const killMV = killData.map(d => ({ month: d.month, value: d.total }));
+  const bestLaunches = launchMV.reduce((a, b) => b.value > a.value ? b : a);
+  const bestKills = killMV.filter(d => d.value > 0).length > 0
+    ? killMV.reduce((a, b) => b.value > a.value ? b : a) : null;
 
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div>
-          <BarChart data={launchData} label="Launches" allMonths={allMonths} />
+          <FactionBarChart data={launchData} label="Launches" allMonths={allMonths} />
           <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
         </div>
         <div>
-          <BarChart data={killData} label="Kills" allMonths={allMonths} />
+          <FactionBarChart data={killData} label="Kills" allMonths={allMonths} />
           {bestKills ? <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestKills.month} ({compact(bestKills.value)})</div> : null}
         </div>
-        <CumulativeLine data={launchData} label="Cumulative launches" allMonths={allMonths} />
-        <CumulativeLine data={killData} label="Cumulative kills" allMonths={allMonths} />
+        <CumulativeLine data={launchMV} label="Cumulative launches" allMonths={allMonths} />
+        <CumulativeLine data={killMV} label="Cumulative kills" allMonths={allMonths} />
       </div>
     </div>
   );
 }
 
 interface DetailHeaderProps {
-  player: { name: string; factions: string[]; isMercenary: boolean };
+  player: { name: string; factions: string[] };
   filter: { value: string | null; onChange: (f: string) => void };
   onClose: () => void;
 }
@@ -396,7 +465,6 @@ function PlayerDetailHeader({ player, filter, onClose }: DetailHeaderProps) {
           style={{ color: factionColor(f), fontSize: 12, cursor: "pointer", opacity: !filter.value || filter.value === f ? 1 : 0.4 }}
         >{f}</span>
       ))}
-      {player.isMercenary ? <span className="eyebrow" style={{ color: MAZ_AMBER, fontSize: 10 }}>mercenary</span> : null}
     </div>
   );
 }
@@ -505,7 +573,7 @@ export default function AllTime({ index }: Props) {
         sortCol={sortCol} toggleSort={toggleSort} arrow={arrow}
         onPlayerClick={onPlayerClick}
       />
-      {playerParam ? <PlayerDetail name={playerParam} isMercenary={players.find(p => p.name === playerParam)?.is_mercenary ?? false} onClose={onPlayerClose} /> : null}
+      {playerParam ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
     </div>
   );
 }

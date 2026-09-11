@@ -27,9 +27,17 @@ export default function PlacementStrips(props: { tournaments: AnyTournament[] })
 
   const onMouseMove = useCallback((e: MouseEvent<HTMLDivElement>) => {
     if (!ref.current) return;
-    const rect = ref.current.getBoundingClientRect();
-    const idx = Math.floor(((e.clientX - rect.left) / rect.width) * sorted.length);
-    setHoverIdx(idx >= 0 && idx < sorted.length ? idx : null);
+    const cx = e.clientX;
+    const children = ref.current.children;
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < children.length && i < sorted.length; i++) {
+      const r = (children[i] as HTMLElement).getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right) { best = i; break; }
+      const dist = Math.min(Math.abs(cx - r.left), Math.abs(cx - r.right));
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    }
+    setHoverIdx(best >= 0 ? best : null);
   }, [sorted.length]);
 
   const onMouseLeave = useCallback(() => setHoverIdx(null), []);

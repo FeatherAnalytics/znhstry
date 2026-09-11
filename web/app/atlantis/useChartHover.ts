@@ -29,9 +29,18 @@ export function useBarHover(n: number) {
 
   const onMouseMove = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const idx = Math.floor(((e.clientX - rect.left) / rect.width) * n);
-      setIndex(idx >= 0 && idx < n ? idx : null);
+      if (!ref.current) return;
+      const cx = e.clientX;
+      const children = ref.current.children;
+      let best = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < children.length && i < n; i++) {
+        const r = (children[i] as HTMLElement).getBoundingClientRect();
+        if (cx >= r.left && cx <= r.right) { best = i; break; }
+        const dist = Math.min(Math.abs(cx - r.left), Math.abs(cx - r.right));
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      }
+      setIndex(best >= 0 ? best : null);
     },
     [n],
   );

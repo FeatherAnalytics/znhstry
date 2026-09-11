@@ -176,14 +176,13 @@ export default function Page() {
       if (hasInteracted.current) return;
       const zoom = Math.log2(w / 512);
       const lon = h > w ? -40 : INITIAL_VIEW.longitude;
-      setViewState((v) => {
-        const next = { ...v, zoom, longitude: lon };
-        const vp = new WebMercatorViewport({ ...next, width: w, height: h });
-        const [west, south] = vp.unproject([0, h]);
-        const [east, north] = vp.unproject([w, 0]);
-        viewportBounds.current = [west, south, east, north];
-        return next;
+      setViewState((v) => ({ ...v, zoom, longitude: lon }));
+      const vp = new WebMercatorViewport({
+        ...INITIAL_VIEW, zoom, longitude: lon, width: w, height: h, pitch: 0, bearing: 0,
       });
+      const [west, south] = vp.unproject([0, h]);
+      const [east, north] = vp.unproject([w, 0]);
+      viewportBounds.current = [west, south, east, north];
     };
     fit();
     const observer = new ResizeObserver(fit);

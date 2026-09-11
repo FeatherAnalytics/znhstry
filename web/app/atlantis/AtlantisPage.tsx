@@ -49,6 +49,7 @@ const activeBtnStyle: CSSProperties = {
 };
 
 type Tab = "dashboard" | "history" | "alltime" | "factions";
+const VALID_TABS = new Set<string>(["dashboard", "history", "alltime", "factions"]);
 
 export default function AtlantisPage() {
   const searchParams = useSearchParams();
@@ -61,9 +62,8 @@ export default function AtlantisPage() {
 
   const selectedMonth = searchParams.get("t");
   const playerParam = searchParams.get("player");
-  const TABS: Tab[] = ["dashboard", "history", "alltime", "factions"];
   const rawTab = searchParams.get("tab") ?? "dashboard";
-  const tabParam: Tab = TABS.includes(rawTab as Tab) ? (rawTab as Tab) : "dashboard";
+  const tabParam: Tab = VALID_TABS.has(rawTab) ? (rawTab as Tab) : "dashboard";
 
   const setParam = useCallback(
     (key: string, value: string | null) => {

@@ -1131,7 +1131,7 @@ export default function Page() {
   // is already full to the pixel, and stacked it costs no width at all.
   const masthead = (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
-      <span className="display" style={{ fontSize: compact ? 15 : 16, whiteSpace: "nowrap" }}>
+      <span className="display" style={{ fontSize: compact ? 15 : 18, whiteSpace: "nowrap" }}>
         Zone History
       </span>
       <SiteNav />

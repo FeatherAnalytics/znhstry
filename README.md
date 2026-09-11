@@ -97,6 +97,31 @@ between them: the page states its own schedule, so the collector knows when the 
 ends and idles until the 1st of the next month. Zones are keyed by position rather than by
 the names the site gives them, because those change every month.
 
+## Reading the data without a clone
+
+The marts are published as Parquet, so any DuckDB reads them in place:
+
+```sql
+select country_name, total_bots
+from read_parquet('https://data.znhstry.com/marts/fct_country_daily.parquet')
+where is_latest
+order by total_bots desc limit 10;
+```
+
+An MCP server wraps the same thing for LLM clients — read-only by construction, no clone and no key:
+
+```bash
+uvx --from "git+https://github.com/FeatherAnalytics/znhstry#subdirectory=mcp" znhstry-mcp
+```
+
+## Routes
+
+| Path | What |
+|---|---|
+| `/` | the map — every zone, every date |
+| `/atlantis` | Atlantis tournament dashboard, history and all-time standings |
+| `/query` | SQL console over the published marts (DuckDB-WASM in the browser) |
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

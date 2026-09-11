@@ -15,9 +15,7 @@ game — with one exception: the Internet Archive's cached copies of QONQR's own
 
 - **Python** 3.13+, managed by `uv`. Type hints on functions. Lint with `ruff`.
 - **Ingest**: `httpx` + `polars` -> Parquet in `data/raw/`.
-- **Transform**: dbt-duckdb in `transform/` — 6 staging views, 1 intermediate, 6 marts,
-  1 seed, 15 generic tests, 6 singular tests, 1 unit test, 1 exposure. `uv run dbt build`
-  takes ~25 s over 9.88M events.
+- **Transform**: dbt-duckdb in `transform/`. `uv run dbt build` takes ~25 s. Run `dbt ls` for current model and test counts.
 - **Export**: `pipeline/` slices the marts into static binaries under `dist/data/global/`.
 - **Web**: Next.js static export + deck.gl, in `web/`.
 - **Hosting**: the site at `znhstry.com` as Cloudflare Workers static assets (`wrangler.jsonc`),
@@ -25,18 +23,18 @@ game — with one exception: the Internet Archive's cached copies of QONQR's own
 
 ## Commands
 
-The refresh chain is four steps and they are not optional — exporting without rebuilding
-the warehouse ships whatever the marts last held:
+The refresh chain is these steps, in order — exporting without rebuilding the warehouse ships whatever the marts last held:
 
 ```bash
-cd pipeline  && uv run python -m znhstry ingest      # read the day's slot from Dropbox
-cd pipeline  && uv run python -m znhstry battlestats # scrape any new battle reports
-cd transform && uv run dbt build                   # rebuild the marts (~25 s)
-cd pipeline  && uv run python -m znhstry export    # rebuild dist/data (~9 min)
-cd pipeline  && uv run python -m znhstry upload    # push changed objects to R2
-cd pipeline  && uv run python -m znhstry marts     # write the marts as Parquet to dist/marts
+cd pipeline  && uv run python -m znhstry ingest       # read the day's slot from Dropbox
+cd pipeline  && uv run python -m znhstry battlestats  # scrape any new battle reports
+cd pipeline  && uv run python -m znhstry attribute    # attribute factions to battle-report players
+cd transform && uv run dbt build                      # rebuild the marts (~25 s)
+cd pipeline  && uv run python -m znhstry export       # rebuild dist/data (~3 min threaded)
+cd pipeline  && uv run python -m znhstry upload       # push changed objects to R2
+cd pipeline  && uv run python -m znhstry marts        # write the marts as Parquet to dist/marts
 cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under marts/
-cd pipeline  && uv run python -m znhstry archive   # push data/raw to R2 under raw/
+cd pipeline  && uv run python -m znhstry archive      # push data/raw to R2 under raw/
 ```
 
 **The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the hourly
@@ -50,6 +48,8 @@ Other steps:
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone, no key needed
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
+uv run python -m znhstry wayback          # ingest archived Atlantis snapshots from the Internet Archive
+uv run python -m znhstry backfill         # re-fetch historical battle report pages for per-player rows
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
 uv run python -m znhstry boundaries       # rebuild the admin outlines
 uv run python -m znhstry export --only atlantis  # rebuild only atlantis/; requires an existing meta.json from a full export
@@ -202,7 +202,7 @@ date.** The view only ever decides which dots are drawn.
 
 Not `control_state`, which names whoever captured the zone last and keeps naming them long
 after their last bot is gone. The two agree almost perfectly — across all 9.88M events they
-differ for 50 events across 43 zones, because in QONQR control follows the garrison — but
+differ for 705 events, because in QONQR control follows the garrison — but
 the rule is written the honest way so it stays right if that changes. On a tie the holder
 breaks it, and only when the holder is one of the tied factions; otherwise a fixed order
 does.
@@ -228,13 +228,7 @@ whole world in grey, which is what makes it readable.
 
 It is a render-time test in `ZoneMap`, not a data one; nothing refetches.
 
-**The draw lists are compacted, and picking reads back through them.** A zone the view is
-hiding is left out of the buffers entirely rather than written at zero alpha, so the GPU
-never sees it — on a Day view that is about three thousand rows instead of 2,682,442. A
-deck.gl pick index is therefore a row in a draw list, not a slot, and `ZoneMap`'s `picked()`
-maps it back through `drawnToSlot` / `terrainToSlot`. Everything in a list passed the
-visibility test when it was written, so the pick agrees with the screen by construction
-rather than by repeating the test somewhere else and hoping the two stay in step.
+**Hidden zones stay in the buffers at radius zero.** Every zone is always present in the draw list; hiding means setting its radius to 0 so the GPU discards the point rather than omitting it from the buffer entirely. A deck.gl pick index is therefore a stable slot, and `ZoneMap`'s `picked()` maps it back through `drawnToSlot` / `terrainToSlot`.
 
 **Terrain is its own layer, drawn underneath.** The 1,087,356 zones never played are empty
 in every frame of every year, so their colour and radius cannot change with the date; they
@@ -317,7 +311,7 @@ Other behaviour worth keeping:
 
 ### There is a real basemap under the dots
 
-CARTO's `dark_all` raster tiles, via a deck.gl `TileLayer`. No API key, and it is drawn
+CARTO's `dark_all` raster tiles, via a deck.gl `TileLayer`. An optional API key (`NEXT_PUBLIC_CARTO_API_KEY` in `.env`/`.env.example`, passed by `deploy.yml` from the `CARTO_API_KEY` repository variable) removes the watermark CARTO stamps on unauthenticated tiles. It is drawn
 dark precisely so data sits on top rather than fighting it.
 
 Admin borders are not orientation. With the basemap you get coastlines, water, roads and
@@ -325,7 +319,7 @@ place names at every zoom: at zoom 10 over Rhode Island you can read Providence,
 Cranston and Narragansett Bay.
 
 - **Attribution is a licence condition, not decoration.** `© OpenStreetMap · CARTO` renders
-  bottom-right wherever those tiles do. Do not remove it.
+  bottom-left inside the deck container, above the bottom sheet. Do not remove it.
 - **Our own boundary rings fade out above zoom 5 and are gone by 7.** They are simplified
   to 0.01 degrees (~1.1 km), which is invisible at world zoom and plainly wrong at city
   zoom, where a coastline becomes straight lines cutting across a bay. The basemap's own
@@ -558,11 +552,17 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 
 **Derived months render a static dashboard from battle report data.** No time-series charts (there are no hourly observations); a zones table ordered by triangle replaces the zone cards; players are grouped by attributed faction with an Unconfirmed group at the end; rows are not clickable (no player or zone detail). "Not yet attributed" appears where the backfill has not reached and all players are Unconfirmed. History and All Time merge derived months with collected ones, labeled "derived" in muted text.
 
+### The SQL console
+
+`/query` runs DuckDB-WASM in the browser over the published marts. The SQL uses plain table names (`select * from fct_country_daily where is_latest`); `lib/duckdbWasm.ts` binds each referenced table on demand from `_meta.json` as a `CREATE VIEW … read_parquet(url)`. `?sql=` is a permalink that loads and runs the query on page open; a "Copy link" button writes it.
+
+**DuckDB-WASM issues a full GET, not range reads, for a bound mart.** A permalink over `fct_zone_events` pulls ~190 MB. Smaller marts are fast — the country daily is ~7 MB. This is a client behavior; every server precondition for ranges is met.
+
 ## Where the data comes from
 
 QONQR publishes its own data to a public Dropbox folder. That is the only live source.
 Link list: `pipeline/src/znhstry/dropbox_links.txt`. Full data dictionary:
-`QONQR-API-data-dictionary.md` in the Code root.
+The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV headers themselves.
 
 | | What | Cadence |
 |---|---|---|
@@ -698,7 +698,7 @@ on its formation zones, not from position.
 
 ### Atlantis marts
 
-Five marts built from the four staging views above, plus three derived-history marts from battle reports. All materialized as tables.
+Nine marts built from the staging views above, plus three derived-history marts from battle reports. All materialized as tables.
 
 | | Grain | Sort key |
 |---|---|---|
@@ -716,7 +716,7 @@ Five marts built from the four staging views above, plus three derived-history m
 
 **Payout rule.** The game divides each placement's pool across the faction proportionally to launches. Pool amounts live in the `atlantis_pools` seed as an as-of table keyed by `effective_from`; a month with different pools is one appended row. The current pools are 10,000,000 / 4,000,000 / 1,000,000 for first / second / third.
 
-**Faction attribution (`znhstry attribute`).** A pipeline step that writes `data/raw/battlestats/player_factions/rows.parquet`, keyed `(Month, PlayerName)`, with `Faction`, `FactionSource`, `IsMercenary`, `MercenaryEvidence`. Runs in the nightly after `battlestats` and before `dbt build`. The solve is a per-month greedy reconciliation: start every player at their scraped (current) faction, then move players (single moves, then pairs within a still-failing report) while the number of exactly reconciling untruncated reports rises. Board evidence from the archived leaderboard trumps the solve (`FactionSource = 'board'`); zone-name evidence from the next month's triangle complements it (`FactionSource = 'zone-name'`). Confirmed = not moved, in a reconciling report, unique; reconciled = was moved, same conditions; none = everything else. Mercenary evidence: `same-month` (two factions in one month's reports), `zone-names` (named a zone in another faction's triangle), `across-months` (different confirmed factions in consecutive months). Players without an attribution row get `Unconfirmed` in the mart.
+**Faction attribution (`znhstry attribute`).** A pipeline step that writes `data/raw/battlestats/player_factions/rows.parquet`, keyed `(Month, PlayerName)`, with `Faction`, `FactionSource`, `IsMercenary`, `MercenaryEvidence`. Runs in the nightly after `battlestats` and before `dbt build`. Per player-month the faction is the first hit in a four-step precedence chain: (a) the month's board where one exists (`FactionSource = 'board'`), (b) an override seed (`'override'`), (c) zone-name evidence from the next month's triangle (`'zone-name'`), (d) the player's scraped current faction (`'scraped'`). Mercenary detection runs separately over the results: `same-month` (two factions in one month's reports), `zone-names` (named a zone in another faction's triangle), `across-months` (different confirmed factions in consecutive months). Players without an attribution row get `Unconfirmed` in the mart.
 
 **Interval grain.** A player's first observation in a month yields no interval row. `launches_gained` is never negative in the data; it is kept as is, not clamped. `launches_per_hour` is `launches_gained / minutes * 60`, where `minutes` is the gap between consecutive observations. The page says "per hour" and never "per minute".
 
@@ -730,7 +730,7 @@ Five marts built from the four staging views above, plus three derived-history m
   would drift. The warehouse keeps the full record, so this is reversible.
   Cost: 40 events across 40 zones, 7 of which stop counting as ever-played.
 - **`changelog` is a sparse event stream.** A row exists only when a zone's counts or
-  control state changed. 9.88M real events, ~2,000–3,100 a day.
+  control state changed. ~10M events and growing, ~2,000–3,100 a day.
 - **Carry-forward is the core modelling problem.** 504,410 zones (32% of those ever active)
   last changed in 2019 or earlier. Any time-window slice that ignores older events loses
   their state entirely.
@@ -756,13 +756,13 @@ Five marts built from the four staging views above, plus three derived-history m
   reported on 2014-01-01 and enters the changelog on 2018-09-22.
 
   The practical consequence: **"uncaptured became captured" is not answerable before late
-  2018.** Over 2017-04-01 to 2019-12-31 there are 790 conversions we actually witnessed —
+  2018.** Over 2017-04-01 to 2019-12-31 there are 4,730 conversions we actually witnessed —
   seen empty first, then held — against 817,344 zones whose first row of any kind falls
-  inside the window, and none of the 790 land before October 2018. Anything counting new
+  inside the window, and none of the 4,730 land before October 2018. Anything counting new
   captures in that period is counting the crawler. Say "first seen holding bots", never
   "captured". Not recoverable: the ring reaches back 31 days and these are 2014–2017 slots.
 - **2019's gap is a collection artifact, and battlestats proves it**: 337,859 events vs
-  627,035 in 2018 and 1,438,855 in 2020 — but **3,614 battle reports in 2019**, flat against
+  627,035 in 2018 and 1,438,855 in 2020 — but **5,159 battle reports in 2019**, flat against
   every neighbouring year. A second, independent source says the game was busy and the
   collection was not. Annotate the gap in any continuous time series; never interpolate it.
 - **Only 1,595,086 of 2,682,442 zones have ever changed.** The rest are real places that
@@ -909,7 +909,7 @@ against a threshold, because thresholds on upstream drift are brittle.
 - **A bbox prefilter must never be tighter than the circle it precedes.** 111.32 km per
   degree of latitude is a mid-latitude average; a real degree is shorter, so an unpadded box
   is narrower than its radius and clips edge zones before haversine runs.
-  `_BBOX_MARGIN = 1.05` in `export.py`.
+  `BBOX_MARGIN = 1.05` in `distance.py`.
 - **Guard packed integer columns for overflow and sign — every one of them.** `day` is a
   uint16 offset from `DAY_EPOCH` (2010-01-01, chosen so the 29 backfill sentinel rows are
   not negative); an earlier row would underflow into a plausible-looking date rather than
@@ -931,8 +931,8 @@ against a threshold, because thresholds on upstream drift are brittle.
   the data directory does not contain, so anything only a separate command writes is
   deleted from R2 on the next nightly — and the viewer swallows the missing file, so the
   outlines just vanish. The standalone `boundaries` command exists to *refresh* them.
-- **A rejected fetch must not stay in an in-flight cache.** `displayWorker.ts`, `names.ts`
-  and `zoneHistory.ts` all dedup concurrent requests through a promise map; evict on
+- **A rejected fetch must not stay in an in-flight cache.** `displayWorker.ts`, `names.ts`,
+  `zoneHistory.ts` and `series.ts` all dedup concurrent requests through a promise map; evict on
   rejection or one transient failure makes that year, name block, or history block
   unloadable for the life of the page. The display error is likewise cleared when the next
   answer arrives — recovery is expected, and a banner left standing over a working map
@@ -962,8 +962,7 @@ against a threshold, because thresholds on upstream drift are brittle.
 ## Export format
 
 `uv run python -m znhstry export` writes to `dist/data/global/`, which is gitignored and
-uploaded to R2. 2,682,442 zones (1,595,111 ever played), 9.88M events, **~1,850 files,
-94.5 MB**, ~9 minutes on a GitHub runner (19 minutes on the dev machine that wrote this).
+uploaded to R2. All zones (played and unplayed), ~10M events, **~2,000 files, ~100 MB**, ~3 minutes with threaded brotli compression.
 
 Stored is not what anyone fetches. Four trees are lazy and together they are 81 of the
 94.7 MB:
@@ -1274,8 +1273,7 @@ local filesystem disabled that fails and leaves every later HTTP read broken.
 `uv run python -m znhstry marts` writes every mart anything outside the map would want as
 one zstd Parquet file per table under `dist/marts/`, and `upload --marts` puts them in the
 bucket under `marts/`. This is the analytics layer: anything that queries the warehouse
-from outside — a notebook, a SQL page, an API — reads these and nothing else. **266 MB**,
-ten files, about 3 s to write. Nothing installed and no key:
+from outside — a notebook, a SQL page, an API — reads these and nothing else. About 3 s to write. Nothing installed and no key:
 
 ```sql
 select * from read_parquet('https://data.znhstry.com/marts/fct_zone_events.parquet') where country_id = 244;
@@ -1296,24 +1294,26 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_payout.p
 select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_player_daily.parquet') where battle_date >= '2026-09-01';
 ```
 
-| Table | Rows | Size | Sorted by |
-|---|---|---|---|
-| `fct_zone_events` | 9,895,796 | 190.7 MB | `country_id, observed_at, zone_id` |
-| `dim_zone` | 2,682,442 | 63.9 MB | `country_id, zone_id` |
-| `fct_country_daily` | 1,492,728 | 7.2 MB | `country_id, activity_date` |
-| `fct_global_daily` | 6,068 | 0.2 MB | `activity_date` |
-| `fct_zone_battles` | 45,695 | 1.9 MB | `battle_date, battle_report_number` |
-| `stg_battlestats` | 61,537 | 2.4 MB | `battle_date, battle_report_number` |
-| `stg_atlantis_*` | four small tables | | their natural keys |
-| `fct_atlantis_player_interval` | 4,036 | 0.0 MB | `tournament_month, faction, player_name, observed_at` |
-| `fct_atlantis_faction_hourly` | 72 | 0.0 MB | `tournament_month, faction, observed_at` |
-| `fct_atlantis_zone_interval` | 456 | 0.0 MB | `tournament_month, zone, observed_at` |
-| `dim_atlantis_tournament` | 1 | 0.0 MB | `tournament_month` |
-| `fct_atlantis_payout` | 170 | 0.0 MB | `tournament_month, faction, player_name` |
-| `fct_atlantis_zone_player_daily` | 532,969 | 3.5 MB | `battle_date, battle_report_number, rank, player_name` |
+| Table | Sorted by |
+|---|---|
+| `fct_zone_events` | `country_id, observed_at, zone_id` |
+| `dim_zone` | `country_id, zone_id` |
+| `fct_country_daily` | `country_id, activity_date` |
+| `fct_global_daily` | `activity_date` |
+| `fct_zone_battles` | `battle_date, battle_report_number` |
+| `stg_battlestats` | `battle_date, battle_report_number` |
+| `stg_atlantis_leaderboard` | natural key |
+| `stg_atlantis_zones` | natural key |
+| `stg_atlantis_zone_months` | natural key |
+| `stg_atlantis_tournaments` | natural key |
+| `fct_atlantis_player_interval` | `tournament_month, faction, player_name, observed_at` |
+| `fct_atlantis_faction_hourly` | `tournament_month, faction, observed_at` |
+| `fct_atlantis_zone_interval` | `tournament_month, zone, observed_at` |
+| `dim_atlantis_tournament` | `tournament_month` |
+| `fct_atlantis_payout` | `tournament_month, faction, player_name` |
+| `fct_atlantis_zone_player_daily` | `battle_date, battle_report_number, rank, player_name` |
 
-`marts/_meta.json` names every table with its path, row count, bytes, sort key and columns,
-plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
+Row counts and byte sizes are in `marts/_meta.json`, which names every table with its path, row count, bytes, sort key and columns, plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
 
 **`is_latest` is how a reader reaches the newest rows without a subquery.** On
 `fct_country_daily` and `fct_global_daily` it is true on the newest day in the record; on
@@ -1372,9 +1372,9 @@ manifest and their own guard against a half-written tree.
   This file and parts of the codebase still carry British spellings from earlier work; fix
   them as you touch them rather than in one sweep.
 - Testing is deliberately concentrated where failures are invisible, not spread evenly.
-  dbt carries 15 generic data tests, 6 singular tests and 1 unit test; `pipeline/tests/`
+  dbt carries generic data tests, singular tests and a unit test; `pipeline/tests/`
   covers the ring arithmetic and the dtype contract, which decide what gets written before
-  dbt can see it. The viewer has none. **CI restores the raw layer without a key and runs
+  dbt can see it. The viewer has ESLint (`eslint-config-next` core-web-vitals) and `npm run lint`; `react-hooks/exhaustive-deps` is the automated check for the `updateTriggers`/memo-deps invariant CLAUDE.md maintains by hand. **CI restores the raw layer without a key and runs
   `dbt build` on every pull request**, so a source bound to a glob that does not exist
   fails before merge rather than at 02:30 UTC. `dbt source freshness` warns at 2 days stale and
   errors at 7 — well inside the 31-day ring, so there is time to act before a gap becomes

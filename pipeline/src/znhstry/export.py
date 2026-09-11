@@ -1205,8 +1205,8 @@ def _export_series(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
 
 # The grid the viewport and near-me charts aggregate over. One degree is about
 # 111 km, so the 1000-mile circle the game talks in covers roughly 600 cells and
-# only its rim is approximate. Cells are grouped into the same 8-degree tiles the
-# geometry uses, 64 to a tile, so the chart fetches the same shards the map does.
+# only its rim is approximate. Cells are grouped into the same 16-degree tiles the
+# geometry uses, 256 to a tile, so the chart fetches the same shards the map does.
 _CELL_DEGREES = 1
 _CELLS_PER_TILE = TILE_DEGREES // _CELL_DEGREES
 

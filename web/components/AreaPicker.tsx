@@ -129,7 +129,7 @@ export function AreaPicker({ lookups, geometry, version, selected, onSelect }: P
   };
 
   return (
-    <div ref={boxRef} style={{ position: "relative" }}>
+    <div ref={boxRef} style={{ position: "relative", minWidth: 0, flexShrink: 1 }}>
       {selected ? (
         <button
           className="eyebrow"

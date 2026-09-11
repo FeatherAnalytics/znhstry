@@ -645,7 +645,7 @@ export function ZoneMap({
 
   return (
     <DeckGL
-      viewState={viewState}
+      viewState={{ ...viewState, minZoom: -1 }}
       controller={{ dragRotate: false }}
       layers={layers}
       onHover={(info) => onHover(picked(info))}

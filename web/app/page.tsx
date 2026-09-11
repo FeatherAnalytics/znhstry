@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WebMercatorViewport, type MapViewState } from "@deck.gl/core";
+import type { MapViewState } from "@deck.gl/core";
 import { ZoneMap } from "@/components/ZoneMap";
 import {
   StatsPanel,
@@ -65,9 +65,6 @@ import {
 } from "@/lib/timelapse";
 
 const INITIAL_VIEW = { longitude: 8, latitude: 26, zoom: 1.35 };
-
-// The played world, used to fit the initial camera to the actual canvas.
-const WORLD_BOUNDS: [[number, number], [number, number]] = [[-170, -55], [180, 72]];
 
 // 1000 statute miles, the radius the game itself talks in.
 const NEAR_ME_KM = 1609.344;
@@ -163,21 +160,22 @@ export default function Page() {
   // (Phase 3) read the same value without a second observer.
   const mapRef = useRef<HTMLDivElement>(null);
   const canvasSize = useRef({ width: 1280, height: 720 });
+  const hasInteracted = useRef(false);
 
-  // Fit the camera to the played world using the actual canvas size on mount.
+  // Fit the camera width so the full 360° of longitude is visible. Refits on
+  // orientation change until the reader pans or zooms, then stops.
   useEffect(() => {
     const el = mapRef.current;
     if (!el) return;
-    const update = () => {
+    const fit = () => {
       const { clientWidth: w, clientHeight: h } = el;
-      if (w > 0 && h > 0) canvasSize.current = { width: w, height: h };
+      if (w <= 0 || h <= 0) return;
+      canvasSize.current = { width: w, height: h };
+      if (hasInteracted.current) return;
+      setViewState((v) => ({ ...v, zoom: Math.log2(w / 512) }));
     };
-    update();
-    const { width, height } = canvasSize.current;
-    const vp = new WebMercatorViewport({ width, height });
-    const fitted = vp.fitBounds(WORLD_BOUNDS, { padding: 20 });
-    setViewState((v) => ({ ...v, zoom: fitted.zoom }));
-    const observer = new ResizeObserver(update);
+    fit();
+    const observer = new ResizeObserver(fit);
     observer.observe(el);
     return () => observer.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1245,7 +1243,10 @@ export default function Page() {
                   ? { lat: home.lat, lon: home.lon, radiusKm: NEAR_ME_KM }
                   : null
             }
-            onViewStateChange={setViewState}
+            onViewStateChange={(vs) => {
+              hasInteracted.current = true;
+              setViewState(vs);
+            }}
             onHover={handleHover}
             onClickZone={(idx) => {
               // A touch screen has no hover, so the tap has to do both jobs:

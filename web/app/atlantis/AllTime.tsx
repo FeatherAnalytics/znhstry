@@ -316,16 +316,16 @@ function YearBars({ data }: { data: { year: string; count: number }[] }) {
   for (let y = 2014; y <= currentYear; y++) allYears.push(String(y));
   const countMap = new Map(data.map(d => [d.year, d.count]));
   const maxC = Math.max(...data.map(d => d.count), 1);
-  const h = 240;
+  const h = 160;
   return (
-    <div>
+    <div style={{ flex: "1 1 0", minWidth: 0 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: h }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
         {allYears.map(y => {
           const c = countMap.get(y) ?? 0;
           return (
-            <div key={y} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 32 }}>
-              <div style={{ width: 20, height: c > 0 ? (c / maxC) * (h - 20) : 0, background: "var(--text-dim)", borderRadius: 1 }}
+            <div key={y} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0", minWidth: 20 }}>
+              <div style={{ width: "80%", maxWidth: 20, height: c > 0 ? (c / maxC) * (h - 20) : 0, background: "var(--text-dim)", borderRadius: 1 }}
                 title={c > 0 ? `${y}: ${c}` : y} />
               <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{y}</span>
             </div>
@@ -365,7 +365,7 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
 
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
         <div>
           <FactionBarChart data={launchData} label="Launches" allMonths={allMonths} />
           <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestLaunches.month} ({compact(bestLaunches.value)})</div>

@@ -428,7 +428,7 @@ function GroupedBars({ data, xField, yFn, label, xLabel }: GroupedBarsProps) {
   const { index: hoverIdx, ref: barRef, onMouseMove, onMouseLeave } = useBarHover(xVals.length);
 
   return (
-    <div style={{ flex: 1, minWidth: 160 }}>
+    <div style={{ flex: "1 1 320px", minWidth: 320 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
       <div ref={barRef} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave} style={{ display: "flex", height: 160 }}>
         {xVals.map((x, xi) => (

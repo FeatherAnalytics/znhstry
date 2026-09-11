@@ -40,6 +40,7 @@ import { useCompact } from "@/lib/useCompact";
 import { BottomSheet, type SheetStop } from "@/components/BottomSheet";
 import { chartSpanOf, readModeOf, windowPhrase, type ReadMode, type ViewKey } from "@/lib/windows";
 import { WindowPicker } from "@/components/WindowPicker";
+import { SiteNav } from "@/components/SiteNav";
 import { FlashpointImpact } from "@/components/FlashpointImpact";
 import { RegionBreakdown } from "@/components/RegionBreakdown";
 import { TimelapseBar, PERIODS, type Period } from "@/components/TimelapseBar";
@@ -1126,6 +1127,17 @@ export default function Page() {
     </div>
   ) : null;
 
+  // The nav sits under the wordmark rather than beside it: at 1280px the header
+  // is already full to the pixel, and stacked it costs no width at all.
+  const masthead = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, flexShrink: 0 }}>
+      <span className="display" style={{ fontSize: compact ? 15 : 16, whiteSpace: "nowrap" }}>
+        Zone History
+      </span>
+      <SiteNav />
+    </div>
+  );
+
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
       <header
@@ -1151,12 +1163,7 @@ export default function Page() {
                 padding: "0 12px",
               }}
             >
-              <span
-                className="display"
-                style={{ fontSize: 15, whiteSpace: "nowrap", flexShrink: 0 }}
-              >
-                Zone History
-              </span>
+              {masthead}
               <div style={{ flex: 1, minWidth: 8 }} />
               {areaPicker}
               {locateButton}
@@ -1172,9 +1179,7 @@ export default function Page() {
           </>
         ) : (
           <>
-            <span className="display" style={{ fontSize: 16 }}>
-              Zone History
-            </span>
+            {masthead}
             <span className="eyebrow">{meta?.scope.label ?? " "}</span>
             <div style={{ flex: 1 }} />
             <WindowPicker

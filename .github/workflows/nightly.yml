@@ -56,6 +56,11 @@ on:
         description: "Ring slots to read, e.g. 7 or 5,6,7. Blank = whatever the history is missing."
         required: false
         type: string
+      republish:
+        description: "Rebuild and upload even when no new events arrived. For a change to the export format, which the data gate cannot see."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -133,15 +138,25 @@ jobs:
       # One place to decide, because six copies of the same expression is six chances
       # to get it wrong. A failed battlestats step leaves its output empty, and empty
       # must not read as "new data".
+      #
+      # The gate asks whether new *data* arrived, which is not the only reason the
+      # export needs rebuilding: changing a payload's shape leaves the site deployed
+      # against a manifest that predates it, and the gate cannot see that. `republish`
+      # is the way to say so - without it the only fix is to wait for the next day's
+      # events to open the gate on their own.
       - name: Anything to publish?
         id: changed
         env:
           INGEST_EVENTS: ${{ steps.ingest.outputs.events }}
           BATTLESTATS_REPORTS: ${{ steps.battlestats.outputs.reports }}
+          REPUBLISH: ${{ inputs.republish }}
         run: |
           events="$INGEST_EVENTS"
           reports="$BATTLESTATS_REPORTS"
-          if [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
+          if [ "$REPUBLISH" = "true" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "republish requested - rebuilding regardless of new data" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$events" != "0" ] || { [ -n "$reports" ] && [ "$reports" != "0" ]; }; then
             echo "any=true" >> "$GITHUB_OUTPUT"
           else
             echo "any=false" >> "$GITHUB_OUTPUT"

@@ -1,8 +1,17 @@
 """Attribute factions to Atlantis battle-report players.
 
 Per (month, player): (a) the month's board where one exists, (b) an override
-seed, (c) zone-name evidence (next month's triangle), (d) the player's scraped
-current faction. Months the backfill has not reached stay Unconfirmed/'none'.
+seed, (c) the report's own launch totals, (d) zone-name evidence (next month's
+triangle), (e) the player's scraped faction. Months the backfill has not reached
+stay Unconfirmed/'none'.
+
+The last rung is the weakest, and the reason the third one exists. `Faction` on a
+player row is the faction the portal rendered when it served the page, not the one
+the player held on the day of the battle, so a report the backfill reached years
+later answers today's question against an old battle. The header's per-faction
+launch totals are stored with the battle instead, so where exactly one faction
+launched they name the faction of everyone who did - the only per-battle faction
+evidence the page preserves.
 """
 
 from __future__ import annotations
@@ -140,6 +149,74 @@ def _zone_name_mercs(bs_path: Path) -> set[tuple[date, str]]:
     return {(m, n) for m, n in multi.select("month", "zone_name").iter_rows()}
 
 
+def _report_totals_evidence(
+    players: pl.DataFrame,
+) -> tuple[dict[tuple[date, str], str], set[tuple[date, str]]]:
+    """Faction from the report's own arithmetic, and who it says switched.
+
+    A report whose header shows exactly one faction with launches was fought by that
+    faction alone, so everyone who launched in it was of that faction. Those totals
+    are stored with the battle rather than rendered from a profile, so unlike the
+    row's own `Faction` they still mean in 2026 what they meant in 2014.
+
+    `Launches > 0` is what makes the inference sound rather than merely true today:
+    the page lists nobody who did not launch, and a defender appearing in a
+    single-faction report would otherwise be read as one of the attackers.
+    """
+    launching = [pl.col(f"hl_{f}") > 0 for f in _FACTIONS]
+    per_player = (
+        players.filter(pl.col("Launches") > 0)
+        .filter(pl.sum_horizontal([c.cast(pl.Int8) for c in launching]) == 1)
+        .with_columns(
+            pl.coalesce(
+                [
+                    pl.when(c).then(pl.lit(f))
+                    for c, f in zip(launching, _FACTIONS, strict=True)
+                ]
+            ).alias("battle_faction")
+        )
+        .group_by("month", "PlayerName")
+        .agg(
+            pl.col("battle_faction").n_unique().alias("nf"),
+            pl.col("battle_faction").first().alias("battle_faction"),
+        )
+    )
+    evidence = {
+        (m, n): f
+        for m, n, f in per_player.filter(pl.col("nf") == 1)
+        .select("month", "PlayerName", "battle_faction")
+        .iter_rows()
+    }
+    multi = {
+        (m, n)
+        for m, n in per_player.filter(pl.col("nf") > 1)
+        .select("month", "PlayerName")
+        .iter_rows()
+    }
+    return evidence, multi
+
+
+def _scraped_factions(players: pl.DataFrame) -> dict[tuple[date, str], str]:
+    """The scraped faction per player-month, chosen rather than stumbled into.
+
+    A month split across two scrape bands holds two of them. Keeping whichever row an
+    unordered `unique()` yielded last made the answer differ between runs over the
+    same data; the faction the player launched most under, ties broken by name, is at
+    least the same answer twice.
+    """
+    picked = (
+        players.group_by("month", "PlayerName", "Faction")
+        .agg(pl.col("Launches").sum().alias("launches"))
+        .sort(["launches", "Faction"], descending=[True, False])
+        .group_by(["month", "PlayerName"], maintain_order=True)
+        .first()
+    )
+    return {
+        (m, n): f
+        for m, n, f in picked.select("month", "PlayerName", "Faction").iter_rows()
+    }
+
+
 def _load_overrides() -> dict[tuple[date, str], str]:
     csv_path = _SEEDS_DIR / "atlantis_player_faction_overrides.csv"
     if not csv_path.exists():
@@ -156,27 +233,30 @@ def _load_overrides() -> dict[tuple[date, str], str]:
 
 def _detect_mercenary(
     results: list[dict[str, Any]],
-    board_multi: set[tuple[date, str]],
+    same_month: set[tuple[date, str]],
     zone_name_mercs: set[tuple[date, str]],
-    board: dict[tuple[date, str], str],
-    zn_evidence: dict[tuple[date, str], str],
+    confirmed: list[dict[tuple[date, str], str]],
 ) -> None:
-    board_factions: dict[str, set[str]] = defaultdict(set)
-    for (_m, n), f in board.items():
-        board_factions[n].add(f)
-    zn_factions: dict[str, set[str]] = defaultdict(set)
-    for (_m, n), f in zn_evidence.items():
-        zn_factions[n].add(f)
+    """Flag players who fought for more than one faction.
+
+    Only evidence that was true of the battle counts, which rules the scraped
+    faction out. The backfill walks report numbers a band a night, so a player who
+    changed faction between two nights has their history split at that band, and
+    reading the split as switching would flag the collection rather than the player.
+    """
+    factions: dict[str, set[str]] = defaultdict(set)
+    for evidence in confirmed:
+        for (_m, n), f in evidence.items():
+            factions[n].add(f)
 
     for r in results:
         m, n = r["Month"], r["PlayerName"]
         parts: list[str] = []
-        if (m, n) in board_multi:
+        if (m, n) in same_month:
             parts.append("same-month")
         if (m, n) in zone_name_mercs:
             parts.append("zone-names")
-        all_known = board_factions.get(n, set()) | zn_factions.get(n, set())
-        if len(all_known) > 1:
+        if len(factions.get(n, ())) > 1:
             parts.append("across-months")
         r["IsMercenary"] = bool(parts)
         r["MercenaryEvidence"] = ", ".join(parts) if parts else None
@@ -271,23 +351,24 @@ def attribute_factions() -> None:
     overrides = _load_overrides()
     t0 = time.monotonic()
 
-    all_player_months: set[tuple[date, str]] = set()
-    scraped_map: dict[tuple[date, str], str] = {}
-    for row in players.select("month", "PlayerName", "Faction").unique().iter_rows():
-        all_player_months.add((row[0], row[1]))
-        scraped_map[(row[0], row[1])] = row[2]
+    scraped_map = _scraped_factions(players)
+    all_player_months = set(scraped_map)
 
+    rt_evidence, rt_multi = _report_totals_evidence(players)
     zn_evidence = _zone_name_evidence(zone_names, all_player_months)
 
     results: list[dict[str, Any]] = []
     for (m, n), scraped in sorted(scraped_map.items()):
         bf = board.get((m, n))
         ov = overrides.get((m, n))
+        rt = rt_evidence.get((m, n))
         zn = zn_evidence.get((m, n))
         if bf is not None:
             faction, source = bf, "board"
         elif ov is not None:
             faction, source = ov, "override"
+        elif rt is not None:
+            faction, source = rt, "report-totals"
         elif zn is not None:
             faction, source = zn, "zone-name"
         else:
@@ -298,7 +379,9 @@ def attribute_factions() -> None:
             "MercenaryEvidence": None,
         })
 
-    _detect_mercenary(results, board_multi, zn_mercs, board, zn_evidence)
+    _detect_mercenary(
+        results, board_multi | rt_multi, zn_mercs, [board, zn_evidence, rt_evidence]
+    )
 
     review_df = _build_review_list(players)
     _atomic_write_parquet(review_df, review_path)

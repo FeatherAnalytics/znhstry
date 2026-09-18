@@ -431,8 +431,14 @@ export default function QueryConsole() {
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
       <Header meta={meta} loading={meta === null && bootError === null} />
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "hidden" }}>
-        <section style={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+      {/* flex-wrap makes this a multi-line container, and a flex line takes its cross
+          size from its content -- align-items:stretch never applies. Without the
+          maxHeight below, the section grows to the full height of its table, the
+          results pane inherits that height and its overflow:auto never engages, and
+          the rows past the first screen are unreachable. The row scrolls as the
+          backstop for the narrow layout, where two capped lines still overflow. */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "auto" }}>
+        <section style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
           <Editor
             sql={sql}
             onChange={setSql}

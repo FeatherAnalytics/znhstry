@@ -26,21 +26,22 @@ models:
 
   - name: fct_zone_battles
     description: >
-      Grain: one row per battle report, at a real zone. 45,675 rows, 11,721 zones.
+      Grain: one row per battle report, at a real zone.
 
-      A daily leaderboard, not a log of every fight: QONQR publishes exactly 10
-      reports on 3,451 of the 4,598 covered days and 27-29 on most of the rest, from
-      its Most Active Zones page. A row therefore means "this zone was among the most
-      active in the world that day" -- a much stronger claim than an event in
-      fct_zone_events, and one that must not be relabeled as "battles that day".
+      A daily leaderboard, not a log of every fight: QONQR publishes exactly ten
+      reports on most covered days and 27-29 on the rest, from its Most Active Zones
+      page. A row therefore means "this zone was among the most active in the world
+      that day" -- a much stronger claim than an event in fct_zone_events, and one
+      that must not be relabeled as "battles that day".
 
       No zone is reported twice in a day, so battle grain and zone-day grain coincide.
       Coverage starts 2014-01-01, eighteen months after release.
 
-      Mapped battles only. The 15,837 Atlantis tournament reports are excluded because
-      their zones have no coordinates, not because they are noise -- they are the
-      heaviest fighting in the game. Anything counting all battle reports must read
-      stg_battlestats. Five further reports name a zone absent from dim_zone.
+      Mapped battles only. Atlantis tournament reports are excluded because their
+      zones have no coordinates, not because they are noise -- they are the heaviest
+      fighting in the game. Anything counting all battle reports must read
+      stg_battlestats, as must anything counting the few whose zone is absent from
+      dim_zone.
     columns:
       # The drift guards live on stg_battlestats, where the rows that could
       # break them still exist. Here the inner join and the where clause have

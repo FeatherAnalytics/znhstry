@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,7 +122,70 @@ def _assert_total_order(con: duckdb.DuckDBPyConnection, table: Table) -> None:
         )
 
 
-def write_table(con: duckdb.DuckDBPyConnection, table: Table, out: Path) -> dict:
+def read_dbt_docs() -> dict[str, dict]:
+    """Model and column descriptions, from the manifest `dbt build` writes.
+
+    The query console's data dictionary is dbt's own text. Carrying it here rather than
+    keeping a second copy is what stops the two from drifting: the string a reader sees
+    is the string the tests run against.
+
+    Required, not best-effort. `marts` runs after `dbt build` in the refresh chain, so
+    the manifest is always there - and a missing one that returned empty descriptions
+    would publish a manifest whose dictionary is silently blank, which reads as "this
+    table was never documented" rather than as a broken step.
+    """
+    path = config.DBT_MANIFEST
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} is missing - run `dbt build` (or `dbt parse`) before `marts`, "
+            f"or the published dictionary would be empty with nothing to say so."
+        )
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    docs = {}
+    for node in manifest.get("nodes", {}).values():
+        if node.get("resource_type") != "model":
+            continue
+        columns = {
+            name: column["description"].strip()
+            for name, column in node.get("columns", {}).items()
+            if column.get("description", "").strip()
+        }
+        docs[node["name"]] = {
+            "description": node.get("description", "").strip(),
+            "columns": columns,
+        }
+    return docs
+
+
+# A comma-grouped integer in a description is almost always a row count someone counted
+# once. `45,675 rows` and `61,517 rows` were both already wrong by several hundred when
+# this guard was written, and a stale count renders exactly as well as a fresh one --
+# nothing on the page says it is out of date. Live counts are in the manifest already.
+_COUNT = re.compile(r"\d{1,3}(?:,\d{3})+")
+
+
+def assert_no_hardcoded_counts(docs: dict[str, dict], names: set[str]) -> None:
+    offenders = []
+    for name in sorted(names):
+        entry = docs.get(name, {})
+        for where, text in [("description", entry.get("description", ""))] + [
+            (f"column {column}", body) for column, body in entry.get("columns", {}).items()
+        ]:
+            found = _COUNT.findall(text)
+            if found:
+                offenders.append(f"{name} {where}: {', '.join(found)}")
+    if offenders:
+        raise ValueError(
+            "hardcoded counts in published descriptions:\n  "
+            + "\n  ".join(offenders)
+            + "\nThe manifest carries live row counts; prose that repeats one goes stale "
+            "silently. Say 'most days' rather than a number, or drop the sentence."
+        )
+
+
+def write_table(
+    con: duckdb.DuckDBPyConnection, table: Table, out: Path, docs: dict[str, dict]
+) -> dict:
     """Write one table as zstd Parquet and return its manifest entry."""
     _assert_total_order(con, table)
     path = out / f"{table.name}.parquet"
@@ -142,18 +206,25 @@ def write_table(con: duckdb.DuckDBPyConnection, table: Table, out: Path) -> dict
     # Types read back from the file, not from the warehouse, so the manifest describes
     # what a consumer will see - BIGINT where HUGEINT was narrowed.
     source = str(path).replace("'", "''")
-    columns = [
-        {"name": name, "type": dtype}
-        for name, dtype, *_ in con.execute(
-            f"describe select * from read_parquet('{source}')"
-        ).fetchall()
-    ]
+    entry_docs = docs.get(table.name, {})
+    column_docs = entry_docs.get("columns", {})
+    columns = []
+    for name, dtype, *_ in con.execute(
+        f"describe select * from read_parquet('{source}')"
+    ).fetchall():
+        column = {"name": name, "type": dtype}
+        # Only where one exists: an empty string would render as a documented column
+        # with nothing in it, which is worse than an undocumented one.
+        if name in column_docs:
+            column["description"] = column_docs[name]
+        columns.append(column)
     (rows,) = con.execute(f"select count(*) from read_parquet('{source}')").fetchone()
     return {
         "path": path.name,
         "rows": rows,
         "bytes": path.stat().st_size,
         "sort": list(table.sort),
+        "description": entry_docs.get("description", ""),
         "columns": columns,
     }
 
@@ -169,9 +240,21 @@ def export_marts(out: Path | None = None) -> None:
             if stale.suffix == ".tmp" or (stale.suffix == ".parquet" and stale.stem not in names):
                 stale.unlink()
 
+        docs = read_dbt_docs()
+        undocumented = sorted(t.name for t in TABLES if not docs.get(t.name, {}).get("description"))
+        if undocumented:
+            raise ValueError(
+                "published without a dbt description: "
+                + ", ".join(undocumented)
+                + " - the console lists every mart, so an undocumented one is a blank "
+                "entry a reader cannot interpret. Add it in the model's yml."
+            )
+
+        assert_no_hardcoded_counts(docs, names)
+
         tables = {}
         for table in TABLES:
-            entry = write_table(con, table, out)
+            entry = write_table(con, table, out, docs)
             tables[table.name] = entry
             log.info(
                 "%-26s %s rows  %s MB",

@@ -4,7 +4,6 @@ import { useEffect, useState, type CSSProperties } from "react";
 import {
   TEMPLATES,
   contextFrom,
-  costMb,
   countryAtSql,
   daysBefore,
   initialValues,
@@ -326,7 +325,6 @@ export default function TemplateForm({
 
   const blocked = missingScope(template, values);
   const hasRadius = String(values.zones ?? "") !== "";
-  const estimate = costMb(template, values, meta);
 
   return (
     <div style={{ borderBottom: "1px solid var(--hairline)", padding: "12px 16px" }}>
@@ -409,13 +407,6 @@ export default function TemplateForm({
           Write the query
         </button>
         <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{note ?? template.blurb}</span>
-        <span
-          className="tabular"
-          style={{ color: "var(--text-dim)", fontSize: 12 }}
-          title="Measured bytes over the wire for this template's defaults. A guide, not a promise."
-        >
-          ~{estimate < 1 ? "<1" : Math.round(estimate)} MB
-        </span>
         {hasRadius && (
           <button
             type="button"

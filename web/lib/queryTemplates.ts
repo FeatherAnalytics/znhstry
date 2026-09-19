@@ -50,8 +50,6 @@ interface Base {
   label: string;
   blurb: string;
   params: Param[];
-  /** Measured bytes on a first Run, scope filled. A guide, not a promise. */
-  measuredMb: number;
   sql: (v: Values, ctx: Context) => string;
 }
 
@@ -74,17 +72,10 @@ export const asCountryId = (value: string | number): number | null => {
   return Number.isInteger(n) ? n : null;
 };
 
-/**
- * Closed range, both bounds literal so the planner can prune row groups. The upper
- * bound is the newest date in the record, partial day included. Blank lower bound is
- * dropped rather than rendered as `date ''`.
- */
-export const rangeClause = (column: string, since: string | number, until: string): string => {
-  const parts: string[] = [];
-  if (since !== "" && since !== undefined) parts.push(`${column} >= date ${lit(String(since))}`);
-  if (until) parts.push(`${column} <= date ${lit(until)}`);
-  return parts.length === 0 ? "" : "\n  and " + parts.join("\n  and ");
-};
+/** Lower bound only. Blank is dropped rather than rendered as `date ''`. */
+export const sinceClause = (column: string, since: string | number): string =>
+  since === "" || since === undefined ? "" : `
+  and ${column} >= date ${lit(String(since))}`;
 
 /**
  * Near-me resolves to zone ids before the query runs. Joining `dim_zone` for the
@@ -163,7 +154,6 @@ export const contextFrom = (meta: MartsMeta | null): Context => ({
 export const TEMPLATES: Template[] = [
   {
     id: "zone-flips",
-    measuredMb: 4.7,
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Who has taken this zone, and when",
@@ -174,7 +164,7 @@ export const TEMPLATES: Template[] = [
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 90 },
       { id: "limit", label: "Rows", kind: "number", initial: 200, min: 10, max: 5000 },
     ],
-    sql: (v, ctx) => `-- Every change of holder, for zones whose name matches.
+    sql: (v) => `-- Every change of holder, for zones whose name matches.
 select
     e.zone_id,
     z.zone_name,
@@ -188,14 +178,13 @@ join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and e.is_capture
-  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.newestDay)}
+  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 order by e.observed_at desc
 limit ${lit(v.limit)}`,
   },
 
   {
     id: "biggest-swings",
-    measuredMb: 5.1,
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Where did bots move the most",
@@ -207,7 +196,7 @@ limit ${lit(v.limit)}`,
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 90 },
       { id: "limit", label: "Rows", kind: "number", initial: 50, min: 10, max: 1000 },
     ],
-    sql: (v, ctx) => {
+    sql: (v) => {
       // `zone_id` is in both tables; unqualified is an ambiguous-reference error.
       const grain =
         v.grain === "country"
@@ -227,7 +216,7 @@ select
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.newestDay)}
+  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 group by ${grain.key}
 order by net_bots ${direction}
 limit ${lit(v.limit)}`;
@@ -236,7 +225,6 @@ limit ${lit(v.limit)}`;
 
   {
     id: "contested-zones",
-    measuredMb: 3.2,
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Which zones are under attack",
@@ -284,7 +272,6 @@ limit ${lit(v.limit)}`;
 
   {
     id: "faction-share",
-    measuredMb: 0.1,
     table: "fct_country_daily",
     label: "How a country's balance has shifted",
     blurb: "Faction bot counts by country.",
@@ -293,7 +280,7 @@ limit ${lit(v.limit)}`;
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 365 },
       { id: "limit", label: "Rows", kind: "number", initial: 400, min: 10, max: 5000 },
     ],
-    sql: (v, ctx) => `-- Daily faction balance for one country, from the country rollup.
+    sql: (v) => `-- Daily faction balance for one country, from the country rollup.
 select
     activity_date,
     legion_bots,
@@ -305,14 +292,13 @@ select
     round(100.0 * faceless_bots / nullif(total_bots, 0), 1) as faceless_pct
 from fct_country_daily
 where country_id = ${lit(asCountryId(v.country) ?? -1)}
-${rangeClause("activity_date", v.since, ctx.newestDay)}
+${sinceClause("activity_date", v.since)}
 order by activity_date desc
 limit ${lit(v.limit)}`,
   },
 
   {
     id: "atlantis-players",
-    measuredMb: 1.1,
     table: "fct_atlantis_player_month_derived",
     label: "Atlantis player leaderboard",
     blurb: "Players ranked by month.",
@@ -360,7 +346,6 @@ limit ${lit(v.limit)}`;
 
   {
     id: "player-battles",
-    measuredMb: 3.7,
     table: "fct_atlantis_zone_player_daily",
     label: "A player's Atlantis activity",
     blurb: "One player's Atlantis record.",
@@ -452,10 +437,3 @@ export const missingScope = (template: Template, values: Values): string | null 
   return null;
 };
 
-/** The template's measured cost, or the whole scan when its scope is empty. */
-export const costMb = (template: Template, values: Values, meta: MartsMeta | null): number => {
-  if (!missingScope(template, values)) return template.measuredMb;
-  const table = meta?.tables[template.table];
-  // Unscoped, the read is the table itself less whatever column projection saves.
-  return table ? (table.bytes / 1e6) * 0.22 : template.measuredMb;
-};

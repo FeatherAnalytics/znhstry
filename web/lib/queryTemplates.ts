@@ -66,6 +66,12 @@ export type Param =
 
 export type Values = Record<string, string | number>;
 
+/**
+ * Values the form sets but never shows as a field. `zones` holds the comma-separated
+ * ids a near-me radius resolved to, blank when the reader has not used one.
+ */
+export const HIDDEN_VALUES = ["zones"] as const;
+
 interface Base {
   id: string;
   /** Written as the question a reader arrives with, not as the table it reads. */
@@ -110,6 +116,43 @@ export const asCountryId = (value: string | number): number | null => {
 export const sinceClause = (column: string, value: string | number): string =>
   value === "" || value === undefined ? "" : `
   and ${column} >= date ${lit(String(value))}`;
+
+/**
+ * A near-me radius, resolved to zone ids before the query runs rather than computed
+ * inside it.
+ *
+ * The haversine is not the expensive part -- joining `dim_zone` to reach the
+ * coordinates is. Resolving the circle first, in its own cheap query against
+ * `dim_zone` alone, and passing the answer as an id list measured 1.37 MB against
+ * 3.49 MB for the same question with the join and the trigonometry inline.
+ *
+ * The list is bounded because the SQL carries it: `RADIUS_ZONE_CAP` is the point
+ * past which the reader should be filtering by country instead of by circle.
+ */
+export const RADIUS_ZONE_CAP = 5000;
+
+export const zoneFilter = (column: string, value: string | number): string =>
+  value === "" || value === undefined ? "" : `
+  and ${column} in (${String(value)})`;
+
+/** The resolve step: every zone in one country within `km` of a point. */
+export const nearbyZonesSql = (countryId: number, lat: number, lon: number, km: number): string =>
+  `select zone_id from dim_zone
+where country_id = ${lit(countryId)}
+  and 6371.0088 * 2 * asin(sqrt(least(1.0,
+      pow(sin(radians(latitude - ${lit(lat)}) / 2), 2)
+      + cos(radians(${lit(lat)})) * cos(radians(latitude))
+        * pow(sin(radians(longitude - ${lit(lon)}) / 2), 2)))) <= ${lit(km)}
+limit ${lit(RADIUS_ZONE_CAP)}`;
+
+/** Which country a pair of coordinates falls in, by nearest zone. */
+export const countryAtSql = (lat: number, lon: number): string =>
+  `select country_id, country_name from dim_zone
+order by 6371.0088 * 2 * asin(sqrt(least(1.0,
+    pow(sin(radians(latitude - ${lit(lat)}) / 2), 2)
+    + cos(radians(${lit(lat)})) * cos(radians(latitude))
+      * pow(sin(radians(longitude - ${lit(lon)}) / 2), 2))))
+limit 1`;
 
 const DIRECTIONS: Choice[] = [
   { value: "desc", label: "largest first" },
@@ -202,7 +245,7 @@ join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and e.is_capture
-  and z.zone_name ilike ${lit(`%${v.zone}%`)}${sinceClause("e.activity_date", v.since)}
+  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 order by e.observed_at desc
 limit ${lit(v.limit)}`,
   },
@@ -244,8 +287,7 @@ select
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
-${sinceClause("e.activity_date", v.since)}
+  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 group by ${grain.key}
 order by net_bots ${direction}
 limit ${lit(v.limit)}`;
@@ -290,7 +332,7 @@ with contested as (
     join dim_zone z on z.zone_id = e.zone_id
     where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
       and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
-      and e.activity_date = date ${lit(ctx.lastFullDay)}${
+      and e.activity_date = date ${lit(ctx.lastFullDay)}${zoneFilter("e.zone_id", v.zones)}${
         holder > 0 ? `\n      and e.control_state = ${lit(holder)}` : ""
       }
 )
@@ -415,13 +457,15 @@ limit ${lit(v.limit)}`,
 
 export const byId = (id: string): Template | undefined => TEMPLATES.find((t) => t.id === id);
 
-export const initialValues = (template: Template, ctx: Context): Values =>
-  Object.fromEntries(
+export const initialValues = (template: Template, ctx: Context): Values => ({
+  zones: "",
+  ...Object.fromEntries(
     template.params.map((p) => [
       p.id,
       p.kind === "date" && p.daysBack !== undefined ? daysBefore(ctx.lastFullDay, p.daysBack) : p.initial,
     ]),
-  );
+  ),
+});
 
 /** A date `days` before `from`, or blank when the manifest has not loaded yet. */
 export const daysBefore = (from: string, days: number): string => {

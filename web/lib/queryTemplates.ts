@@ -49,6 +49,7 @@ export type Choice = { value: string; label: string };
 export type Param =
   | { id: string; label: string; kind: "choice"; options: Choice[]; initial: string }
   | { id: string; label: string; kind: "country"; initial: string }
+  | { id: string; label: string; kind: "month"; initial: string }
   | {
       id: string;
       label: string;
@@ -112,10 +113,22 @@ export const asCountryId = (value: string | number): number | null => {
   return Number.isInteger(n) ? n : null;
 };
 
-/** A blank date field means "no lower bound", not `date ''`. */
-export const sinceClause = (column: string, value: string | number): string =>
-  value === "" || value === undefined ? "" : `
-  and ${column} >= date ${lit(String(value))}`;
+/**
+ * A date filter is a closed range: from the reader's date up to the last full day.
+ *
+ * The upper bound is not decoration. The newest date in the record is the opening
+ * seconds of a day whose own file has not been written yet, so an open-ended range
+ * always trails a fragment that looks like a real day and is not one. Bounding it also
+ * hands the planner two literals to prune row groups with instead of one.
+ *
+ * A blank lower bound is dropped rather than rendered as `date ''`.
+ */
+export const rangeClause = (column: string, since: string | number, until: string): string => {
+  const parts: string[] = [];
+  if (since !== "" && since !== undefined) parts.push(`${column} >= date ${lit(String(since))}`);
+  if (until) parts.push(`${column} <= date ${lit(until)}`);
+  return parts.length === 0 ? "" : "\n  and " + parts.join("\n  and ");
+};
 
 /**
  * A near-me radius, resolved to zone ids before the query runs rather than computed
@@ -134,6 +147,10 @@ export const RADIUS_ZONE_CAP = 5000;
 export const zoneFilter = (column: string, value: string | number): string =>
   value === "" || value === undefined ? "" : `
   and ${column} in (${String(value)})`;
+
+/** Tournament months, newest first. `stg_atlantis_tournaments` is 30 rows. */
+export const TOURNAMENT_MONTHS_SQL =
+  "select tournament_month from stg_atlantis_tournaments order by tournament_month desc";
 
 /** The resolve step: every zone in one country within `km` of a point. */
 export const nearbyZonesSql = (countryId: number, lat: number, lon: number, km: number): string =>
@@ -231,7 +248,7 @@ export const TEMPLATES: Template[] = [
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 90 },
       { id: "limit", label: "Rows", kind: "number", initial: 200, min: 10, max: 5000 },
     ],
-    sql: (v) => `-- Every change of holder, for zones whose name matches.
+    sql: (v, ctx) => `-- Every change of holder, for zones whose name matches.
 select
     e.zone_id,
     z.zone_name,
@@ -245,7 +262,7 @@ join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and e.is_capture
-  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
+  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.lastFullDay)}
 order by e.observed_at desc
 limit ${lit(v.limit)}`,
   },
@@ -261,12 +278,12 @@ limit ${lit(v.limit)}`,
       "zone to its own previous observation, so they span whatever gap that was.",
     params: [
       { id: "country", label: "Country", kind: "country", initial: "" },
-      { id: "grain", label: "Group", kind: "choice", options: GRAINS, initial: "zone" },
+      { id: "grain", label: "Granularity", kind: "choice", options: GRAINS, initial: "zone" },
       { id: "movement", label: "Show", kind: "choice", options: MOVEMENTS, initial: "loss" },
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 90 },
       { id: "limit", label: "Rows", kind: "number", initial: 50, min: 10, max: 1000 },
     ],
-    sql: (v) => {
+    sql: (v, ctx) => {
       // Qualified on both sides of the join: `zone_id` exists in fct_zone_events and in
       // dim_zone, and an unqualified one is an ambiguous-reference error, not a warning.
       const grain =
@@ -287,7 +304,7 @@ select
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
+  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.lastFullDay)}
 group by ${grain.key}
 order by net_bots ${direction}
 limit ${lit(v.limit)}`;
@@ -357,7 +374,7 @@ limit ${lit(v.limit)}`;
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 365 },
       { id: "limit", label: "Rows", kind: "number", initial: 400, min: 10, max: 5000 },
     ],
-    sql: (v) => `-- Daily faction balance for one country, from the country rollup.
+    sql: (v, ctx) => `-- Daily faction balance for one country, from the country rollup.
 select
     activity_date,
     legion_bots,
@@ -369,7 +386,7 @@ select
     round(100.0 * faceless_bots / nullif(total_bots, 0), 1) as faceless_pct
 from fct_country_daily
 where country_id = ${lit(asCountryId(v.country) ?? -1)}
-${sinceClause("activity_date", v.since)}
+${rangeClause("activity_date", v.since, ctx.lastFullDay)}
 order by activity_date desc
 limit ${lit(v.limit)}`,
   },
@@ -383,7 +400,7 @@ limit ${lit(v.limit)}`,
       "One row per player per tournament month, with launches, kills, losses and the " +
       "estimated payout. The whole mart is 1.4 MB, so any filter combination is free.",
     params: [
-      { id: "month", label: "Tournament month", kind: "text", initial: "" },
+      { id: "month", label: "Tournament month", kind: "month", initial: "" },
       { id: "faction", label: "Faction", kind: "choice", options: FACTIONS, initial: "0" },
       {
         id: "sort",
@@ -429,29 +446,65 @@ limit ${lit(v.limit)}`;
     id: "player-battles",
     measuredMb: 3.7,
     table: "fct_atlantis_zone_player_daily",
-    label: "One player's battle reports",
+    label: "A player's Atlantis activity",
     blurb:
-      "Every Atlantis battle report a player appears in, with their rank and bot counts " +
-      "for that report. 3.8 MB in total, so no scope is asked for.",
+      "Every Atlantis zone a player fought in, report by report or totalled. 3.8 MB "
+      + "in all, so no scope is asked for.",
     params: [
       { id: "player", label: "Player name", kind: "text", initial: "" },
-      { id: "since", label: "Since", kind: "date", initial: "" },
+      { id: "month", label: "Tournament month", kind: "month", initial: "" },
+      {
+        id: "shape",
+        label: "Show",
+        kind: "choice",
+        options: [
+          { value: "detail", label: "one row per report" },
+          { value: "totals", label: "totals per player" },
+        ],
+        initial: "detail",
+      },
       { id: "limit", label: "Rows", kind: "number", initial: 200, min: 10, max: 5000 },
     ],
-    sql: (v) => `-- One player's Atlantis battle reports, newest first.
+    sql: (v) => {
+      const where =
+        `where player_name ilike ${lit(`%${v.player}%`)}` +
+        (v.month ? `\n  and tournament_month = ${lit(String(v.month))}` : "");
+      if (v.shape === "totals") {
+        return `-- One row per player: their whole Atlantis record over the months selected.
+select
+    player_name,
+    count(distinct tournament_month) as months,
+    count(*) as reports,
+    count(distinct zone) as zones,
+    sum(launches) as launches,
+    sum(bots_killed) as bots_killed,
+    sum(bots_lost) as bots_lost,
+    min(battle_date) as first_seen,
+    max(battle_date) as last_seen
+from fct_atlantis_zone_player_daily
+${where}
+group by 1
+order by bots_killed desc
+limit ${lit(v.limit)}`;
+      }
+      return `-- One row per Atlantis battle report the player appears in, newest first.
 select
     battle_date,
+    tournament_month,
     battle_report_number,
     zone,
+    zone_name,
     player_name,
+    faction,
     rank,
     launches,
     bots_killed,
     bots_lost
 from fct_atlantis_zone_player_daily
-where player_name ilike ${lit(`%${v.player}%`)}${sinceClause("battle_date", v.since)}
+${where}
 order by battle_date desc, rank asc
-limit ${lit(v.limit)}`,
+limit ${lit(v.limit)}`;
+    },
   },
 ];
 

@@ -11,6 +11,7 @@ import {
   missingScope,
   nearbyZonesSql,
   RADIUS_ZONE_CAP,
+  TOURNAMENT_MONTHS_SQL,
   type Param,
   type Template,
   type Values,
@@ -31,6 +32,16 @@ const control: CSSProperties = {
   padding: "5px 7px",
   minWidth: 0,
 };
+
+/**
+ * Radii the reader actually asks for: a few near neighbours, or a continent. There is
+ * nothing useful between 40 and 1000 miles -- one is "around me" and the other is
+ * "my half of the country", and the gap is where a list of every round number goes to
+ * make the control unreadable.
+ */
+const RADII_MILES = [10, 20, 30, 40, 1000, 3000, 6000];
+
+const KM_PER_MILE = 1.609344;
 
 const fieldLabel: CSSProperties = {
   display: "flex",
@@ -67,15 +78,28 @@ function useGeolocationState(): PermissionState | "unsupported" | "unknown" {
   return state;
 }
 
+/**
+ * Arrow hands a DATE column back as epoch milliseconds, not as text, so the raw value
+ * is a thirteen-digit number that formats as a plausible-looking id. UTC because every
+ * date in this record is a UTC date, and a local render is a day out west of Greenwich.
+ */
+const isoDay = (value: unknown): string | null => {
+  const ms = typeof value === "bigint" ? Number(value) : Number(value);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 10);
+};
+
 function Field({
   param,
   value,
   countries,
+  months,
   onChange,
 }: {
   param: Param;
   value: string | number;
   countries: Country[];
+  months: string[];
   onChange: (next: string | number) => void;
 }) {
   const id = `tpl-${param.id}`;
@@ -93,6 +117,26 @@ function Field({
           {countries.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (param.kind === "month") {
+    return (
+      <label htmlFor={id} style={fieldLabel}>
+        {param.label}
+        <select
+          id={id}
+          value={String(value)}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ ...control, width: 150 }}
+        >
+          <option value="">Every month</option>
+          {months.map((m) => (
+            <option key={m} value={m}>
+              {m.slice(0, 7)}
             </option>
           ))}
         </select>
@@ -157,7 +201,8 @@ export default function TemplateForm({
   const template = TEMPLATES.find((t) => t.id === templateId) as Template;
   const [values, setValues] = useState<Values>(() => initialValues(TEMPLATES[0], ctx));
   const [countries, setCountries] = useState<Country[]>([]);
-  const [radiusKm, setRadiusKm] = useState(250);
+  const [months, setMonths] = useState<string[]>([]);
+  const [radiusMiles, setRadiusMiles] = useState(30);
   const [locating, setLocating] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const permission = useGeolocationState();
@@ -189,6 +234,31 @@ export default function TemplateForm({
       live = false;
     };
   }, [warehouse, countries.length]);
+
+  // Tournament months come from their own table rather than from the fact: 30 rows
+  // against 533,000, and the list is the same either way.
+  useEffect(() => {
+    if (warehouse === null || months.length > 0) return;
+    let live = true;
+    void (async () => {
+      try {
+        await warehouse.bind("stg_atlantis_tournaments");
+        const table = await warehouse.conn.query(TOURNAMENT_MONTHS_SQL);
+        const column = table.getChildAt(0);
+        const rows: string[] = [];
+        for (let i = 0; i < table.numRows; i++) {
+          const day = isoDay(column?.get(i));
+          if (day) rows.push(day);
+        }
+        if (live) setMonths(rows);
+      } catch {
+        /* The picker falls back to "Every month"; the query is still valid without one. */
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [warehouse, months.length]);
 
   // The form mounts before the manifest lands, so `lastFullDay` is blank on the first
   // render and every relative date default resolves to "". Left alone that is not a
@@ -239,7 +309,7 @@ export default function TemplateForm({
             const countryId = Number(where.getChildAt(0)?.get(0));
             const countryName = String(where.getChildAt(1)?.get(0));
             const near = await warehouse.conn.query(
-              nearbyZonesSql(countryId, latitude, longitude, radiusKm),
+              nearbyZonesSql(countryId, latitude, longitude, radiusMiles * KM_PER_MILE),
             );
             const column = near.getChildAt(0);
             const ids: number[] = [];
@@ -247,8 +317,8 @@ export default function TemplateForm({
             setValues((v) => ({ ...v, country: String(countryId), zones: ids.join(", ") }));
             setNote(
               ids.length >= RADIUS_ZONE_CAP
-                ? `${countryName}: more than ${RADIUS_ZONE_CAP.toLocaleString("en-US")} zones within ${radiusKm} km. Narrow the radius or drop it and use the country.`
-                : `${ids.length.toLocaleString("en-US")} zones within ${radiusKm} km, in ${countryName}.`,
+                ? `${countryName}: more than ${RADIUS_ZONE_CAP.toLocaleString("en-US")} zones within ${radiusMiles} miles. Narrow the radius, or drop it and use the country.`
+                : `${ids.length.toLocaleString("en-US")} zones within ${radiusMiles} miles, in ${countryName}.`,
             );
           } catch {
             setNote("Could not match your location to a country. Pick one instead.");
@@ -302,6 +372,7 @@ export default function TemplateForm({
             param={param}
             value={values[param.id] ?? ""}
             countries={countries}
+            months={months}
             onChange={(next) => set(param.id, next)}
           />
         ))}
@@ -312,13 +383,13 @@ export default function TemplateForm({
             <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <select
                 id="tpl-radius"
-                value={radiusKm}
-                onChange={(e) => setRadiusKm(Number(e.target.value))}
-                style={{ ...control, width: 92 }}
+                value={radiusMiles}
+                onChange={(e) => setRadiusMiles(Number(e.target.value))}
+                style={{ ...control, width: 104 }}
               >
-                {[50, 100, 250, 500, 1000].map((km) => (
-                  <option key={km} value={km}>
-                    {km} km
+                {RADII_MILES.map((miles) => (
+                  <option key={miles} value={miles}>
+                    {miles.toLocaleString("en-US")} miles
                   </option>
                 ))}
               </select>

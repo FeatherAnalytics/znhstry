@@ -179,6 +179,81 @@ function Header({ meta, loading }: { meta: MartsMeta | null; loading: boolean })
   );
 }
 
+/**
+ * Four groups by what the tables are about, not by `fct_`/`dim_`/`stg_` prefix -- the
+ * modeling layer is a fact about how the warehouse is built, and a player reading this
+ * list wants to know which tables answer which question. Anything not named here falls
+ * into Reference, so a new mart appears in the list rather than vanishing from it.
+ */
+const GROUPS: { label: string; has: (name: string) => boolean }[] = [
+  {
+    label: "Zones & geography",
+    // Excludes battle explicitly rather than relying on the order of this list:
+    // `fct_zone_battles` matches on "zone" too, and a reader looking for battle
+    // reports would never find it filed under geography.
+    has: (n) =>
+      !n.includes("atlantis") &&
+      !n.includes("battle") &&
+      (n.includes("zone") || n === "fct_country_daily" || n === "fct_global_daily"),
+  },
+  { label: "Battle reports", has: (n) => !n.includes("atlantis") && n.includes("battle") },
+  { label: "Atlantis tournament", has: (n) => n.includes("atlantis") },
+];
+
+const groupsOf = (meta: MartsMeta) => {
+  const names = Object.keys(meta.tables);
+  const taken = new Set<string>();
+  const groups = GROUPS.map(({ label, has }) => {
+    const members = names.filter((n) => !taken.has(n) && has(n));
+    members.forEach((n) => taken.add(n));
+    return { label, members };
+  });
+  groups.push({ label: "Reference", members: names.filter((n) => !taken.has(n)) });
+  // Biggest first inside a group: row count is the best proxy for what people want.
+  for (const group of groups) {
+    group.members.sort((a, b) => meta.tables[b].rows - meta.tables[a].rows);
+  }
+  return groups.filter((g) => g.members.length > 0);
+};
+
+const megabytes = (bytes: number): string =>
+  bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} kB`;
+
+/** The four things nobody can infer from a column list, and nothing else. */
+function Primer() {
+  return (
+    <div
+      className="prose"
+      style={{
+        color: "var(--text-dim)",
+        fontSize: 12,
+        lineHeight: 1.6,
+        borderBottom: "1px solid var(--hairline)",
+        paddingBottom: 12,
+        marginBottom: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      <div>
+        Factions are numbered <strong style={{ color: "var(--text)" }}>0</strong> uncaptured,{" "}
+        <strong style={{ color: "var(--legion)" }}>1</strong> Legion,{" "}
+        <strong style={{ color: "var(--swarm)" }}>2</strong> Swarm,{" "}
+        <strong style={{ color: "var(--faceless)" }}>3</strong> Faceless.
+      </div>
+      <div>
+        <code>observed_at</code> is when the game was read; <code>activity_date</code> is its
+        UTC date.
+      </div>
+      <div>
+        Deltas compare a zone to its own previous observation, not to a fixed clock.
+      </div>
+      <div>The newest day in the record is always a partial sliver, never a whole day.</div>
+    </div>
+  );
+}
+
 function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: string) => void }) {
   if (meta === null) return null;
   return (
@@ -194,29 +269,68 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
       <div className="eyebrow" style={{ marginBottom: 10 }}>
         Tables
       </div>
-      {Object.entries(meta.tables).map(([name, table]) => (
-        <details key={name} style={{ marginBottom: 8 }}>
-          <summary style={{ cursor: "pointer", listStyle: "none" }}>
-            <button
-              type="button"
-              onClick={() => onPick(name)}
-              title={`select * from ${name} limit 100`}
-              style={{ padding: 0, color: "var(--text)" }}
-            >
-              {name}
-            </button>
-            <span className="tabular" style={{ color: "var(--text-dim)", marginLeft: 8 }}>
-              {count(table.rows)}
-            </span>
-          </summary>
-          <div style={{ color: "var(--text-dim)", paddingLeft: 12, fontSize: 12, lineHeight: 1.5 }}>
-            {table.columns.map((c) => (
-              <div key={c.name}>
-                {c.name} {c.type}
-              </div>
-            ))}
+      <Primer />
+      {groupsOf(meta).map((group) => (
+        <section key={group.label} style={{ marginBottom: 18 }}>
+          <div
+            className="eyebrow"
+            style={{ marginBottom: 8, color: "var(--text-dim)", fontSize: 10 }}
+          >
+            {group.label}
           </div>
-        </details>
+          {group.members.map((name) => {
+            const table = meta.tables[name];
+            return (
+              <details key={name} style={{ marginBottom: 8 }}>
+                <summary style={{ cursor: "pointer", listStyle: "none" }}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(name)}
+                    title={`select * from ${name} limit 100`}
+                    style={{ padding: 0, color: "var(--text)", textAlign: "left" }}
+                  >
+                    {name}
+                  </button>
+                  <span
+                    className="tabular"
+                    style={{ color: "var(--text-dim)", marginLeft: 8, whiteSpace: "nowrap" }}
+                  >
+                    {count(table.rows)} · {megabytes(table.bytes)}
+                  </span>
+                </summary>
+                <div
+                  style={{
+                    paddingLeft: 12,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {table.description && (
+                    <p className="prose" style={{ color: "var(--text)", margin: "4px 0 8px" }}>
+                      {table.description}
+                    </p>
+                  )}
+                  <div style={{ color: "var(--text-dim)", marginBottom: 8 }}>
+                    Filter on <code>{table.sort[0]}</code> to read less of this table.
+                  </div>
+                  {table.columns.map((c) => (
+                    <div key={c.name} style={{ marginBottom: c.description ? 6 : 0 }}>
+                      <span style={{ color: "var(--text-dim)" }}>
+                        {c.name} {c.type}
+                      </span>
+                      {c.description && (
+                        <div className="prose" style={{ color: "var(--text-dim)", opacity: 0.85 }}>
+                          {c.description}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            );
+          })}
+        </section>
       ))}
     </aside>
   );

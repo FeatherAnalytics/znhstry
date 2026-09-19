@@ -109,3 +109,11 @@ models:
         data_tests: [not_null]
       - name: player_name
         data_tests: [not_null]
+
+  - name: stg_atlantis_faction_review
+    description: >
+      Grain: one row per tournament month per player whose scraped faction is in
+      doubt -- the report header's totals contradict the sum of that faction's own
+      rows, and no other report reconciles the difference. A review queue, not a
+      finding: a row here means the attribution could not be confirmed, never that
+      it is wrong.

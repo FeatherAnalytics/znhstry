@@ -18,13 +18,19 @@ export type ResultTable = Awaited<ReturnType<Connection["query"]>>;
 export interface MartColumn {
   name: string;
   type: string;
+  /** dbt's own column description, on the minority of columns that carry one. */
+  description?: string;
 }
 
 export interface MartTable {
   path: string;
   rows: number;
   bytes: number;
+  /** Leading column is the pruning column: filtering on it skips whole row groups. */
   sort: string[];
+  /** Optional until the republish that carries it lands: a bucket written before
+   *  descriptions existed has none, and the console must render that, not crash. */
+  description?: string;
   columns: MartColumn[];
 }
 

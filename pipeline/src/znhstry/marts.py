@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,6 +157,32 @@ def read_dbt_docs() -> dict[str, dict]:
     return docs
 
 
+# A comma-grouped integer in a description is almost always a row count someone counted
+# once. `45,675 rows` and `61,517 rows` were both already wrong by several hundred when
+# this guard was written, and a stale count renders exactly as well as a fresh one --
+# nothing on the page says it is out of date. Live counts are in the manifest already.
+_COUNT = re.compile(r"\d{1,3}(?:,\d{3})+")
+
+
+def assert_no_hardcoded_counts(docs: dict[str, dict], names: set[str]) -> None:
+    offenders = []
+    for name in sorted(names):
+        entry = docs.get(name, {})
+        for where, text in [("description", entry.get("description", ""))] + [
+            (f"column {column}", body) for column, body in entry.get("columns", {}).items()
+        ]:
+            found = _COUNT.findall(text)
+            if found:
+                offenders.append(f"{name} {where}: {', '.join(found)}")
+    if offenders:
+        raise ValueError(
+            "hardcoded counts in published descriptions:\n  "
+            + "\n  ".join(offenders)
+            + "\nThe manifest carries live row counts; prose that repeats one goes stale "
+            "silently. Say 'most days' rather than a number, or drop the sentence."
+        )
+
+
 def write_table(
     con: duckdb.DuckDBPyConnection, table: Table, out: Path, docs: dict[str, dict]
 ) -> dict:
@@ -222,6 +249,8 @@ def export_marts(out: Path | None = None) -> None:
                 + " - the console lists every mart, so an undocumented one is a blank "
                 "entry a reader cannot interpret. Add it in the model's yml."
             )
+
+        assert_no_hardcoded_counts(docs, names)
 
         tables = {}
         for table in TABLES:

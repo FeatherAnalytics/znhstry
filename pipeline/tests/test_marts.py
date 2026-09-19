@@ -18,7 +18,7 @@ import duckdb
 import pytest
 
 from znhstry import config
-from znhstry.marts import Table, read_dbt_docs, write_table
+from znhstry.marts import Table, assert_no_hardcoded_counts, read_dbt_docs, write_table
 
 
 def test_hugeint_lands_as_bigint(tmp_path):
@@ -102,3 +102,23 @@ def test_only_models_and_only_non_empty_descriptions(tmp_path, monkeypatch):
     assert docs["kept"]["description"] == "Grain: one row per thing."
     assert docs["kept"]["columns"] == {"a": "Documented."}
 
+
+
+def test_a_hardcoded_row_count_is_refused():
+    docs = {
+        "t": {"description": "Grain: one row per thing. 45,675 rows.", "columns": {}},
+    }
+
+    with pytest.raises(ValueError, match="45,675"):
+        assert_no_hardcoded_counts(docs, {"t"})
+
+
+def test_dates_and_small_numbers_are_left_alone():
+    docs = {
+        "t": {
+            "description": "Coverage starts 2014-01-01. Exactly 10 reports on most days.",
+            "columns": {"a": "0 uncaptured, 1 legion, 2 swarm, 3 faceless."},
+        },
+    }
+
+    assert_no_hardcoded_counts(docs, {"t"})

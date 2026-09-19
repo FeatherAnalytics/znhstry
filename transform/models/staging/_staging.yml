@@ -3,7 +3,7 @@ version: 2
 models:
   - name: stg_battlestats
     description: >
-      Grain: one row per battle report, tournament reports included. 61,517 rows.
+      Grain: one row per battle report, tournament reports included.
 
       The tests live here rather than on fct_zone_battles because this is the last
       model that still holds the rows they are about: the mart inner-joins dim_zone

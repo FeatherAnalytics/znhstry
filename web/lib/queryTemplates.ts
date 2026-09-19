@@ -1,36 +1,14 @@
 /**
- * Parameterized queries, defined as data.
+ * Parameterized queries, defined as data. One object drives the form, the SQL and the
+ * validation.
  *
- * One object per template carries its parameters, its SQL, and the scope it must be
- * given before it runs. The same object drives the form, the generated SQL and the
- * validation, so a parameter cannot exist in the UI and be missing from the query.
- *
- * The scope declaration is the whole performance policy, written once. The browser is
- * the database: DuckDB reads the marts over HTTP range requests, and Parquet keeps
- * min/max per row group, so a filter on a file's *leading sort column* skips whole
- * groups and the bytes are never fetched. Measured against the published marts:
- *
- *   one country, all history, joined for names ..... 19.9 MB
- *   last 30 days, every country, joined for names .. 37.2 MB
- *   the same query with no scope at all ............ 79.1 MB
- *
- * Note which of those is cheap. `activity_date` is the *second* sort column of
- * `fct_zone_events`, so a date range prunes almost nothing -- every country's row
- * groups span the whole history. A time filter feels like the cheap one and is not.
- * Only a filter on the leading column earns its keep, which is why `requiredScope`
- * names a parameter that filters on exactly that.
- *
- * Every other mart is under 4 MB, so templates over Atlantis and the battle reports
- * take any filters in any combination and declare no scope at all.
+ * `requiredScope` names the parameter that filters on the file's leading sort column,
+ * which is the only filter that skips Parquet row groups. Without it a query reads the
+ * whole table.
  */
 import type { MartsMeta } from "./duckdbWasm";
 
-/**
- * The two marts big enough that an unscoped scan is the reader's problem:
- * `fct_zone_events` is 192 MB and `dim_zone` 64 MB. The type makes a template over
- * either one impossible to define without a scope -- an invariant a test could be
- * written for and then forgotten, so it is spelled where it cannot be.
- */
+/** Big enough that an unscoped scan is the reader's problem. The type forces a scope. */
 export type GuardedTable = "fct_zone_events" | "dim_zone";
 
 /** Everything else. Small enough that no filter is required of the reader. */
@@ -55,11 +33,7 @@ export type Param =
       label: string;
       kind: "date";
       initial: string;
-      /**
-       * Where a blank default would mean "all history". A first Run should be cheap
-       * and the whole record opt-in, not the other way round: leaving `zone-flips`
-       * unbounded reads 39.7 MB, and ninety days of it reads 3.6.
-       */
+      /** Blank would mean all history: 39.7 MB against 4.7 for ninety days. */
       daysBack?: number;
     }
   | { id: string; label: string; kind: "number"; initial: number; min: number; max: number }
@@ -67,10 +41,7 @@ export type Param =
 
 export type Values = Record<string, string | number>;
 
-/**
- * Values the form sets but never shows as a field. `zones` holds the comma-separated
- * ids a near-me radius resolved to, blank when the reader has not used one.
- */
+/** Set by the form, never shown. `zones` holds the ids a near-me radius resolved to. */
 export const HIDDEN_VALUES = ["zones"] as const;
 
 interface Base {
@@ -79,12 +50,7 @@ interface Base {
   label: string;
   blurb: string;
   params: Param[];
-  /**
-   * Megabytes over the wire on a first Run: the scope filled, every other parameter
-   * left at its default. Measured against the published marts on 2026-09-18 through a
-   * proxy that counts response bodies. A guide for the reader, not a promise -- widening
-   * the date range or picking a busier country moves it, upward.
-   */
+  /** Measured bytes on a first Run, scope filled. A guide, not a promise. */
   measuredMb: number;
   sql: (v: Values, ctx: Context) => string;
 }
@@ -93,12 +59,7 @@ export type Template =
   | (Base & { table: GuardedTable; requiredScope: string })
   | (Base & { table: OpenTable; requiredScope?: never });
 
-/**
- * Quoting is a correctness guard, not a security one: the SQL runs in the reader's own
- * browser against public Parquet, so there is no other party's data to reach and no
- * server to attack. What it prevents is an apostrophe in "Ra's al Khaymah" ending the
- * string early and producing a parse error the reader cannot act on.
- */
+/** Escapes quotes so an apostrophe in a name cannot end the string early. */
 export const lit = (value: string | number): string => {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error(`${value} is not a usable number`);
@@ -114,14 +75,9 @@ export const asCountryId = (value: string | number): number | null => {
 };
 
 /**
- * A date filter is a closed range: from the reader's date up to the last full day.
- *
- * The upper bound is not decoration. The newest date in the record is the opening
- * seconds of a day whose own file has not been written yet, so an open-ended range
- * always trails a fragment that looks like a real day and is not one. Bounding it also
- * hands the planner two literals to prune row groups with instead of one.
- *
- * A blank lower bound is dropped rather than rendered as `date ''`.
+ * Closed range, both bounds literal so the planner can prune row groups. The upper
+ * bound is the newest date in the record, partial day included. Blank lower bound is
+ * dropped rather than rendered as `date ''`.
  */
 export const rangeClause = (column: string, since: string | number, until: string): string => {
   const parts: string[] = [];
@@ -131,26 +87,14 @@ export const rangeClause = (column: string, since: string | number, until: strin
 };
 
 /**
- * A near-me radius, resolved to zone ids before the query runs rather than computed
- * inside it.
- *
- * The haversine is not the expensive part -- joining `dim_zone` to reach the
- * coordinates is. Resolving the circle first, in its own cheap query against
- * `dim_zone` alone, and passing the answer as an id list measured 1.37 MB against
- * 3.49 MB for the same question with the join and the trigonometry inline.
- *
- * The list is bounded because the SQL carries it: `RADIUS_ZONE_CAP` is the point
- * past which the reader should be filtering by country instead of by circle.
+ * Near-me resolves to zone ids before the query runs. Joining `dim_zone` for the
+ * coordinates is the cost, not the haversine: 1.37 MB against 3.49 with the join inline.
  */
 export const RADIUS_ZONE_CAP = 5000;
 
 export const zoneFilter = (column: string, value: string | number): string =>
   value === "" || value === undefined ? "" : `
   and ${column} in (${String(value)})`;
-
-/** Tournament months, newest first. `stg_atlantis_tournaments` is 30 rows. */
-export const TOURNAMENT_MONTHS_SQL =
-  "select tournament_month from stg_atlantis_tournaments order by tournament_month desc";
 
 /** The resolve step: every zone in one country within `km` of a point. */
 export const nearbyZonesSql = (countryId: number, lat: number, lon: number, km: number): string =>
@@ -204,33 +148,17 @@ const ownBots = (prefix = "") =>
   `when 3 then ${prefix}faceless_count else 0 end`;
 
 /**
- * What a template needs to know about the warehouse to write cheap SQL.
- *
- * `lastFullDay` exists to be inlined as a literal rather than asked for as a subquery,
- * and the difference is not small. `fct_zone_events` sorts on
- * (country_id, observed_at, zone_id), so once a country is pinned its row groups are
- * ordered by date and Parquet's min/max stats can skip almost all of them -- but only
- * if the planner knows the date before it picks groups. A scalar subquery is resolved
- * too late, so every group is read and then thrown away. Measured on one country:
- *
- *   ... where activity_date = (select max(activity_date) - 1 from ...) .... 59.47 MB
- *   ... where activity_date = date '2026-09-17' ............................ 4.07 MB
- *
- * The manifest the console already loads carries `newest_event_date`, so this costs
- * nothing to know.
+ * Inlined as a literal, never asked for as a subquery: a subquery resolves too late to
+ * prune row groups. Same query, 59.47 MB against 4.07.
  */
 export interface Context {
-  /** Newest date in the record, minus one: the newest is always a partial sliver. */
-  lastFullDay: string;
+  /** Newest date in the record. Usually a partial day; partial is still data. */
+  newestDay: string;
 }
 
-export const contextFrom = (meta: MartsMeta | null): Context => {
-  const newest = meta?.newest_event_date;
-  if (!newest) return { lastFullDay: "" };
-  const day = new Date(`${newest}T00:00:00Z`);
-  day.setUTCDate(day.getUTCDate() - 1);
-  return { lastFullDay: day.toISOString().slice(0, 10) };
-};
+export const contextFrom = (meta: MartsMeta | null): Context => ({
+  newestDay: meta?.newest_event_date ?? "",
+});
 
 export const TEMPLATES: Template[] = [
   {
@@ -239,9 +167,7 @@ export const TEMPLATES: Template[] = [
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Who has taken this zone, and when",
-    blurb:
-      "Every change of holder for zones matching a name, newest first. Before October " +
-      "2018 a first row usually records the crawler reaching a zone already held, not a capture.",
+    blurb: "Who took each zone, and when.",
     params: [
       { id: "country", label: "Country", kind: "country", initial: "" },
       { id: "zone", label: "Zone name contains", kind: "text", initial: "" },
@@ -262,7 +188,7 @@ join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
   and e.is_capture
-  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.lastFullDay)}
+  and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.newestDay)}
 order by e.observed_at desc
 limit ${lit(v.limit)}`,
   },
@@ -273,9 +199,7 @@ limit ${lit(v.limit)}`,
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Where did bots move the most",
-    blurb:
-      "Net bot movement over a window, grouped however you like. Deltas compare each " +
-      "zone to its own previous observation, so they span whatever gap that was.",
+    blurb: "Net bot movement over a window.",
     params: [
       { id: "country", label: "Country", kind: "country", initial: "" },
       { id: "grain", label: "Granularity", kind: "choice", options: GRAINS, initial: "zone" },
@@ -284,8 +208,7 @@ limit ${lit(v.limit)}`,
       { id: "limit", label: "Rows", kind: "number", initial: 50, min: 10, max: 1000 },
     ],
     sql: (v, ctx) => {
-      // Qualified on both sides of the join: `zone_id` exists in fct_zone_events and in
-      // dim_zone, and an unqualified one is an ambiguous-reference error, not a warning.
+      // `zone_id` is in both tables; unqualified is an ambiguous-reference error.
       const grain =
         v.grain === "country"
           ? { key: "z.country_name", select: "z.country_name" }
@@ -304,7 +227,7 @@ select
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
 where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.lastFullDay)}
+  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${rangeClause("e.activity_date", v.since, ctx.newestDay)}
 group by ${grain.key}
 order by net_bots ${direction}
 limit ${lit(v.limit)}`;
@@ -317,9 +240,7 @@ limit ${lit(v.limit)}`;
     table: "fct_zone_events",
     requiredScope: "country",
     label: "Which zones are under attack",
-    blurb:
-      "Zones on the last full day where somebody lost bots and a faction other than the " +
-      "holder still has bots on the ground.",
+    blurb: "Zones losing bots with an enemy still present.",
     params: [
       { id: "country", label: "Country", kind: "country", initial: "" },
       { id: "holder", label: "Held by", kind: "choice", options: FACTIONS, initial: "0" },
@@ -349,7 +270,7 @@ with contested as (
     join dim_zone z on z.zone_id = e.zone_id
     where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
       and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
-      and e.activity_date = date ${lit(ctx.lastFullDay)}${zoneFilter("e.zone_id", v.zones)}${
+      and e.activity_date = date ${lit(ctx.newestDay)}${zoneFilter("e.zone_id", v.zones)}${
         holder > 0 ? `\n      and e.control_state = ${lit(holder)}` : ""
       }
 )
@@ -366,9 +287,7 @@ limit ${lit(v.limit)}`;
     measuredMb: 0.1,
     table: "fct_country_daily",
     label: "How a country's balance has shifted",
-    blurb:
-      "Daily bots on the ground per faction for one country, already rolled up -- this " +
-      "reads a pre-aggregated mart rather than the event stream.",
+    blurb: "Faction bot counts by country.",
     params: [
       { id: "country", label: "Country", kind: "country", initial: "" },
       { id: "since", label: "Since", kind: "date", initial: "", daysBack: 365 },
@@ -386,7 +305,7 @@ select
     round(100.0 * faceless_bots / nullif(total_bots, 0), 1) as faceless_pct
 from fct_country_daily
 where country_id = ${lit(asCountryId(v.country) ?? -1)}
-${rangeClause("activity_date", v.since, ctx.lastFullDay)}
+${rangeClause("activity_date", v.since, ctx.newestDay)}
 order by activity_date desc
 limit ${lit(v.limit)}`,
   },
@@ -396,9 +315,7 @@ limit ${lit(v.limit)}`,
     measuredMb: 1.1,
     table: "fct_atlantis_player_month_derived",
     label: "Atlantis player leaderboard",
-    blurb:
-      "One row per player per tournament month, with launches, kills, losses and the " +
-      "estimated payout. The whole mart is 1.4 MB, so any filter combination is free.",
+    blurb: "Players ranked by month.",
     params: [
       { id: "month", label: "Tournament month", kind: "month", initial: "" },
       { id: "faction", label: "Faction", kind: "choice", options: FACTIONS, initial: "0" },
@@ -419,8 +336,7 @@ limit ${lit(v.limit)}`,
     ],
     sql: (v) => {
       const faction = Number(v.faction);
-      // fct_atlantis_player_month_derived stores the faction capitalized, unlike the
-      // numeric control_state the zone tables use.
+      // Capitalized here, unlike the numeric control_state the zone tables use.
       const names = ["", "Legion", "Swarm", "Faceless"];
       return `-- Atlantis players by month. Mercenaries launched for more than one faction.
 select
@@ -447,9 +363,7 @@ limit ${lit(v.limit)}`;
     measuredMb: 3.7,
     table: "fct_atlantis_zone_player_daily",
     label: "A player's Atlantis activity",
-    blurb:
-      "Every Atlantis zone a player fought in, report by report or totalled. 3.8 MB "
-      + "in all, so no scope is asked for.",
+    blurb: "One player's Atlantis record.",
     params: [
       { id: "player", label: "Player name", kind: "text", initial: "" },
       { id: "month", label: "Tournament month", kind: "month", initial: "" },
@@ -491,7 +405,6 @@ limit ${lit(v.limit)}`;
 select
     battle_date,
     tournament_month,
-    battle_report_number,
     zone,
     zone_name,
     player_name,
@@ -515,7 +428,7 @@ export const initialValues = (template: Template, ctx: Context): Values => ({
   ...Object.fromEntries(
     template.params.map((p) => [
       p.id,
-      p.kind === "date" && p.daysBack !== undefined ? daysBefore(ctx.lastFullDay, p.daysBack) : p.initial,
+      p.kind === "date" && p.daysBack !== undefined ? daysBefore(ctx.newestDay, p.daysBack) : p.initial,
     ]),
   ),
 });
@@ -528,10 +441,7 @@ export const daysBefore = (from: string, days: number): string => {
   return day.toISOString().slice(0, 10);
 };
 
-/**
- * The one thing the reader is stopped for. A guarded template without its scope reads
- * tens of megabytes to answer a question the reader meant to ask about one country.
- */
+/** A guarded template without its scope reads tens of megabytes. */
 export const missingScope = (template: Template, values: Values): string | null => {
   if (!template.requiredScope) return null;
   const value = values[template.requiredScope];
@@ -542,14 +452,7 @@ export const missingScope = (template: Template, values: Values): string | null 
   return null;
 };
 
-/**
- * What to tell the reader before they click Run.
- *
- * The figure is the template's own measured cost, not a formula: the formula that
- * looked reasonable predicted 19.9 MB for `contested-zones`, which actually reads 4.1.
- * Filling the scope is the only choice that moves the number by an order of magnitude,
- * so an unscoped guarded template is reported as the size of the whole scan instead.
- */
+/** The template's measured cost, or the whole scan when its scope is empty. */
 export const costMb = (template: Template, values: Values, meta: MartsMeta | null): number => {
   if (!missingScope(template, values)) return template.measuredMb;
   const table = meta?.tables[template.table];

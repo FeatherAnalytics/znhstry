@@ -11,7 +11,6 @@ import {
   missingScope,
   nearbyZonesSql,
   RADIUS_ZONE_CAP,
-  TOURNAMENT_MONTHS_SQL,
   type Param,
   type Template,
   type Values,
@@ -33,12 +32,7 @@ const control: CSSProperties = {
   minWidth: 0,
 };
 
-/**
- * Radii the reader actually asks for: a few near neighbours, or a continent. There is
- * nothing useful between 40 and 1000 miles -- one is "around me" and the other is
- * "my half of the country", and the gap is where a list of every round number goes to
- * make the control unreadable.
- */
+/** Neighbours, or a continent. Nothing useful sits between the two. */
 const RADII_MILES = [10, 20, 30, 40, 1000, 3000, 6000];
 
 const KM_PER_MILE = 1.609344;
@@ -52,11 +46,7 @@ const fieldLabel: CSSProperties = {
   minWidth: 0,
 };
 
-/**
- * Geolocation prompts exactly once, on this button, and never on page load --
- * `getCurrentPosition` is the only call that asks. The permission state can be read
- * beforehand without asking, so the button can say so before anyone clicks it.
- */
+/** Reads the permission state without prompting; only getCurrentPosition prompts. */
 function useGeolocationState(): PermissionState | "unsupported" | "unknown" {
   const [state, setState] = useState<PermissionState | "unsupported" | "unknown">("unknown");
   useEffect(() => {
@@ -78,11 +68,7 @@ function useGeolocationState(): PermissionState | "unsupported" | "unknown" {
   return state;
 }
 
-/**
- * Arrow hands a DATE column back as epoch milliseconds, not as text, so the raw value
- * is a thirteen-digit number that formats as a plausible-looking id. UTC because every
- * date in this record is a UTC date, and a local render is a day out west of Greenwich.
- */
+/** Arrow returns DATE as epoch ms. UTC, because every date here is a UTC date. */
 const isoDay = (value: unknown): string | null => {
   const ms = typeof value === "bigint" ? Number(value) : Number(value);
   if (!Number.isFinite(ms)) return null;
@@ -207,8 +193,7 @@ export default function TemplateForm({
   const [note, setNote] = useState<string | null>(null);
   const permission = useGeolocationState();
 
-  // The country list comes from dim_zone, grouped -- a scan of one dictionary-encoded
-  // column, which measured a tenth of a megabyte rather than the file's 64 MB.
+  // One dictionary-encoded column: 0.1 MB, not the file's 64.
   useEffect(() => {
     if (warehouse === null || countries.length > 0) return;
     let live = true;
@@ -235,15 +220,19 @@ export default function TemplateForm({
     };
   }, [warehouse, countries.length]);
 
-  // Tournament months come from their own table rather than from the fact: 30 rows
-  // against 533,000, and the list is the same either way.
+  // From the table the template reads: stg_atlantis_tournaments has 30 months, the
+  // player fact 148, and sourcing the list there hid 118 months behind a full-looking list.
   useEffect(() => {
-    if (warehouse === null || months.length > 0) return;
+    if (warehouse === null || !template.params.some((p) => p.kind === "month")) return;
+    const source = template.table;
     let live = true;
     void (async () => {
       try {
-        await warehouse.bind("stg_atlantis_tournaments");
-        const table = await warehouse.conn.query(TOURNAMENT_MONTHS_SQL);
+        await warehouse.bind(source);
+        const table = await warehouse.conn.query(
+          `select distinct tournament_month from ${source} ` +
+            "where tournament_month is not null order by tournament_month desc",
+        );
         const column = table.getChildAt(0);
         const rows: string[] = [];
         for (let i = 0; i < table.numRows; i++) {
@@ -258,27 +247,24 @@ export default function TemplateForm({
     return () => {
       live = false;
     };
-  }, [warehouse, months.length]);
+  }, [warehouse, template]);
 
-  // The form mounts before the manifest lands, so `lastFullDay` is blank on the first
-  // render and every relative date default resolves to "". Left alone that is not a
-  // cosmetic gap: a blank `since` drops the predicate entirely, and `zone-flips` over
-  // all history reads 39.7 MB where ninety days reads 4.7. Fill them in when the date
-  // arrives, and only where the reader has not already typed one.
+  // The form mounts before the manifest, so relative defaults resolve to "" and the
+  // predicate is dropped: zone-flips over all history is 39.7 MB against 4.7.
   useEffect(() => {
-    if (!ctx.lastFullDay) return;
+    if (!ctx.newestDay) return;
     setValues((current) => {
       const filled = { ...current };
       let changed = false;
       for (const param of template.params) {
         if (param.kind === "date" && param.daysBack !== undefined && current[param.id] === "") {
-          filled[param.id] = daysBefore(ctx.lastFullDay, param.daysBack);
+          filled[param.id] = daysBefore(ctx.newestDay, param.daysBack);
           changed = true;
         }
       }
       return changed ? filled : current;
     });
-  }, [ctx.lastFullDay, template]);
+  }, [ctx.newestDay, template]);
 
   const pick = (id: string) => {
     const next = TEMPLATES.find((t) => t.id === id);
@@ -289,8 +275,7 @@ export default function TemplateForm({
   };
 
   const set = (key: string, value: string | number) => {
-    // A country picked by hand replaces whatever a radius resolved: the two are the
-    // same filter, and leaving stale ids behind would silently narrow the new country.
+    // Same filter as a resolved radius; stale ids would narrow the new country.
     setValues((v) => ({ ...v, [key]: value, ...(key === "country" ? { zones: "" } : {}) }));
     if (key === "country") setNote(null);
   };
@@ -342,10 +327,6 @@ export default function TemplateForm({
   const blocked = missingScope(template, values);
   const hasRadius = String(values.zones ?? "") !== "";
   const estimate = costMb(template, values, meta);
-  // Ten megabytes is where a phone on cellular starts to notice. Below it the number
-  // is context; above it, it is a warning, and the only lever that moves it by an
-  // order of magnitude is the scope the reader has or has not filled in.
-  const heavy = estimate >= 10;
 
   return (
     <div style={{ borderBottom: "1px solid var(--hairline)", padding: "12px 16px" }}>
@@ -427,14 +408,10 @@ export default function TemplateForm({
         >
           Write the query
         </button>
-        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
-          {blocked
-            ? `Pick a ${blocked.toLowerCase()} first — without one this reads the whole table.`
-            : note ?? template.blurb}
-        </span>
+        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{note ?? template.blurb}</span>
         <span
           className="tabular"
-          style={{ color: heavy ? "var(--legion)" : "var(--text-dim)", fontSize: 12 }}
+          style={{ color: "var(--text-dim)", fontSize: 12 }}
           title="Measured bytes over the wire for this template's defaults. A guide, not a promise."
         >
           ~{estimate < 1 ? "<1" : Math.round(estimate)} MB

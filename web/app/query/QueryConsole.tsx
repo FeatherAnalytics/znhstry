@@ -1,6 +1,7 @@
 "use client";
 
 import { SiteNav } from "@/components/SiteNav";
+import TemplateForm from "./TemplateForm";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { DATA_ROOT } from "@/lib/dataOrigin";
 import { openDuckDB, type MartsMeta, type ResultTable, type Warehouse } from "@/lib/duckdbWasm";
@@ -556,6 +557,17 @@ export default function QueryConsole() {
           backstop for the narrow layout, where two capped lines still overflow. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "auto" }}>
         <section style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
+          <TemplateForm
+            meta={meta}
+            warehouse={warehouse}
+            onGenerate={(generated) => {
+              // Replaces the editor rather than appending: the permalink makes a lost
+              // draft recoverable, and appending leaves two queries where Run takes one.
+              setSql(generated);
+              setCsvNote(null);
+              void run(generated);
+            }}
+          />
           <Editor
             sql={sql}
             onChange={setSql}

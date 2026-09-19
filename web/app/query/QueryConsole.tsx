@@ -200,8 +200,8 @@ const GROUPS: { label: string; has: (name: string) => boolean }[] = [
   { label: "Atlantis tournament", has: (n) => n.includes("atlantis") },
 ];
 
-/** Anything unprefixed sorts with the dimensions rather than ahead of the facts. */
-const KINDS = ["fct_", "stg_", "dim_"];
+/** Staging, then dimensions, then facts. Anything unprefixed sorts last. */
+const KINDS = ["stg_", "dim_", "fct_"];
 const kindRank = (name: string): number => {
   const found = KINDS.findIndex((prefix) => name.startsWith(prefix));
   return found === -1 ? KINDS.length : found;
@@ -216,14 +216,12 @@ const groupsOf = (meta: MartsMeta) => {
     return { label, members };
   });
   groups.push({ label: "Reference", members: names.filter((n) => !taken.has(n)) });
-  // Facts, then staging, then dimensions -- the three kinds stay together inside a
-  // group so a reader scanning for "the table with the measurements in it" is not
-  // reading past a dimension to reach the next fact. Biggest first within a kind,
-  // row count being the best proxy for what people came for.
+  // The three modeling kinds stay together inside a group, then alphabetical within
+  // a kind. Alphabetical rather than by size because the list is something a reader
+  // looks a known name up in, and only a sorted list can be scanned that way -- size
+  // is on every row for the reader who wants it.
   for (const group of groups) {
-    group.members.sort(
-      (a, b) => kindRank(a) - kindRank(b) || meta.tables[b].rows - meta.tables[a].rows,
-    );
+    group.members.sort((a, b) => kindRank(a) - kindRank(b) || a.localeCompare(b));
   }
   return groups.filter((g) => g.members.length > 0);
 };
@@ -231,7 +229,7 @@ const groupsOf = (meta: MartsMeta) => {
 const megabytes = (bytes: number): string =>
   bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} kB`;
 
-/** The four things nobody can infer from a column list, and nothing else. */
+/** The two things nobody can infer from a column list, and nothing else. */
 function Primer() {
   return (
     <div
@@ -254,14 +252,7 @@ function Primer() {
         <strong style={{ color: "var(--swarm)" }}>2</strong> Swarm,{" "}
         <strong style={{ color: "var(--faceless)" }}>3</strong> Faceless.
       </div>
-      <div>
-        <code>observed_at</code> is when the game was read; <code>activity_date</code> is its
-        UTC date.
-      </div>
-      <div>
-        Deltas compare a zone to its own previous observation, not to a fixed clock.
-      </div>
-      <div>The newest day in the record is always a partial sliver, never a whole day.</div>
+      <div>Deltas compare a zone to its own previous observation.</div>
     </div>
   );
 }

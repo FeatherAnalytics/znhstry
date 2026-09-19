@@ -189,16 +189,23 @@ const GROUPS: { label: string; has: (name: string) => boolean }[] = [
   {
     label: "Zones & geography",
     // Excludes battle explicitly rather than relying on the order of this list:
-    // `fct_zone_battles` matches on "zone" too, and a reader looking for battle
-    // reports would never find it filed under geography.
+    // `fct_zone_battles` matches on "zone" too, and it belongs with the battle
+    // record rather than with the geography.
     has: (n) =>
       !n.includes("atlantis") &&
       !n.includes("battle") &&
       (n.includes("zone") || n === "fct_country_daily" || n === "fct_global_daily"),
   },
-  { label: "Battle reports", has: (n) => !n.includes("atlantis") && n.includes("battle") },
+  { label: "Most Active Zones", has: (n) => !n.includes("atlantis") && n.includes("battle") },
   { label: "Atlantis tournament", has: (n) => n.includes("atlantis") },
 ];
+
+/** Anything unprefixed sorts with the dimensions rather than ahead of the facts. */
+const KINDS = ["fct_", "stg_", "dim_"];
+const kindRank = (name: string): number => {
+  const found = KINDS.findIndex((prefix) => name.startsWith(prefix));
+  return found === -1 ? KINDS.length : found;
+};
 
 const groupsOf = (meta: MartsMeta) => {
   const names = Object.keys(meta.tables);
@@ -209,9 +216,14 @@ const groupsOf = (meta: MartsMeta) => {
     return { label, members };
   });
   groups.push({ label: "Reference", members: names.filter((n) => !taken.has(n)) });
-  // Biggest first inside a group: row count is the best proxy for what people want.
+  // Facts, then staging, then dimensions -- the three kinds stay together inside a
+  // group so a reader scanning for "the table with the measurements in it" is not
+  // reading past a dimension to reach the next fact. Biggest first within a kind,
+  // row count being the best proxy for what people came for.
   for (const group of groups) {
-    group.members.sort((a, b) => meta.tables[b].rows - meta.tables[a].rows);
+    group.members.sort(
+      (a, b) => kindRank(a) - kindRank(b) || meta.tables[b].rows - meta.tables[a].rows,
+    );
   }
   return groups.filter((g) => g.members.length > 0);
 };

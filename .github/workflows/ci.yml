@@ -96,6 +96,6 @@ jobs:
           DBT_PROFILES_DIR: .
         run: uv run dbt build
 
-      - name: Publish marts
+      - name: Write marts and run export checks
         working-directory: pipeline
         run: uv run python -m znhstry marts

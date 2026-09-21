@@ -28,10 +28,10 @@ name: Nightly data update
 # `trigger/` dispatches this workflow at 00:45 UTC. The schedule below stays as the
 # fallback: `plan_slots` asks only for missing days, and "Anything to publish?" skips the
 # rebuild when nothing is new - but "Collect battle reports" opens the gate when new reports
-# arrived, so a second run republishes in that case. That is harmless.
-# The fallback also covers the one risk of 00:45: QONQR's
-# dump ends at about 00:01 and how long Dropbox takes to hold it is unmeasured, so if
-# 00:45 is ever too early the run is a green no-op and 02:30 picks the day up.
+# arrived, so a second run republishes in that case. That is harmless. The fallback
+# also covers the one risk of 00:45: QONQR's dump ends at about 00:01 and how long
+# Dropbox takes to hold it is unmeasured, so if 00:45 is ever too early the run is a
+# green no-op and 02:30 picks the day up.
 #
 # ## What tells anyone the data has stopped
 #

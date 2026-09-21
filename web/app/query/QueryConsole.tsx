@@ -287,7 +287,7 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
             const table = meta.tables[name];
             return (
               <div key={name} style={{ marginBottom: 8 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 4 }}>
                   <button
                     type="button"
                     onClick={() => onPick(name)}

@@ -3,8 +3,8 @@
  * validation.
  *
  * `requiredScope` names the parameter that filters on the file's leading sort column,
- * which is the only filter that skips Parquet row groups. Without it a query reads the
- * whole table.
+ * which is what makes the read small: 3 row groups instead of 41 with a date alone, 100
+ * with neither. Without it a query reads tens of megabytes.
  */
 import type { MartsMeta } from "./duckdbWasm";
 

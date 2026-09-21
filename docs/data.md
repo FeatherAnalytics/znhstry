@@ -108,10 +108,7 @@ GitHub's cron skipped the Atlantis schedule outright for hours at a time and run
 about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
 `scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and on `nightly.yml`
 at 00:45 UTC, deployed by `deploy-trigger.yml`. Both workflows keep their own `schedule:`
-as the fallback and a doubled run is a no-op in each: the Atlantis gate reads `next_run_at`,
-the top of the hour after a collection, so the second run of an hour reads `run=false`; the
-nightly's `plan_slots` asks only for missing days and "Anything to publish?" skips the
-rebuild when nothing is new. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
+as the fallback. The Atlantis gate reads `next_run_at`, the top of the hour after a collection, so the second run of an hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
 Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.

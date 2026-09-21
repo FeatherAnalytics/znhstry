@@ -39,8 +39,7 @@ cd pipeline  && uv run python -m znhstry archive      # push data/raw to R2 unde
 
 **The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the hourly
 Atlantis job at :07 by the same Worker.** GitHub's own `schedule:` lines stay as fallbacks;
-GitHub has been firing the 02:30 cron around 07:20 and dropping the hourly one entirely. See
-"The Atlantis tournament leaderboard" for why a doubled run is a no-op in both.
+GitHub has been firing the 02:30 cron around 07:20 and dropping the hourly one entirely. The Atlantis gate makes its doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
 
 Other steps:
 
@@ -176,6 +175,7 @@ See [docs/data.md](docs/data.md) for data sources, battle reports, Atlantis tour
   scrape and in CI, so a fresh `restore` from a bucket written before the column existed
   heals itself rather than failing at 02:30 UTC.
 - `matched` is a reserved word in DuckDB. Don't use it as a column alias.
+- **`forceFullHTTPReads` must be false in the DuckDB-WASM config.** The 1.33.1-dev57 default downloads every Parquet file whole and nothing fails: every query works, the page just moves 192 MB. Range reads cost one round trip per column chunk per row group and are not merged, so a query that reads most of a mid-size file is slower than the download; anything that runs on page load reads `dim_country`, and templates on the guarded tables always carry a scope.
 
 
 See [docs/export.md](docs/export.md) for the export format, raw layer, and published marts.

@@ -465,7 +465,11 @@ export default function TemplateForm({
         >
           Write the query
         </button>
-        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{note ?? template.blurb}</span>
+        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
+          {blocked && !note
+            ? `Pick a ${blocked.toLowerCase()} or use your location first.`
+            : note ?? template.blurb}
+        </span>
         {hasRadius && (
           <button
             type="button"

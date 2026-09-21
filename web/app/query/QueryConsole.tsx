@@ -264,7 +264,7 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
     <aside
       className="query-tables"
       style={{
-        flex: "1 1 280px",
+        flex: "0 0 280px",
         maxWidth: "100%",
         overflowY: "auto",
         borderRight: "1px solid var(--hairline)",
@@ -560,7 +560,7 @@ export default function QueryConsole() {
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
       <style>{`
         @media (max-width: 640px) {
-          .query-tables { border-right: none !important; border-top: 1px solid var(--hairline); }
+          .query-tables { flex: 1 1 100% !important; border-right: none !important; border-top: 1px solid var(--hairline); }
           .query-section { max-height: none !important; }
           input, select, textarea { font-size: 16px !important; }
         }

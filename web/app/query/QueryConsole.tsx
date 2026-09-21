@@ -124,32 +124,62 @@ function useWarehouse(): { warehouse: Warehouse | null; bootError: string | null
   return { warehouse, bootError };
 }
 
+const MIN_VISIBLE_MS = 250;
+
 function useQuery(warehouse: Warehouse | null) {
   const [running, setRunning] = useState(false);
+  const [queued, setQueued] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const inflight = useRef(false);
+  const pending = useRef<string | null>(null);
 
-  const run = useCallback(
-    async (sql: string) => {
-      if (warehouse === null || running) return;
-      setRunning(true);
-      const started = performance.now();
-      try {
-        await warehouse.bind(sql);
-        const table = await warehouse.conn.query(sql);
-        setResult({ table, elapsedMs: performance.now() - started });
-        setError(null);
-      } catch (failure: unknown) {
-        setResult(null);
-        setError(errorText(failure));
-      } finally {
+  const executeRef = useRef<((sql: string) => Promise<void>) | null>(null);
+  executeRef.current = async (sql: string) => {
+    if (warehouse === null) return;
+    inflight.current = true;
+    setRunning(true);
+    setQueued(false);
+    const started = performance.now();
+    try {
+      await warehouse.bind(sql);
+      const table = await warehouse.conn.query(sql);
+      const elapsed = performance.now() - started;
+      const remaining = MIN_VISIBLE_MS - elapsed;
+      if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+      if (pending.current !== null) return;
+      setResult({ table, elapsedMs: elapsed });
+      setError(null);
+    } catch (failure: unknown) {
+      if (pending.current !== null) return;
+      setResult(null);
+      setError(errorText(failure));
+    } finally {
+      inflight.current = false;
+      const next = pending.current;
+      pending.current = null;
+      if (next !== null) {
+        void executeRef.current?.(next);
+      } else {
         setRunning(false);
       }
+    }
+  };
+
+  const run = useCallback(
+    (sql: string) => {
+      if (warehouse === null) return;
+      if (inflight.current) {
+        pending.current = sql;
+        setQueued(true);
+        return;
+      }
+      void executeRef.current?.(sql);
     },
-    [warehouse, running],
+    [warehouse],
   );
 
-  return { run, running, result, error };
+  return { run, running, queued, result, error };
 }
 
 const panel: CSSProperties = { borderBottom: "1px solid var(--hairline)", padding: "12px 16px" };
@@ -487,7 +517,13 @@ function ResultsGrid({ table }: { table: ResultTable }) {
   );
 }
 
-const statusFor = (result: QueryResult | null, csvNote: string | null): string | null => {
+const statusFor = (
+  result: QueryResult | null,
+  csvNote: string | null,
+  running: boolean,
+  queued: boolean,
+): string | null => {
+  if (running) return queued ? "Running… · 1 queued" : "Running…";
   if (result === null) return null;
   const n = result.table.numRows;
   const parts = [`${count(n)} rows · ${Math.round(result.elapsedMs)} ms`];
@@ -522,7 +558,7 @@ function sqlPermalink(sql: string): string {
 
 export default function QueryConsole() {
   const { warehouse, bootError } = useWarehouse();
-  const { run, running, result, error } = useQuery(warehouse);
+  const { run, running, queued, result, error } = useQuery(warehouse);
   const [sql, setSql] = useState(STARTER_SQL);
   const [csvNote, setCsvNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -592,7 +628,7 @@ export default function QueryConsole() {
             onDownload={onDownload}
             ready={meta !== null}
             running={running}
-            status={statusFor(result, csvNote)}
+            status={statusFor(result, csvNote, running, queued)}
             hasResult={result !== null}
             copied={copied}
           />

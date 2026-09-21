@@ -19,11 +19,6 @@ import type { MartsMeta, Warehouse } from "@/lib/duckdbWasm";
 interface Country {
   id: number;
   name: string;
-}
-
-interface CountryBbox {
-  id: number;
-  name: string;
   minLat: number;
   maxLat: number;
   minLon: number;
@@ -34,11 +29,11 @@ const BBOX_MARGIN = 1.05;
 
 /** Countries whose padded bbox intersects a circle of `km` around (lat, lon). */
 function candidateCountries(
-  all: CountryBbox[],
+  all: Country[],
   lat: number,
   lon: number,
   km: number,
-): CountryBbox[] {
+): Country[] {
   const degLat = (km * BBOX_MARGIN) / 111.32;
   const cosLat = Math.cos((lat * Math.PI) / 180);
   const degLon = cosLat > 0.001 ? (km * BBOX_MARGIN) / (111.32 * cosLat) : 360;
@@ -216,7 +211,6 @@ export default function TemplateForm({
   const template = TEMPLATES.find((t) => t.id === templateId) as Template;
   const [values, setValues] = useState<Values>(() => initialValues(TEMPLATES[0], ctx));
   const [countries, setCountries] = useState<Country[]>([]);
-  const [bboxes, setBboxes] = useState<CountryBbox[]>([]);
   const [months, setMonths] = useState<string[]>([]);
   const [radiusMiles, setRadiusMiles] = useState(30);
   const [locating, setLocating] = useState(false);
@@ -241,24 +235,17 @@ export default function TemplateForm({
         const minLons = table.getChildAt(4);
         const maxLons = table.getChildAt(5);
         const rows: Country[] = [];
-        const boxes: CountryBbox[] = [];
         for (let i = 0; i < table.numRows; i++) {
-          const id = Number(ids?.get(i));
-          const name = String(names?.get(i));
-          rows.push({ id, name });
-          boxes.push({
-            id,
-            name,
+          rows.push({
+            id: Number(ids?.get(i)),
+            name: String(names?.get(i)),
             minLat: Number(minLats?.get(i)),
             maxLat: Number(maxLats?.get(i)),
             minLon: Number(minLons?.get(i)),
             maxLon: Number(maxLons?.get(i)),
           });
         }
-        if (live) {
-          setCountries(rows);
-          setBboxes(boxes);
-        }
+        if (live) setCountries(rows);
       } catch {
         /* The picker falls back to an empty list; the console still takes typed SQL. */
       }
@@ -332,7 +319,7 @@ export default function TemplateForm({
   };
 
   const useMyLocation = () => {
-    if (warehouse === null || bboxes.length === 0) return;
+    if (warehouse === null || countries.length === 0) return;
     setLocating(true);
     setNote(null);
     navigator.geolocation.getCurrentPosition(
@@ -341,7 +328,7 @@ export default function TemplateForm({
           const { latitude, longitude } = position.coords;
           try {
             const km = radiusMiles * KM_PER_MILE;
-            const candidates = candidateCountries(bboxes, latitude, longitude, km);
+            const candidates = candidateCountries(countries, latitude, longitude, km);
             if (candidates.length === 0) {
               setNote("No countries found near your location. Pick one instead.");
               setLocating(false);
@@ -400,7 +387,6 @@ export default function TemplateForm({
 
   const blocked = missingScope(template, values);
   const hasRadius = String(values.zones ?? "") !== "";
-  const hasMultiCountry = String(values.countries ?? "").includes(",");
 
   return (
     <div style={{ borderBottom: "1px solid var(--hairline)", padding: "12px 16px" }}>

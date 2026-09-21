@@ -262,8 +262,9 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
   if (meta === null) return null;
   return (
     <aside
+      className="query-tables"
       style={{
-        flex: "0 0 280px",
+        flex: "1 1 280px",
         maxWidth: "100%",
         overflowY: "auto",
         borderRight: "1px solid var(--hairline)",
@@ -285,8 +286,8 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
           {group.members.map((name) => {
             const table = meta.tables[name];
             return (
-              <details key={name} style={{ marginBottom: 8 }}>
-                <summary style={{ cursor: "pointer", listStyle: "none" }}>
+              <div key={name} style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
                   <button
                     type="button"
                     onClick={() => onPick(name)}
@@ -297,11 +298,15 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
                   </button>
                   <span
                     className="tabular"
-                    style={{ color: "var(--text-dim)", marginLeft: 8, whiteSpace: "nowrap" }}
+                    style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}
                   >
                     {count(table.rows)} · {megabytes(table.bytes)}
                   </span>
-                </summary>
+                </div>
+                <details style={{ marginTop: 2 }}>
+                  <summary style={{ cursor: "pointer", listStyle: "none", fontSize: 11, color: "var(--text-dim)" }}>
+                    columns
+                  </summary>
                 <div
                   style={{
                     paddingLeft: 12,
@@ -331,7 +336,8 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
                     </div>
                   ))}
                 </div>
-              </details>
+                </details>
+              </div>
             );
           })}
         </section>
@@ -363,6 +369,7 @@ function Editor(props: EditorProps) {
   return (
     <div style={panel}>
       <textarea
+        id="sql-editor"
         value={props.sql}
         onChange={(e) => props.onChange(e.target.value)}
         onKeyDown={onKeyDown}
@@ -429,6 +436,9 @@ const cellStyle: CSSProperties = {
 function ResultsGrid({ table }: { table: ResultTable }) {
   const columns = columnsOf(table);
   const rows = Math.min(table.numRows, DISPLAY_CAP);
+  if (rows === 0) {
+    return <div style={{ padding: "12px 16px", color: "var(--text-dim)", fontSize: 12 }}>No rows.</div>;
+  }
   const indices = Array.from({ length: rows }, (_, i) => i);
   return (
     <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
@@ -548,6 +558,13 @@ export default function QueryConsole() {
 
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
+      <style>{`
+        @media (max-width: 640px) {
+          .query-tables { border-right: none !important; border-top: 1px solid var(--hairline); }
+          .query-section { max-height: none !important; }
+          input, select, textarea { font-size: 16px !important; }
+        }
+      `}</style>
       <Header meta={meta} loading={meta === null && bootError === null} />
       {/* flex-wrap makes this a multi-line container, and a flex line takes its cross
           size from its content -- align-items:stretch never applies. Without the
@@ -556,15 +573,14 @@ export default function QueryConsole() {
           the rows past the first screen are unreachable. The row scrolls as the
           backstop for the narrow layout, where two capped lines still overflow. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "auto" }}>
-        <section style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
+        <section className="query-section" style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
           <TemplateForm
             meta={meta}
             warehouse={warehouse}
             onGenerate={(generated) => {
-              // Replaces the editor rather than appending: the permalink makes a lost
-              // draft recoverable, and appending leaves two queries where Run takes one.
               setSql(generated);
               setCsvNote(null);
+              window.history.replaceState(null, "", sqlPermalink(generated));
               void run(generated);
             }}
           />

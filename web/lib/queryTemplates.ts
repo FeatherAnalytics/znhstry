@@ -263,7 +263,7 @@ limit ${lit(v.limit)}`;
     ],
     sql: (v, ctx) => {
       const holder = Number(v.holder);
-      return `-- Contested zones on the last full day. The newest date is a partial sliver.
+      return `-- Contested zones on the newest day in the record.
 with contested as (
     select
         e.zone_id,

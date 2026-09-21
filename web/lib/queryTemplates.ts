@@ -110,7 +110,10 @@ export const wrapInList = (csv: string, width = 80): string => {
 /** country_id filter: multiple when near-me crossed a border, one otherwise. */
 export const countryClause = (column: string, v: Values): string => {
   const countries = String(v.countries ?? "");
-  if (countries) return `${column} in (${countries})`;
+  if (countries) {
+    const ids = countries.split(",").map((s) => lit(Number(s.trim())));
+    return `${column} in (${ids.join(", ")})`;
+  }
   const id = asCountryId(v.country);
   return id !== null ? `${column} = ${lit(id)}` : `${column} = -1`;
 };

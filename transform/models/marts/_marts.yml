@@ -8,6 +8,13 @@ models:
         data_tests: [unique, not_null]
       - name: country_name
         data_tests: [not_null]
+      - name: min_longitude
+        description: >
+          Antimeridian-aware: uses a shifted-by-360 range when that is tighter than
+          the raw range. max_longitude can exceed 180 for countries that straddle the
+          antimeridian (US, Russia, NZ, Fiji, Kiribati).
+      - name: max_longitude
+        description: "See min_longitude."
 
   - name: dim_zone
     description: "Grain: one row per zone. Geography, current state, current holder."

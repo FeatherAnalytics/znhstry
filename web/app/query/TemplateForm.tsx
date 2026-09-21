@@ -9,7 +9,6 @@ import {
   missingScope,
   nearbyZonesSql,
   RADIUS_ZONE_CAP,
-  wrapInList,
   type Param,
   type Template,
   type Values,
@@ -37,13 +36,11 @@ function candidateCountries(
   const degLat = (km * BBOX_MARGIN) / 111.32;
   const cosLat = Math.cos((lat * Math.PI) / 180);
   const degLon = cosLat > 0.001 ? (km * BBOX_MARGIN) / (111.32 * cosLat) : 360;
-  return all.filter(
-    (c) =>
-      c.maxLat + degLat >= lat - degLat &&
-      c.minLat - degLat <= lat + degLat &&
-      c.maxLon + degLon >= lon - degLon &&
-      c.minLon - degLon <= lon + degLon,
-  );
+  const latOk = (c: Country) => c.maxLat >= lat - degLat && c.minLat <= lat + degLat;
+  const lonOk = (c: Country) =>
+    c.maxLon >= lon - degLon && c.minLon <= lon + degLon ||
+    c.maxLon >= lon + 360 - degLon && c.minLon <= lon + 360 + degLon;
+  return all.filter((c) => latOk(c) && lonOk(c));
 }
 
 const control: CSSProperties = {
@@ -359,7 +356,7 @@ export default function TemplateForm({
               ...v,
               country: hitCountryIds.size === 1 ? String([...hitCountryIds][0]) : "",
               countries: countryCsv,
-              zones: wrapInList(ids.join(", ")),
+              zones: ids.join(", "),
             }));
             setNote(
               ids.length >= RADIUS_ZONE_CAP

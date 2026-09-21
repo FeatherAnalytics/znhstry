@@ -41,8 +41,9 @@ export type Param =
 
 export type Values = Record<string, string | number>;
 
-/** Set by the form, never shown. `zones` holds the ids a near-me radius resolved to. */
-export const HIDDEN_VALUES = ["zones"] as const;
+/** Set by the form, never shown. `zones` holds the ids a near-me radius resolved to;
+ *  `countries` holds the country ids those zones fell in (multiple when near a border). */
+export const HIDDEN_VALUES = ["zones", "countries"] as const;
 
 interface Base {
   id: string;
@@ -85,26 +86,44 @@ export const RADIUS_ZONE_CAP = 5000;
 
 export const zoneFilter = (column: string, value: string | number): string =>
   value === "" || value === undefined ? "" : `
-  and ${column} in (${String(value)})`;
+  and ${column} in (${wrapInList(String(value))})`;
 
-/** The resolve step: every zone in one country within `km` of a point. */
-export const nearbyZonesSql = (countryId: number, lat: number, lon: number, km: number): string =>
-  `select zone_id from dim_zone
-where country_id = ${lit(countryId)}
+/** Wraps a long comma-separated list at roughly 80 columns for readability. */
+export const wrapInList = (csv: string, width = 80): string => {
+  if (csv.length <= width) return csv;
+  const items = csv.split(",").map((s) => s.trim());
+  const lines: string[] = [];
+  let line = "";
+  for (const item of items) {
+    const next = line ? `${line}, ${item}` : item;
+    if (next.length > width && line) {
+      lines.push(line);
+      line = item;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.join(",\n      ");
+};
+
+/** country_id filter: multiple when near-me crossed a border, one otherwise. */
+export const countryClause = (column: string, v: Values): string => {
+  const countries = String(v.countries ?? "");
+  if (countries) return `${column} in (${countries})`;
+  const id = asCountryId(v.country);
+  return id !== null ? `${column} = ${lit(id)}` : `${column} = -1`;
+};
+
+/** The resolve step: every zone in the candidate countries within `km` of a point. */
+export const nearbyZonesSql = (countryIds: number[], lat: number, lon: number, km: number): string =>
+  `select zone_id, country_id from dim_zone
+where country_id in (${countryIds.map(lit).join(", ")})
   and 6371.0088 * 2 * asin(sqrt(least(1.0,
       pow(sin(radians(latitude - ${lit(lat)}) / 2), 2)
       + cos(radians(${lit(lat)})) * cos(radians(latitude))
         * pow(sin(radians(longitude - ${lit(lon)}) / 2), 2)))) <= ${lit(km)}
 limit ${lit(RADIUS_ZONE_CAP)}`;
-
-/** Which country a pair of coordinates falls in, by nearest zone. */
-export const countryAtSql = (lat: number, lon: number): string =>
-  `select country_id, country_name from dim_zone
-order by 6371.0088 * 2 * asin(sqrt(least(1.0,
-    pow(sin(radians(latitude - ${lit(lat)}) / 2), 2)
-    + cos(radians(${lit(lat)})) * cos(radians(latitude))
-      * pow(sin(radians(longitude - ${lit(lon)}) / 2), 2))))
-limit 1`;
 
 const DIRECTIONS: Choice[] = [
   { value: "desc", label: "largest first" },
@@ -175,8 +194,8 @@ select
     ${ownBots("e.")} as bots_held
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
-where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
+where ${countryClause("e.country_id", v)}
+  and ${countryClause("z.country_id", v)}
   and e.is_capture
   and z.zone_name ilike ${lit(`%${v.zone}%`)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 order by e.observed_at desc
@@ -215,8 +234,8 @@ select
     count(*) as observations
 from fct_zone_events e
 join dim_zone z on z.zone_id = e.zone_id
-where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-  and z.country_id = ${lit(asCountryId(v.country) ?? -1)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
+where ${countryClause("e.country_id", v)}
+  and ${countryClause("z.country_id", v)}${zoneFilter("e.zone_id", v.zones)}${sinceClause("e.activity_date", v.since)}
 group by ${grain.key}
 order by net_bots ${direction}
 limit ${lit(v.limit)}`;
@@ -256,8 +275,8 @@ with contested as (
         -least(e.legion_delta, e.swarm_delta, e.faceless_delta) as bots_lost
     from fct_zone_events e
     join dim_zone z on z.zone_id = e.zone_id
-    where e.country_id = ${lit(asCountryId(v.country) ?? -1)}
-      and z.country_id = ${lit(asCountryId(v.country) ?? -1)}
+    where ${countryClause("e.country_id", v)}
+      and ${countryClause("z.country_id", v)}
       and e.activity_date = date ${lit(ctx.newestDay)}${zoneFilter("e.zone_id", v.zones)}${
         holder > 0 ? `\n      and e.control_state = ${lit(holder)}` : ""
       }
@@ -291,7 +310,7 @@ select
     round(100.0 * swarm_bots / nullif(total_bots, 0), 1) as swarm_pct,
     round(100.0 * faceless_bots / nullif(total_bots, 0), 1) as faceless_pct
 from fct_country_daily
-where country_id = ${lit(asCountryId(v.country) ?? -1)}
+where ${countryClause("country_id", v)}
 ${sinceClause("activity_date", v.since)}
 order by activity_date desc
 limit ${lit(v.limit)}`,
@@ -410,6 +429,7 @@ export const byId = (id: string): Template | undefined => TEMPLATES.find((t) => 
 
 export const initialValues = (template: Template, ctx: Context): Values => ({
   zones: "",
+  countries: "",
   ...Object.fromEntries(
     template.params.map((p) => [
       p.id,
@@ -429,6 +449,7 @@ export const daysBefore = (from: string, days: number): string => {
 /** A guarded template without its scope reads tens of megabytes. */
 export const missingScope = (template: Template, values: Values): string | null => {
   if (!template.requiredScope) return null;
+  if (values.countries) return null;
   const value = values[template.requiredScope];
   if (value === "" || value === undefined || value === null) {
     const param = template.params.find((p) => p.id === template.requiredScope);

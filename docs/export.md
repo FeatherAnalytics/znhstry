@@ -338,6 +338,7 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_pla
 | Table | Sorted by |
 |---|---|
 | `fct_zone_events` | `country_id, observed_at, zone_id` |
+| `dim_country` | `country_id` |
 | `dim_zone` | `country_id, zone_id` |
 | `fct_country_daily` | `country_id, activity_date` |
 | `fct_global_daily` | `activity_date` |

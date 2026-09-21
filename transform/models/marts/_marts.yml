@@ -1,6 +1,14 @@
 version: 2
 
 models:
+  - name: dim_country
+    description: "Grain: one row per country. Bounding box and zone count from dim_zone."
+    columns:
+      - name: country_id
+        data_tests: [unique, not_null]
+      - name: country_name
+        data_tests: [not_null]
+
   - name: dim_zone
     description: "Grain: one row per zone. Geography, current state, current holder."
     columns:

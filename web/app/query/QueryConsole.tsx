@@ -11,8 +11,7 @@ const CSV_CAP = 100_000;
 
 const STARTER_SQL = `-- Bots on the ground per faction, by country, on the newest day in the record
 select country_name, legion_bots, swarm_bots, faceless_bots, total_bots
-from fct_country_daily
-where is_latest
+from dim_country
 order by total_bots desc
 limit 25`;
 
@@ -124,32 +123,62 @@ function useWarehouse(): { warehouse: Warehouse | null; bootError: string | null
   return { warehouse, bootError };
 }
 
+const MIN_VISIBLE_MS = 250;
+
 function useQuery(warehouse: Warehouse | null) {
   const [running, setRunning] = useState(false);
+  const [queued, setQueued] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const inflight = useRef(false);
+  const pending = useRef<string | null>(null);
 
-  const run = useCallback(
-    async (sql: string) => {
-      if (warehouse === null || running) return;
-      setRunning(true);
-      const started = performance.now();
-      try {
-        await warehouse.bind(sql);
-        const table = await warehouse.conn.query(sql);
-        setResult({ table, elapsedMs: performance.now() - started });
-        setError(null);
-      } catch (failure: unknown) {
-        setResult(null);
-        setError(errorText(failure));
-      } finally {
+  const executeRef = useRef<((sql: string) => Promise<void>) | null>(null);
+  executeRef.current = async (sql: string) => {
+    if (warehouse === null) return;
+    inflight.current = true;
+    setRunning(true);
+    setQueued(false);
+    const started = performance.now();
+    try {
+      await warehouse.bind(sql);
+      const table = await warehouse.conn.query(sql);
+      const elapsed = performance.now() - started;
+      const remaining = MIN_VISIBLE_MS - elapsed;
+      if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+      if (pending.current !== null) return;
+      setResult({ table, elapsedMs: elapsed });
+      setError(null);
+    } catch (failure: unknown) {
+      if (pending.current !== null) return;
+      setResult(null);
+      setError(errorText(failure));
+    } finally {
+      inflight.current = false;
+      const next = pending.current;
+      pending.current = null;
+      if (next !== null) {
+        void executeRef.current?.(next);
+      } else {
         setRunning(false);
       }
+    }
+  };
+
+  const run = useCallback(
+    (sql: string) => {
+      if (warehouse === null) return;
+      if (inflight.current) {
+        pending.current = sql;
+        setQueued(true);
+        return;
+      }
+      void executeRef.current?.(sql);
     },
-    [warehouse, running],
+    [warehouse],
   );
 
-  return { run, running, result, error };
+  return { run, running, queued, result, error };
 }
 
 const panel: CSSProperties = { borderBottom: "1px solid var(--hairline)", padding: "12px 16px" };
@@ -262,6 +291,7 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
   if (meta === null) return null;
   return (
     <aside
+      className="query-tables"
       style={{
         flex: "0 0 280px",
         maxWidth: "100%",
@@ -285,8 +315,8 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
           {group.members.map((name) => {
             const table = meta.tables[name];
             return (
-              <details key={name} style={{ marginBottom: 8 }}>
-                <summary style={{ cursor: "pointer", listStyle: "none" }}>
+              <div key={name} style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 4 }}>
                   <button
                     type="button"
                     onClick={() => onPick(name)}
@@ -297,11 +327,15 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
                   </button>
                   <span
                     className="tabular"
-                    style={{ color: "var(--text-dim)", marginLeft: 8, whiteSpace: "nowrap" }}
+                    style={{ color: "var(--text-dim)", whiteSpace: "nowrap" }}
                   >
                     {count(table.rows)} · {megabytes(table.bytes)}
                   </span>
-                </summary>
+                </div>
+                <details style={{ marginTop: 2 }}>
+                  <summary style={{ cursor: "pointer", listStyle: "none", fontSize: 11, color: "var(--text-dim)" }}>
+                    columns
+                  </summary>
                 <div
                   style={{
                     paddingLeft: 12,
@@ -331,7 +365,8 @@ function TableList({ meta, onPick }: { meta: MartsMeta | null; onPick: (name: st
                     </div>
                   ))}
                 </div>
-              </details>
+                </details>
+              </div>
             );
           })}
         </section>
@@ -363,6 +398,7 @@ function Editor(props: EditorProps) {
   return (
     <div style={panel}>
       <textarea
+        id="sql-editor"
         value={props.sql}
         onChange={(e) => props.onChange(e.target.value)}
         onKeyDown={onKeyDown}
@@ -429,6 +465,9 @@ const cellStyle: CSSProperties = {
 function ResultsGrid({ table }: { table: ResultTable }) {
   const columns = columnsOf(table);
   const rows = Math.min(table.numRows, DISPLAY_CAP);
+  if (rows === 0) {
+    return <div style={{ padding: "12px 16px", color: "var(--text-dim)", fontSize: 12 }}>No rows.</div>;
+  }
   const indices = Array.from({ length: rows }, (_, i) => i);
   return (
     <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
@@ -477,7 +516,13 @@ function ResultsGrid({ table }: { table: ResultTable }) {
   );
 }
 
-const statusFor = (result: QueryResult | null, csvNote: string | null): string | null => {
+const statusFor = (
+  result: QueryResult | null,
+  csvNote: string | null,
+  running: boolean,
+  queued: boolean,
+): string | null => {
+  if (running) return queued ? "Running… · 1 queued" : "Running…";
   if (result === null) return null;
   const n = result.table.numRows;
   const parts = [`${count(n)} rows · ${Math.round(result.elapsedMs)} ms`];
@@ -512,7 +557,7 @@ function sqlPermalink(sql: string): string {
 
 export default function QueryConsole() {
   const { warehouse, bootError } = useWarehouse();
-  const { run, running, result, error } = useQuery(warehouse);
+  const { run, running, queued, result, error } = useQuery(warehouse);
   const [sql, setSql] = useState(STARTER_SQL);
   const [csvNote, setCsvNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -548,6 +593,13 @@ export default function QueryConsole() {
 
   return (
     <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: "var(--ink)" }}>
+      <style>{`
+        @media (max-width: 640px) {
+          .query-tables { flex: 1 1 100% !important; border-right: none !important; border-top: 1px solid var(--hairline); }
+          .query-section { max-height: none !important; }
+          input, select, textarea { font-size: 16px !important; }
+        }
+      `}</style>
       <Header meta={meta} loading={meta === null && bootError === null} />
       {/* flex-wrap makes this a multi-line container, and a flex line takes its cross
           size from its content -- align-items:stretch never applies. Without the
@@ -556,15 +608,14 @@ export default function QueryConsole() {
           the rows past the first screen are unreachable. The row scrolls as the
           backstop for the narrow layout, where two capped lines still overflow. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexWrap: "wrap", overflow: "auto" }}>
-        <section style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
+        <section className="query-section" style={{ flex: "1 1 320px", minWidth: 0, maxHeight: "100%", display: "flex", flexDirection: "column" }}>
           <TemplateForm
             meta={meta}
             warehouse={warehouse}
             onGenerate={(generated) => {
-              // Replaces the editor rather than appending: the permalink makes a lost
-              // draft recoverable, and appending leaves two queries where Run takes one.
               setSql(generated);
               setCsvNote(null);
+              window.history.replaceState(null, "", sqlPermalink(generated));
               void run(generated);
             }}
           />
@@ -576,7 +627,7 @@ export default function QueryConsole() {
             onDownload={onDownload}
             ready={meta !== null}
             running={running}
-            status={statusFor(result, csvNote)}
+            status={statusFor(result, csvNote, running, queued)}
             hasResult={result !== null}
             copied={copied}
           />

@@ -4,7 +4,6 @@ import { useEffect, useState, type CSSProperties } from "react";
 import {
   TEMPLATES,
   contextFrom,
-  countryAtSql,
   daysBefore,
   initialValues,
   missingScope,
@@ -19,6 +18,29 @@ import type { MartsMeta, Warehouse } from "@/lib/duckdbWasm";
 interface Country {
   id: number;
   name: string;
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
+const BBOX_MARGIN = 1.05;
+
+/** Countries whose padded bbox intersects a circle of `km` around (lat, lon). */
+function candidateCountries(
+  all: Country[],
+  lat: number,
+  lon: number,
+  km: number,
+): Country[] {
+  const degLat = (km * BBOX_MARGIN) / 111.32;
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  const degLon = cosLat > 0.001 ? (km * BBOX_MARGIN) / (111.32 * cosLat) : 360;
+  const latOk = (c: Country) => c.maxLat >= lat - degLat && c.minLat <= lat + degLat;
+  const lonOk = (c: Country) =>
+    c.maxLon >= lon - degLon && c.minLon <= lon + degLon ||
+    c.maxLon >= lon + 360 - degLon && c.minLon <= lon + 360 + degLon;
+  return all.filter((c) => latOk(c) && lonOk(c));
 }
 
 const control: CSSProperties = {
@@ -192,22 +214,33 @@ export default function TemplateForm({
   const [note, setNote] = useState<string | null>(null);
   const permission = useGeolocationState();
 
-  // One dictionary-encoded column: 0.1 MB, not the file's 64.
+  // dim_country: 246 rows, a few KB. Replaces a distinct scan of dim_zone's 61 MB file.
   useEffect(() => {
     if (warehouse === null || countries.length > 0) return;
     let live = true;
     void (async () => {
       try {
-        await warehouse.bind("dim_zone");
+        await warehouse.bind("dim_country");
         const table = await warehouse.conn.query(
-          "select distinct country_id, country_name from dim_zone " +
-            "where country_id is not null and country_name is not null order by country_name",
+          "select country_id, country_name, min_latitude, max_latitude, " +
+            "min_longitude, max_longitude from dim_country order by country_name",
         );
         const ids = table.getChildAt(0);
         const names = table.getChildAt(1);
+        const minLats = table.getChildAt(2);
+        const maxLats = table.getChildAt(3);
+        const minLons = table.getChildAt(4);
+        const maxLons = table.getChildAt(5);
         const rows: Country[] = [];
         for (let i = 0; i < table.numRows; i++) {
-          rows.push({ id: Number(ids?.get(i)), name: String(names?.get(i)) });
+          rows.push({
+            id: Number(ids?.get(i)),
+            name: String(names?.get(i)),
+            minLat: Number(minLats?.get(i)),
+            maxLat: Number(maxLats?.get(i)),
+            minLon: Number(minLons?.get(i)),
+            maxLon: Number(maxLons?.get(i)),
+          });
         }
         if (live) setCountries(rows);
       } catch {
@@ -274,13 +307,16 @@ export default function TemplateForm({
   };
 
   const set = (key: string, value: string | number) => {
-    // Same filter as a resolved radius; stale ids would narrow the new country.
-    setValues((v) => ({ ...v, [key]: value, ...(key === "country" ? { zones: "" } : {}) }));
+    setValues((v) => ({
+      ...v,
+      [key]: value,
+      ...(key === "country" ? { zones: "", countries: "" } : {}),
+    }));
     if (key === "country") setNote(null);
   };
 
   const useMyLocation = () => {
-    if (warehouse === null) return;
+    if (warehouse === null || countries.length === 0) return;
     setLocating(true);
     setNote(null);
     navigator.geolocation.getCurrentPosition(
@@ -288,21 +324,44 @@ export default function TemplateForm({
         void (async () => {
           const { latitude, longitude } = position.coords;
           try {
+            const km = radiusMiles * KM_PER_MILE;
+            const candidates = candidateCountries(countries, latitude, longitude, km);
+            if (candidates.length === 0) {
+              setNote("No countries found near your location. Pick one instead.");
+              setLocating(false);
+              return;
+            }
             await warehouse.bind("dim_zone");
-            const where = await warehouse.conn.query(countryAtSql(latitude, longitude));
-            const countryId = Number(where.getChildAt(0)?.get(0));
-            const countryName = String(where.getChildAt(1)?.get(0));
             const near = await warehouse.conn.query(
-              nearbyZonesSql(countryId, latitude, longitude, radiusMiles * KM_PER_MILE),
+              nearbyZonesSql(
+                candidates.map((c) => c.id),
+                latitude,
+                longitude,
+                km,
+              ),
             );
-            const column = near.getChildAt(0);
+            const zoneCol = near.getChildAt(0);
+            const countryCol = near.getChildAt(1);
             const ids: number[] = [];
-            for (let i = 0; i < near.numRows; i++) ids.push(Number(column?.get(i)));
-            setValues((v) => ({ ...v, country: String(countryId), zones: ids.join(", ") }));
+            const hitCountryIds = new Set<number>();
+            for (let i = 0; i < near.numRows; i++) {
+              ids.push(Number(zoneCol?.get(i)));
+              hitCountryIds.add(Number(countryCol?.get(i)));
+            }
+            const hitNames = candidates
+              .filter((c) => hitCountryIds.has(c.id))
+              .map((c) => c.name);
+            const countryCsv = [...hitCountryIds].join(", ");
+            setValues((v) => ({
+              ...v,
+              country: hitCountryIds.size === 1 ? String([...hitCountryIds][0]) : "",
+              countries: countryCsv,
+              zones: ids.join(", "),
+            }));
             setNote(
               ids.length >= RADIUS_ZONE_CAP
-                ? `${countryName}: more than ${RADIUS_ZONE_CAP.toLocaleString("en-US")} zones within ${radiusMiles} miles. Narrow the radius, or drop it and use the country.`
-                : `${ids.length.toLocaleString("en-US")} zones within ${radiusMiles} miles, in ${countryName}.`,
+                ? `More than ${RADIUS_ZONE_CAP.toLocaleString("en-US")} zones within ${radiusMiles} miles. Narrow the radius, or drop it and use a country.`
+                : `${ids.length.toLocaleString("en-US")} zones within ${radiusMiles} miles, in ${hitNames.join(" and ")}.`,
             );
           } catch {
             setNote("Could not match your location to a country. Pick one instead.");
@@ -406,12 +465,16 @@ export default function TemplateForm({
         >
           Write the query
         </button>
-        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{note ?? template.blurb}</span>
+        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
+          {blocked && !note
+            ? `Pick a ${blocked.toLowerCase()} or use your location first.`
+            : note ?? template.blurb}
+        </span>
         {hasRadius && (
           <button
             type="button"
             onClick={() => {
-              setValues((v) => ({ ...v, zones: "" }));
+              setValues((v) => ({ ...v, zones: "", countries: "" }));
               setNote(null);
             }}
             style={{ ...control, cursor: "pointer", fontSize: 12 }}

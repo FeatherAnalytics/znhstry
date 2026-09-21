@@ -103,8 +103,7 @@ The marts are published as Parquet, so any DuckDB reads them in place:
 
 ```sql
 select country_name, total_bots
-from read_parquet('https://data.znhstry.com/marts/fct_country_daily.parquet')
-where is_latest
+from read_parquet('https://data.znhstry.com/marts/dim_country.parquet')
 order by total_bots desc limit 10;
 ```
 

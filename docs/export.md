@@ -338,6 +338,7 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_pla
 | Table | Sorted by |
 |---|---|
 | `fct_zone_events` | `country_id, observed_at, zone_id` |
+| `dim_country` | `country_id` (bbox, zone count, newest-day standings) |
 | `dim_zone` | `country_id, zone_id` |
 | `fct_country_daily` | `country_id, activity_date` |
 | `fct_global_daily` | `activity_date` |
@@ -380,6 +381,8 @@ uv run python -m znhstry marts && find ../dist/marts -type f -exec md5 -r {} + |
 table — and Parquet keeps min/max per group, so `where country_id = 244` reads one group of
 the 99 and, over HTTP, makes range requests for that group alone. `dim_zone` leads with
 `country_id` for the same reason, so a country filter prunes both sides of the join.
+
+**Range reads cost one round trip per column chunk per row group.** A scoped query on `fct_zone_events` reads ~30 chunks where the file is 192 MB — a huge win. But a query that touches most row groups of a mid-size file pays more in round trips than the file costs to download: the starter query on `fct_country_daily` (8 MB, 73 requests at ~193 ms R2-origin RTT) took 14.4 s versus 4.3 s for 4 full-file fetches. That is why the starter and the country dropdown read `dim_country` (246 rows, six small requests) and every template on the two guarded tables always carries a scope.
 
 **HUGEINT is cast to BIGINT on the way out.** `fct_country_daily` and `fct_global_daily`
 sum BIGINT columns, which DuckDB types as HUGEINT, and Parquet has no int128 — left alone,

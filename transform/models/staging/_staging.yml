@@ -30,6 +30,7 @@ models:
               config:
                 where: "not is_tournament"
                 severity: warn
+                warn_if: "!= 5"
       - name: battle_date
         description: >
           Parsed from the report page's US month-first date. fct_zone_battles drops

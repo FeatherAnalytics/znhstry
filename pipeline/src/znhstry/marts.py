@@ -45,6 +45,7 @@ TABLES = (
     Table("fct_zone_events", ("country_id", "observed_at", "zone_id")),
     # Leads with country so a country filter prunes both sides of the join to events.
     Table("dim_zone", ("country_id", "zone_id")),
+    Table("dim_country", ("country_id",)),
     Table("fct_country_daily", ("country_id", "activity_date")),
     Table("fct_global_daily", ("activity_date",)),
     Table("fct_zone_battles", ("battle_date", "battle_report_number")),

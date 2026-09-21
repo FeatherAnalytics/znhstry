@@ -1,6 +1,28 @@
 version: 2
 
 models:
+  - name: dim_country
+    description: >
+      Grain: one row per country. Bounding box, zone count, and the newest day's
+      bot counts per faction from fct_country_daily.
+    columns:
+      - name: country_id
+        data_tests: [unique, not_null]
+      - name: country_name
+        data_tests: [not_null]
+      - name: min_longitude
+        description: >
+          Antimeridian-aware: uses a shifted-by-360 range when that is tighter than
+          the raw range. max_longitude can exceed 180 for countries that straddle the
+          antimeridian (US, Russia, NZ, Fiji, Kiribati).
+      - name: max_longitude
+        description: "See min_longitude."
+      - name: total_bots
+        data_tests: [not_null]
+      - name: as_of
+        description: The activity_date of the newest row in fct_country_daily.
+        data_tests: [not_null]
+
   - name: dim_zone
     description: "Grain: one row per zone. Geography, current state, current holder."
     columns:

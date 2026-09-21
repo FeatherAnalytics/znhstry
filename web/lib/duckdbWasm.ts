@@ -72,7 +72,10 @@ async function instantiate(): Promise<Connection> {
     const worker = new Worker(workerUrl);
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
     await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    return await db.connect();
+    await db.open({ filesystem: { forceFullHTTPReads: false } });
+    const conn = await db.connect();
+    await conn.query("SET parquet_metadata_cache = true");
+    return conn;
   } finally {
     URL.revokeObjectURL(workerUrl);
   }

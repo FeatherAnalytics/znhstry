@@ -192,7 +192,7 @@ export default function TemplateForm({
   const [note, setNote] = useState<string | null>(null);
   const permission = useGeolocationState();
 
-  // One dictionary-encoded column: 0.1 MB, not the file's 64.
+  // Range-requested dictionary pages: ~0.5 MB, not the file's 61.
   useEffect(() => {
     if (warehouse === null || countries.length > 0) return;
     let live = true;

@@ -1,11 +1,11 @@
 /**
  * Dispatch the data workflows on a schedule GitHub honors: Cloudflare's.
  *
- * Both workflows keep their own `schedule:` as a fallback, and a doubled run is a no-op
- * in each: the Atlantis gate reads `next_run_at`, the top of the hour after a collection,
- * so a second run in the same hour stops before checkout; the nightly's `plan_slots` asks
- * only for days the history is missing, and "Anything to publish?" skips the rebuild when
- * nothing is new.
+ * Both workflows keep their own `schedule:` as a fallback. The Atlantis gate reads
+ * `next_run_at`, the top of the hour after a collection, so a second run in the same hour
+ * stops before checkout. The nightly's `plan_slots` asks only for days the history is
+ * missing, but "Collect battle reports" can open the publish gate when new reports arrived,
+ * so a doubled nightly republishes in that case — harmless, not a no-op.
  */
 
 interface Env {
@@ -42,7 +42,7 @@ export default {
         body: JSON.stringify({ ref: "main" }),
       },
     );
-    // No retry: the next firing is the retry, and a doubled run is a no-op either way. The
+    // No retry: the next firing is the retry, and a doubled run is harmless either way. The
     // throw is what marks the invocation failed in the Worker's cron log; a logged line
     // alone leaves it green.
     if (response.status !== 204) {

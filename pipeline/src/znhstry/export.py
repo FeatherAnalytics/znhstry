@@ -1844,8 +1844,40 @@ def _build_players_payload(con: duckdb.DuckDBPyConnection) -> dict:
             int(rank) if rank is not None else None,
             round(float(qr), 1) if qr is not None else None,
             src,
+            None,
         ])
+    _attach_placements(con, result)
     return result
+
+
+# A finish whose order is unknown still ships, so it needs a value that is not null.
+TOP_THREE_UNORDERED = 0
+
+
+def _attach_placements(con: duckdb.DuckDBPyConnection, result: dict[str, list]) -> None:
+    """Set each month row's placement: 1-3, TOP_THREE_UNORDERED, or None."""
+    placements: dict[tuple[str, str], dict[str, int]] = {}
+    for name, month, faction, placement in con.execute(
+        "select player_name, tournament_month, faction, placement from fct_atlantis_placement"
+    ).fetchall():
+        key = (name.lower(), month.strftime("%Y-%m"))
+        placements.setdefault(key, {})[faction] = (
+            TOP_THREE_UNORDERED if placement is None else int(placement)
+        )
+    for name, rows in result.items():
+        by_month: dict[str, list] = {}
+        for row in rows:
+            by_month.setdefault(row[0], []).append(row)
+        for month, month_rows in by_month.items():
+            left = dict(placements.get((name.lower(), month), {}))
+            for row in month_rows:
+                if row[1] in left:
+                    row[8] = left.pop(row[1])
+            # Attribution can miss the faction a player placed in; the month's
+            # unattributed row is then the only row that finish can belong to.
+            for row in month_rows:
+                if row[1] == "Unconfirmed" and left:
+                    row[8] = min(left.values(), key=lambda v: v or 4)
 
 
 def _faction_launches_kills(con: duckdb.DuckDBPyConnection) -> dict:
@@ -2158,6 +2190,17 @@ def _build_all_time_merged(con: duckdb.DuckDBPyConnection) -> dict:
     )
     for entry in merged.values():
         entry["is_mercenary"] = entry["name"] in mercenaries
+
+    podium = {
+        key: (int(top), int(first), int(second), int(third))
+        for key, top, first, second, third in con.execute(
+            "select lower(player_name), top_three, first_place, second_place, third_place "
+            "from dim_atlantis_player"
+        ).fetchall()
+    }
+    for entry in merged.values():
+        top, first, second, third = podium.get(entry["name"].lower(), (0, 0, 0, 0))
+        entry.update(top_three=top, first_place=first, second_place=second, third_place=third)
 
     players = sorted(merged.values(), key=lambda p: (-p["launches"], p["name"]))
 

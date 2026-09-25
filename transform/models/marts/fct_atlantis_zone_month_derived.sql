@@ -117,7 +117,10 @@ join last_report lr
     on  lr.tournament_month = a.tournament_month
     and lr.triangle         = a.triangle
     and lr.zone_name        = a.zone_name
+left join {{ ref('atlantis_zone_name_aliases') }} al
+    on lower(al.zone_name) = lower(a.zone_name)
+-- Zone names vary in case from month to month, so the match ignores it.
 left join prev_ranks pr
     on  pr.tournament_month = a.tournament_month - interval '1 month'
     and pr.faction          = case a.triangle when 'Prime' then null else a.triangle end
-    and pr.player_name      = a.zone_name
+    and lower(pr.player_name) = lower(coalesce(al.player_name, a.zone_name))

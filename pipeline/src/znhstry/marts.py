@@ -77,6 +77,8 @@ TABLES = (
         "fct_atlantis_zone_month_derived",
         ("tournament_month", "triangle", "zone_name"),
     ),
+    Table("fct_atlantis_placement", ("tournament_month", "faction", "player_name")),
+    Table("dim_atlantis_player", ("player_name",)),
     Table(
         "stg_atlantis_faction_review",
         ("tournament_month", "player_name"),

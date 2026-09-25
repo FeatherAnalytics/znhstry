@@ -297,3 +297,53 @@ models:
         data_tests: [not_null]
       - name: zone_name
         data_tests: [not_null]
+
+  - name: fct_atlantis_placement
+    description: >
+      Grain: one row per tournament month, faction, and player who finished in
+      that faction's top three by launches. Read off the zones named after
+      players the following month, which honor the prior month's top three in
+      positions 1 to 3. A mercenary can place in two factions in one month.
+    columns:
+      - name: tournament_month
+        description: The month the finish was earned, one before the month the zone carried the name.
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Legion', 'Swarm', 'Faceless']
+      - name: player_name
+        data_tests: [not_null]
+      - name: placement
+        description: 1, 2 or 3; null when the finish is certain to be top three but its order is not known.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3]
+      - name: placement_source
+        description: >
+          page when the Atlantis page gives the zone's position; board when read
+          from the month's final leaderboard, ties unordered; battle-reports
+          when inferred from the prior month's launch rank in battle reports;
+          elimination when the other two names were placed; unordered otherwise.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['page', 'board', 'battle-reports', 'elimination', 'unordered']
+
+  - name: dim_atlantis_player
+    description: >
+      Grain: one row per player with at least one top-three finish, counted
+      across every faction they placed in.
+    columns:
+      - name: player_name
+        data_tests: [unique, not_null]
+      - name: top_three
+        description: Top-three finishes, including those whose order is not known.
+      - name: unordered
+        description: Top-three finishes with no known first, second or third.
+      - name: factions
+        description: Every faction the player placed in.

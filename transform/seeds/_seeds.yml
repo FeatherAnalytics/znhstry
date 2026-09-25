@@ -8,3 +8,19 @@ seeds:
         player_name: varchar
         faction: varchar
         note: varchar
+
+  - name: atlantis_zone_name_aliases
+    description: >
+      Zone names that honor a player under a name other than the one battle
+      reports and the board carry, such as a spelling the game used or a name
+      the player has since changed. Matched case-insensitively.
+    config:
+      column_types:
+        zone_name: varchar
+        player_name: varchar
+        note: varchar
+    columns:
+      - name: zone_name
+        data_tests: [unique, not_null]
+      - name: player_name
+        data_tests: [not_null]

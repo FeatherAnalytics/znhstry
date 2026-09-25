@@ -49,6 +49,10 @@ export interface AllTimePlayer {
   last_month: string;
   qredits: number | null;
   is_mercenary: boolean;
+  top_three: number;
+  first_place: number;
+  second_place: number;
+  third_place: number;
 }
 
 export interface FactionAllTime {
@@ -57,7 +61,21 @@ export interface FactionAllTime {
   launches?: number;
 }
 
-export type PlayerMonthRow = [string, string, number, number, number, number | null, number | null, string];
+/** A top-three finish whose order is not known. */
+export const TOP_THREE_UNORDERED = 0;
+
+/** month, faction, launches, kills, lost, rank, qredits, source, placement (1-3, TOP_THREE_UNORDERED, or null). */
+export type PlayerMonthRow = [string, string, number, number, number, number | null, number | null, string, number | null];
+
+/** Gold, silver, bronze; a finish of unknown order stays neutral. */
+export function placeColor(place: number | null | undefined): string {
+  return ["var(--text-dim)", "var(--gold)", "var(--silver)", "var(--bronze)"][place ?? 0] ?? "var(--text-dim)";
+}
+
+export function placeLabel(place: number | null | undefined): string | null {
+  if (place == null) return null;
+  return ["Top 3", "1st", "2nd", "3rd"][place] ?? null;
+}
 
 export async function fetchPlayersDetail(base: string): Promise<Record<string, PlayerMonthRow[]>> {
   const res = await fetch(`${base}/atlantis/players.json.br`);
@@ -127,6 +145,7 @@ function normalizeIndex(raw: AtlantisIndex): AtlantisIndex {
   const playerDefaults: Omit<AllTimePlayer, "name"> = {
     factions: {}, launches: 0, tournaments: 0, unattributed: 0,
     first_month: "", last_month: "", qredits: null, is_mercenary: false,
+    top_three: 0, first_place: 0, second_place: 0, third_place: 0,
   };
   const normalizePlayer = (p: AllTimePlayer): AllTimePlayer => ({ ...playerDefaults, ...p });
   const players = (list: unknown): AllTimePlayer[] =>

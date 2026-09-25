@@ -12,6 +12,9 @@ import {
   compact,
   fetchPlayersDetail,
   STALE_DATA_NOTICE,
+  TOP_THREE_UNORDERED,
+  placeLabel,
+  placeColor,
   type AtlantisIndex,
   type AllTimePlayer,
   type FactionDetail,
@@ -24,7 +27,7 @@ interface Props {
   index: AtlantisIndex;
 }
 
-type SortCol = "launches" | "tournaments" | "qredits";
+type SortCol = "launches" | "tournaments" | "top_three" | "first_place" | "second_place" | "third_place" | "qredits";
 
 const cellStyle: CSSProperties = {
   padding: "12px 10px",
@@ -61,10 +64,27 @@ function FactionsCell({ factions, unattributed }: { factions: Record<string, Fac
   );
 }
 
-type DetailSort = "month" | "launches" | "kills" | "lost" | "rank" | "qredits";
-const DETAIL_COL_INDEX: Record<Exclude<DetailSort, "month">, number> = { launches: 2, kills: 3, lost: 4, rank: 5, qredits: 6 };
+type DetailSort = "month" | "launches" | "kills" | "lost" | "place" | "qredits";
+const DETAIL_COL_INDEX: Record<Exclude<DetailSort, "month">, number> = { launches: 2, kills: 3, lost: 4, qredits: 6, place: 8 };
 
-function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) {
+/** Lower is better; a finish of unknown order ranks behind a known third. */
+function placeOrder(place: number | null | undefined): number | null {
+  if (place == null) return null;
+  return place === TOP_THREE_UNORDERED ? 3.5 : place;
+}
+
+function bestPlaceByMonth(rows: PlayerMonthRow[]): Map<string, number> {
+  const best = new Map<string, number>();
+  for (const r of rows) {
+    const order = placeOrder(r[8]);
+    if (order == null) continue;
+    const prev = best.get(r[0]);
+    if (prev == null || order < (placeOrder(prev) ?? Infinity)) best.set(r[0], r[8] as number);
+  }
+  return best;
+}
+
+function PlayerDetail({ name, player, onClose }: { name: string; player: AllTimePlayer | undefined; onClose: () => void }) {
   const [data, setData] = useState<PlayerMonthRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
@@ -100,7 +120,7 @@ function PlayerDetail({ name, onClose }: { name: string; onClose: () => void }) 
         filter={{ value: factionFilter, onChange: f => setFactionFilter(factionFilter === f ? null : f) }}
         onClose={onClose}
       />
-      <PlayerInfoRow data={data} />
+      <PlayerInfoRow data={data} player={player} />
       <PlayerCharts rows={data} />
       <PlayerDetailTable rows={sorted} detailSort={detailSort} toggleDetailSort={toggleDetailSort} dArrow={dArrow} />
     </div>
@@ -113,8 +133,14 @@ function sortDetailRows(rows: PlayerMonthRow[], col: DetailSort, asc: boolean): 
       return asc ? a[0].localeCompare(b[0]) : b[0].localeCompare(a[0]);
     }
     const ci = DETAIL_COL_INDEX[col];
-    const av = a[ci] as number | null;
-    const bv = b[ci] as number | null;
+    // Negated so the default descending sort puts 1st at the top.
+    const key = (r: PlayerMonthRow) => {
+      if (col !== "place") return r[ci] as number | null;
+      const order = placeOrder(r[8]);
+      return order == null ? null : -order;
+    };
+    const av = key(a);
+    const bv = key(b);
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
@@ -184,7 +210,7 @@ function yearGap(m: string): number { return m.endsWith("-01") ? 4 : 0; }
 
 interface FactionMonthVal { month: string; total: number; byFaction: Record<string, number> }
 
-function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMonths: string[] }) {
+function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMonths: string[]; podium: Map<string, number> }) {
   const months = props.allMonths;
   const bar = useBarHover(months.length);
 
@@ -211,9 +237,12 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
           {months.map((m, i) => {
             const entry = valMap.get(m);
             const total = entry?.total ?? 0;
-            const opacity = bar.index != null && bar.index !== i ? 0.4 : 0.8;
+            const placed = props.podium.has(m);
+            const base = props.podium.size === 0 || placed ? 0.9 : 0.45;
+            const opacity = bar.index != null && bar.index !== i ? base * 0.5 : base;
             return (
-              <div key={m} style={{ flex: "1 1 0", maxWidth: maxBarW, height: barHeight(total, maxV, h), display: "flex", flexDirection: "column", marginLeft: yearGap(m), borderRadius: 1, overflow: "hidden" }}>
+              <div key={m} style={{ flex: "1 1 0", minWidth: 0, maxWidth: maxBarW, height: "100%", marginLeft: yearGap(m), display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{ width: "100%", height: barHeight(total, maxV, h), marginTop: "auto", display: "flex", flexDirection: "column", borderRadius: 1, overflow: "hidden", flexShrink: 0 }}>
                 {entry ? FACTION_ORDER.map(f => {
                   const v = entry.byFaction[f] ?? 0;
                   return v > 0 ? <div key={f} style={{ flex: `${v} 0 0`, background: factionHex(f), opacity }} /> : null;
@@ -221,15 +250,25 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
                   (() => { const grey = (entry.byFaction["Unconfirmed"] ?? 0); return grey > 0 ? [<div key="grey" style={{ flex: `${grey} 0 0`, background: "#7c8798", opacity }} />] : []; })()
                 ) : null}
               </div>
+              </div>
             );
           })}
         </div>
       </div>
+      {props.podium.size > 0 ? (
+        <div style={{ display: "flex", gap: 1, height: 10, marginTop: 3 }}>
+          {months.map(m => (
+            <div key={m} style={{ flex: "1 1 0", minWidth: 0, maxWidth: maxBarW, marginLeft: yearGap(m), borderRadius: 1,
+              background: props.podium.has(m) ? placeColor(props.podium.get(m)) : "transparent" }} />
+          ))}
+        </div>
+      ) : null}
       <YearLabels months={months} maxBarW={maxBarW} />
       <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
         {hd ? (
           <>
             <span style={{ fontWeight: 600 }}>{hm}</span>: {hd.total.toLocaleString("en-US")}
+            {hm && props.podium.has(hm) ? <span style={{ marginLeft: 6, color: placeColor(props.podium.get(hm)), fontWeight: 600 }}>{placeLabel(props.podium.get(hm))}</span> : null}
             {FACTION_ORDER.map(f => {
               const v = hd.byFaction[f];
               return v ? <span key={f} style={{ marginLeft: 6, color: factionHex(f) }}>{compact(v)}</span> : null;
@@ -297,7 +336,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
   );
 }
 
-function PlayerInfoRow({ data }: { data: PlayerMonthRow[] }) {
+function PlayerInfoRow({ data, player }: { data: PlayerMonthRow[]; player: AllTimePlayer | undefined }) {
   const yearCounts = useMemo(() => {
     const months = new Set(data.map(r => r[0]));
     const yrs: Record<string, number> = {};
@@ -307,7 +346,37 @@ function PlayerInfoRow({ data }: { data: PlayerMonthRow[] }) {
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap" }}>
       <FactionBreakdown data={data} />
+      {player ? <PlacementBars player={player} /> : null}
       <YearBars data={yearCounts} />
+    </div>
+  );
+}
+
+function PlacementBars({ player }: { player: AllTimePlayer }) {
+  if (player.top_three === 0) return null;
+  const places = [
+    { label: "1st", count: player.first_place, color: placeColor(1) },
+    { label: "2nd", count: player.second_place, color: placeColor(2) },
+    { label: "3rd", count: player.third_place, color: placeColor(3) },
+  ];
+  const unordered = player.top_three - places.reduce((s, p) => s + p.count, 0);
+  const maxC = Math.max(...places.map(p => p.count), 1);
+  const h = 160;
+  return (
+    <div style={{ flex: "0 0 auto" }}>
+      <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Top 3 finishes</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: h }}>
+        {places.map(p => (
+          <div key={p.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 32 }}>
+            <span className="tabular" style={{ fontSize: 9, color: "var(--text)" }}>{p.count}</span>
+            <div style={{ width: 20, height: p.count > 0 ? (p.count / maxC) * (h - 32) : 0, background: p.color, borderRadius: 1 }} />
+            <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{p.label}</span>
+          </div>
+        ))}
+      </div>
+      {unordered > 0 ? (
+        <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>+{unordered} top 3, order unknown</div>
+      ) : null}
     </div>
   );
 }
@@ -355,6 +424,7 @@ function buildFactionMonthData(rows: PlayerMonthRow[], field: 2 | 3): FactionMon
 
 function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
   const launchData = useMemo(() => buildFactionMonthData(rows, 2), [rows]);
+  const podium = useMemo(() => bestPlaceByMonth(rows), [rows]);
   const killData = useMemo(() => buildFactionMonthData(rows, 3), [rows]);
 
   if (launchData.length === 0) return null;
@@ -370,11 +440,11 @@ function PlayerCharts({ rows }: { rows: PlayerMonthRow[] }) {
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
         <div>
-          <FactionBarChart data={launchData} label="Launches" allMonths={allMonths} />
+          <FactionBarChart data={launchData} label="Launches" allMonths={allMonths} podium={podium} />
           <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestLaunches.month} ({compact(bestLaunches.value)})</div>
         </div>
         <div>
-          <FactionBarChart data={killData} label="Kills" allMonths={allMonths} />
+          <FactionBarChart data={killData} label="Kills" allMonths={allMonths} podium={podium} />
           {bestKills ? <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Peak: {bestKills.month} ({compact(bestKills.value)})</div> : null}
         </div>
         <CumulativeLine data={launchMV} label="Cumulative launches" allMonths={allMonths} />
@@ -419,17 +489,17 @@ function PlayerDetailTable({ rows, detailSort, toggleDetailSort, dArrow }: {
           <tr>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left", cursor: "pointer", userSelect: "none" }} onClick={() => toggleDetailSort("month")}>Month{dArrow("month")}</th>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Faction</th>
+            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("place")} title="Top-three finish, from the zones named after players the next month">Place{dArrow("place")}</th>
             <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("launches")}>Launches{dArrow("launches")}</th>
             <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("kills")}>Kills{dArrow("kills")}</th>
             <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("lost")}>Lost{dArrow("lost")}</th>
-            <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("rank")}>Rank{dArrow("rank")}</th>
             <th className="eyebrow tabular" style={dth} onClick={() => toggleDetailSort("qredits")}>Qredits{dArrow("qredits")}</th>
             <th className="eyebrow" style={{ ...cellStyle, textAlign: "left" }}>Source</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(([month, faction, launches, kills, lost, rank, qredits, source]) => (
-            <tr key={`${month}:${faction}`}>
+          {rows.map(([month, faction, launches, kills, lost, , qredits, source, place]) => (
+            <tr key={`${month}:${faction}`} style={place != null ? { fontWeight: 600, background: "var(--ink-raised)" } : undefined}>
               <td className="tabular" style={cellStyle}>{month}</td>
               <td style={cellStyle}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -437,10 +507,10 @@ function PlayerDetailTable({ rows, detailSort, toggleDetailSort, dArrow }: {
                   {faction}
                 </span>
               </td>
+              <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: place != null ? placeColor(place) : undefined }}>{placeLabel(place) ?? "—"}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{launches.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{kills.toLocaleString("en-US")}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{lost.toLocaleString("en-US")}</td>
-              <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{rank ?? "—"}</td>
               <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{qredits != null && qredits > 0 ? compact(qredits) : "—"}</td>
               <td style={{ ...cellStyle, color: "var(--text-dim)" }}>{source}</td>
             </tr>
@@ -515,7 +585,7 @@ export default function AllTime({ index }: Props) {
           onPlayerClick={onPlayerClick}
         />
       )}
-      {playerParam && players.length > 0 ? <PlayerDetail name={playerParam} onClose={onPlayerClose} /> : null}
+      {playerParam && players.length > 0 ? <PlayerDetail name={playerParam} player={players.find(p => p.name === playerParam)} onClose={onPlayerClose} /> : null}
     </div>
   );
 }
@@ -530,6 +600,7 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, togg
   arrow: (col: SortCol) => React.ReactNode;
   onPlayerClick: (name: string) => void;
 }) {
+  const sortProps = { sortCol, sortAsc, toggleSort, arrow };
   return (
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
@@ -552,11 +623,15 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, togg
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default", width: 40 }}>#</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Player</th>
               <th className="eyebrow" style={{ ...thStyle, textAlign: "left", cursor: "default" }}>Factions</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "launches" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("launches")} style={{ padding: 0 }}>Launches{arrow("launches")}</button></th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "tournaments" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("tournaments")} style={{ padding: 0 }}>Tournaments{arrow("tournaments")}</button></th>
+              <SortHeader col="launches" label="Launches" {...sortProps} />
+              <SortHeader col="tournaments" label="Tournaments" {...sortProps} />
+              <SortHeader col="top_three" label="Top 3" title="Top-three finishes, including some whose order is not known" {...sortProps} />
+              <SortHeader col="first_place" label="1st" {...sortProps} />
+              <SortHeader col="second_place" label="2nd" {...sortProps} />
+              <SortHeader col="third_place" label="3rd" {...sortProps} />
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>First</th>
               <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right", cursor: "default" }}>Last</th>
-              <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} aria-sort={sortCol === "qredits" ? (sortAsc ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort("qredits")} style={{ padding: 0 }}>Qredits{arrow("qredits")}</button></th>
+              <SortHeader col="qredits" label="Qredits" {...sortProps} />
             </tr>
           </thead>
           <tbody>
@@ -567,6 +642,10 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, togg
                 <td style={cellStyle}><FactionsCell factions={r.factions} unattributed={r.unattributed ?? 0} /></td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.launches.toLocaleString("en-US")}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.tournaments}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.top_three || "—"}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.first_place || "—"}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.second_place || "—"}</td>
+                <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>{r.third_place || "—"}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.first_month}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right", color: "var(--text-dim)" }}>{r.last_month}</td>
                 <td className="tabular" style={{ ...cellStyle, textAlign: "right" }}>
@@ -578,5 +657,22 @@ function PlayersTable({ filtered, filter, onFilterChange, sortCol, sortAsc, togg
         </table>
       </div>
     </>
+  );
+}
+
+function SortHeader({ col, label, title, sortCol, sortAsc, toggleSort, arrow }: {
+  col: SortCol;
+  label: string;
+  title?: string;
+  sortCol: SortCol;
+  sortAsc: boolean;
+  toggleSort: (col: SortCol) => void;
+  arrow: (col: SortCol) => React.ReactNode;
+}) {
+  return (
+    <th className="eyebrow tabular" style={{ ...thStyle, textAlign: "right" }} title={title}
+      aria-sort={sortCol === col ? (sortAsc ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => toggleSort(col)} style={{ padding: 0 }}>{label}{arrow(col)}</button>
+    </th>
   );
 }

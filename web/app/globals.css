@@ -1,7 +1,7 @@
 :root {
-  /* The interface has no colour of its own. All saturation belongs to the
-     data, and the three faction colours are deliberately not harmonised --
-     they are the game's own colours, and they are enemies. */
+  /* The interface has no color of its own. All saturation belongs to the
+     data, and the three faction colors are deliberately not harmonized --
+     they are the game's own colors, and they are enemies. */
   --ink: #07090e;
   --ink-raised: #0e1218;
   --hairline: #1c2230;
@@ -11,6 +11,10 @@
   --swarm: #22d07e;
   --faceless: #9b6dff;
   --dormant: #4a5568;
+
+  --gold: #f5c542;
+  --silver: #c3cbd8;
+  --bronze: #a8592c;
 
   --text: #e6eaf2;
   --text-dim: #7c8798;

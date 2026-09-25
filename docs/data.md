@@ -146,7 +146,7 @@ on its formation zones, not from position.
 
 ### Atlantis marts
 
-Nine marts built from the staging views above, plus three derived-history marts from battle reports. All materialized as tables.
+Nine marts built from the staging views above, plus five derived-history marts from battle reports and zone names. All materialized as tables.
 
 | | Grain | Sort key |
 |---|---|---|
@@ -159,8 +159,12 @@ Nine marts built from the staging views above, plus three derived-history marts 
 | `dim_atlantis_tournament_derived` | one row per report month | `(tournament_month)` |
 | `fct_atlantis_player_month_derived` | player + attributed faction per month | `(tournament_month, faction, player_name)` |
 | `fct_atlantis_zone_month_derived` | zone name + triangle per month | `(tournament_month, triangle, zone_name)` |
+| `fct_atlantis_placement` | player + faction per month finished top three | `(tournament_month, faction, player_name)` |
+| `dim_atlantis_player` | player with a top-three finish, case-folded | `(lower(player_name))` |
 
 **Placement rule (the game's own).** Rank the three factions by zones held at the last observation, where a zone's holder is the faction with the largest count (ties break Legion > Swarm > Faceless, matching `export.py`'s `_leader`; a tie has not occurred in the data and cannot be resolved from it). When two factions hold the same number of zones, the one holding Prime ranks higher; if neither holds Prime, total bots across all nineteen zones breaks it.
+
+**Top-three rule.** Positions 1-3 of each triangle are named after the previous month's first, second and third by launches in that faction, so a name in month M is a finish in M - 1. The first tournament was 2014-06, so its zones honor no finish. Sources, in order of precedence per faction-month: the page's own zone positions (`page`); the month's final board (`board`), which agrees with the page on every podium spot both cover, and whose ties on launches stay unordered unless the next month's page breaks them; the prior month's battle-report launch rank (`battle-reports`), which agrees with the page on most zones but not all, because each report lists at most 50 players; `elimination` when the other two names are placed; and `unordered` for a finish that is certainly top three with no known order. Only the board collected hourly from 2026-09 is a full record — earlier boards are Wayback snapshots and the rest is aggregated from reports. December triangles have no formation zones and name all six positions, so a December name the inference cannot place is dropped rather than counted. Zone IDs are shuffled within a triangle and say nothing about position. Zone names vary in case across months and sometimes spell a player differently or under an old name; `atlantis_zone_name_aliases` maps those, and every match ignores case.
 
 **Payout rule.** The game divides each placement's pool across the faction proportionally to launches. Pool amounts live in the `atlantis_pools` seed as an as-of table keyed by `effective_from`; a month with different pools is one appended row. The current pools are 10,000,000 / 4,000,000 / 1,000,000 for first / second / third.
 

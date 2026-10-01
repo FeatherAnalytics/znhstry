@@ -164,7 +164,7 @@ export default function AtlantisPage() {
             style={{ ...btnStyle, appearance: "auto" }}
           >
             {[...allTournaments].reverse().map((t) => {
-              const suffix = (t.winner ? " — " + t.winner : "") + (isDerived(t) ? " derived" : "");
+              const suffix = t.winner ? " — " + t.winner : "";
               return <option key={t.month} value={t.month}>{t.month}{suffix}</option>;
             })}
           </select>

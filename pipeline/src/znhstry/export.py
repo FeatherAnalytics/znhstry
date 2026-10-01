@@ -2512,16 +2512,14 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
 
 
 def export_atlantis_only(scope_name: str | None = None) -> None:
-    """Rebuild only the atlantis/ tree and patch meta.json."""
+    """Rebuild only the atlantis/ tree, and patch meta.json when one is on disk.
+
+    The viewer reads `atlantis/index.json.br` directly, so the hourly job, which has no
+    full export to patch, publishes the tree alone.
+    """
     scope = config.SCOPES[scope_name or config.DEFAULT_SCOPE]
     out = config.WEB_DATA / scope.name
-    meta_path = out / "meta.json"
-    if not meta_path.exists():
-        raise SystemExit(
-            "meta.json not found — run a full export first. "
-            "An atlantis-only export patches the existing meta.json."
-        )
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    out.mkdir(parents=True, exist_ok=True)
 
     shutil.rmtree(out / "atlantis", ignore_errors=True)
 
@@ -2531,8 +2529,11 @@ def export_atlantis_only(scope_name: str | None = None) -> None:
     finally:
         con.close()
 
-    meta["atlantis"] = atlantis
-    tmp = meta_path.with_name(meta_path.name + ".tmp")
-    tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    tmp.replace(meta_path)
+    meta_path = out / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["atlantis"] = atlantis
+        tmp = meta_path.with_name(meta_path.name + ".tmp")
+        tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        tmp.replace(meta_path)
     log.info("atlantis-only export complete")

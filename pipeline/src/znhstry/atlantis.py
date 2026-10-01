@@ -108,7 +108,7 @@ class ParsedPage:
     zones: pl.DataFrame
     zone_months: pl.DataFrame
     tournament: pl.DataFrame
-    schedule: Schedule
+    schedule: Schedule | None
 
 
 # --- parsing ----------------------------------------------------------------
@@ -126,12 +126,19 @@ def _next_month(month: date) -> datetime:
     return datetime(month.year + month.month // 12, month.month % 12 + 1, 1)
 
 
-def _schedule(soup: BeautifulSoup, month: date) -> tuple[Schedule, Tag]:
+def _find_schedule(soup: BeautifulSoup, month: date) -> Schedule | None:
     for strong in soup.find_all("strong"):
         match = _SCHEDULE.search(strong.get_text(" ", strip=True))
         if match:
-            return Schedule(month, int(match.group(1)), int(match.group(2))), strong
-    raise LayoutChanged("schedule: no 'Stacking Days / Battle Days' on the page")
+            return Schedule(month, int(match.group(1)), int(match.group(2)))
+    return None
+
+
+def _schedule(soup: BeautifulSoup, month: date) -> Schedule:
+    schedule = _find_schedule(soup, month)
+    if schedule is None:
+        raise LayoutChanged("schedule: no 'Stacking Days / Battle Days' on the page")
+    return schedule
 
 
 def _winner(soup: BeautifulSoup) -> str | None:
@@ -154,9 +161,8 @@ def _tournament(
     return pl.DataFrame([row], schema=ATLANTIS_TOURNAMENT_DTYPES)
 
 
-def _rules(schedule_tag: Tag) -> list[str]:
-    block = schedule_tag.parent.find_next_sibling("div")
-    rules = [inset.get_text(" ", strip=True) for inset in block.find_all("div", class_="inset")]
+def _rules(soup: BeautifulSoup) -> list[str]:
+    rules = [inset.get_text(" ", strip=True) for inset in soup.select("div#rules div.inset")]
     if len(rules) != 1 + _POSITIONS:
         raise LayoutChanged(f"rules: expected {1 + _POSITIONS} rules, got {len(rules)}")
     return rules
@@ -294,15 +300,14 @@ def _zones(
 def parse_page(html: str, observed_at: datetime, source: str = "portal") -> ParsedPage:
     """Turn the page into the four frames and the schedule.
 
-    Raises `LayoutChanged` only when the schedule cannot be read: it decides `next_run_at`,
-    so nothing can be recorded without it. The zones and the leaderboard fail independently,
-    each logged and written as no rows, so one moved block does not discard the other.
+    Never raises. The schedule can be missing while the battle is already being fought, so
+    the board and zones are kept regardless; without a schedule there is no `ends_at` and no
+    tournaments row yet. The zones and the leaderboard fail independently, each logged and
+    written as no rows, so one moved block does not discard the other.
     """
     soup = BeautifulSoup(html, features="lxml")
     month = _month_start(observed_at)
-
-    with _section("schedule"):
-        schedule, schedule_tag = _schedule(soup, month)
+    schedule = _find_schedule(soup, month)
 
     leaderboard: list[dict[str, Any]] = []
     try:
@@ -319,7 +324,7 @@ def parse_page(html: str, observed_at: datetime, source: str = "portal") -> Pars
     months: list[dict[str, Any]] = []
     try:
         with _section("rules"):
-            rules = _rules(schedule_tag)
+            rules = _rules(soup)
         with _section("zones"):
             counts, months = _zones(
                 soup, observed_at, month, rules,
@@ -332,7 +337,11 @@ def parse_page(html: str, observed_at: datetime, source: str = "portal") -> Pars
         leaderboard=pl.DataFrame(leaderboard, schema=ATLANTIS_LEADERBOARD_DTYPES),
         zones=pl.DataFrame(counts, schema=ATLANTIS_ZONE_DTYPES),
         zone_months=pl.DataFrame(months, schema=ATLANTIS_ZONE_MONTH_DTYPES),
-        tournament=_tournament(schedule, _winner(soup), source=source),
+        tournament=(
+            _tournament(schedule, _winner(soup), source=source)
+            if schedule
+            else pl.DataFrame(schema=ATLANTIS_TOURNAMENT_DTYPES)
+        ),
         schedule=schedule,
     )
 
@@ -345,8 +354,7 @@ def parse_outcome(html: str, observed_at: datetime) -> pl.DataFrame:
     Raises `LayoutChanged` like `parse_page` when the schedule cannot be read.
     """
     soup = BeautifulSoup(html, features="lxml")
-    with _section("schedule"):
-        schedule, _ = _schedule(soup, _month_start(observed_at))
+    schedule = _schedule(soup, _month_start(observed_at))
     return _tournament(schedule, _winner(soup))
 
 
@@ -494,28 +502,16 @@ def scrape_atlantis() -> int:
         _record_outcome(html, observed_at, previous)
         return 0
 
-    try:
-        page = parse_page(html, observed_at, source="portal")
-    except LayoutChanged as exc:
-        log.warning("atlantis: page did not parse (%s); trying again in an hour", exc)
-        _write_state(
-            {
-                **previous,
-                "next_run_at": _stamp(_next_hour(observed_at)),
-                "observed_at": _stamp(observed_at),
-            }
-        )
-        return 0
-
+    page = parse_page(html, observed_at, source="portal")
     added, zones_added = _store(page, observed_at)
 
-    ends_at = page.schedule.ends_at
-    final = observed_at >= ends_at
+    ends_at = page.schedule.ends_at if page.schedule else None
+    final = ends_at is not None and observed_at >= ends_at
     next_run_at = _next_month(month) if final else _next_hour(observed_at)
     _write_state(
         {
             "month": month.isoformat(),
-            "ends_at": _stamp(ends_at),
+            "ends_at": _stamp(ends_at) if ends_at else None,
             "final_pull_done": final,
             "next_run_at": _stamp(next_run_at),
             "observed_at": _stamp(observed_at),
@@ -526,7 +522,7 @@ def scrape_atlantis() -> int:
         observed_at,
         added,
         zones_added,
-        _stamp(ends_at),
+        _stamp(ends_at) if ends_at else "unknown (no schedule on the page yet)",
         _stamp(next_run_at),
         " (final pull)" if final else "",
     )

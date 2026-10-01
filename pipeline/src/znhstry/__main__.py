@@ -59,7 +59,7 @@ def main() -> int:
     parser.add_argument(
         "--only",
         choices=["atlantis"],
-        help="Export step only. Rebuild only the named tree and patch meta.json.",
+        help="Export and upload steps only. Rebuild or push only the named tree.",
     )
     args = parser.parse_args()
 
@@ -81,7 +81,10 @@ def _run_ingest(args: argparse.Namespace) -> None:
 
 
 def _run_upload(args: argparse.Namespace) -> None:
-    (upload.upload_marts if args.marts else upload.upload_all)()
+    if args.only == "atlantis":
+        upload.upload_atlantis()
+    else:
+        (upload.upload_marts if args.marts else upload.upload_all)()
 
 
 def _run_wayback() -> None:

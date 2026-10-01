@@ -461,6 +461,34 @@ def upload_marts(source: Path | None = None, bucket: str | None = None) -> None:
     _delete_keys(s3, bucket, set(remote) - set(key_of.values()))
 
 
+def upload_atlantis(bucket: str | None = None) -> None:
+    """Push `global/atlantis/` alone, sweeping only inside it.
+
+    The hourly job has no full export on disk, so `upload_all` would delete everything else
+    in the bucket. The month files keep the same names night to night, so a nightly that
+    lands in between overwrites them with its own copy and breaks nothing.
+    """
+    source = config.WEB_DATA
+    prefix = "global/atlantis/"
+    tree = source / prefix
+    files = sorted(p for p in tree.rglob("*") if p.is_file() and p.suffix != ".tmp")
+    if not any(p.name == "index.json.br" for p in files):
+        raise SystemExit(f"no index.json.br under {tree} - run `export --only atlantis` first.")
+    key_of = {p: p.relative_to(source).as_posix() for p in files}
+
+    s3 = _client()
+    bucket = _bucket(bucket)
+    remote = _existing(s3, bucket, prefix)
+    index = tree / "index.json.br"
+    # The index last: it names the months, so every month it names must already be there.
+    pending = [p for p in _changed(files, remote, key_of) if p != index]
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        list(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
+    _put(s3, bucket, index, key_of[index])
+    _delete_keys(s3, bucket, set(remote) - set(key_of.values()))
+    log.info("atlantis upload: %s of %s files sent to %s", len(pending) + 1, len(files), prefix)
+
+
 def upload_all(source: Path | None = None, bucket: str | None = None) -> None:
     source = source or config.WEB_DATA
     bucket = _bucket(bucket)

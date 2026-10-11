@@ -2,8 +2,8 @@
  * Dispatch the data workflows on a schedule GitHub honors: Cloudflare's.
  *
  * Both workflows keep their own `schedule:` as a fallback. The Atlantis gate reads
- * `next_run_at`, the top of the hour after a collection, so a second run in the same hour
- * stops before checkout. The nightly's `plan_slots` asks only for days the history is
+ * `next_run_at`, the next :00 or :30 after a collection, so a second run in the same half
+ * hour stops before checkout. The nightly's `plan_slots` asks only for days the history is
  * missing, but "Collect battle reports" can open the publish gate when new reports arrived,
  * so a doubled nightly republishes in that case — harmless, not a no-op.
  */
@@ -16,7 +16,7 @@ interface Env {
 // because QONQR writes the slot just after 00:00 UTC; if Dropbox is ever slower than that,
 // the run is a green no-op and the workflow's own 02:30 schedule picks the day up.
 const WORKFLOW_FOR_CRON: Record<string, string> = {
-  "7 * * * *": "atlantis.yml",
+  "7,37 * * * *": "atlantis.yml",
   "45 0 * * *": "nightly.yml",
 };
 

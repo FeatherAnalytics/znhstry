@@ -37,9 +37,9 @@ cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under
 cd pipeline  && uv run python -m znhstry archive      # push data/raw to R2 under raw/
 ```
 
-**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the hourly
-Atlantis job at :07 by the same Worker.** GitHub's own `schedule:` lines stay as fallbacks;
-GitHub has been firing the 02:30 cron around 07:20 and dropping the hourly one entirely. The Atlantis gate makes its doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
+**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the half-hourly
+Atlantis job at :07 and :37 by the same Worker.** GitHub's own `schedule:` lines stay as fallbacks;
+GitHub has been firing the 02:30 cron around 07:20 and dropping the Atlantis one entirely. The Atlantis gate makes its doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
 
 Other steps:
 

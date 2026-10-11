@@ -1,18 +1,18 @@
-name: Hourly Atlantis leaderboard
+name: Half-hourly Atlantis leaderboard
 
 # One page from the game's monthly tournament, written under `raw/atlantis/` in the
-# bucket, then published to `global/atlantis/` so the site updates hourly while a
+# bucket, then published to `global/atlantis/` so the site updates every half hour while a
 # tournament runs. The rest of the site is the nightly's.
 #
-# ## Why hourly all month, with a gate, and not a day-of-month cron
+# ## Why every half hour all month, with a gate, and not a day-of-month cron
 #
 # The tournament opens at 00:00 UTC on the 1st and runs somewhere between one and seven
 # days. A cron pinned to a day range would either miss the tail of a long tournament or
 # spend most of a short one fetching a page that says it is over. So the schedule fires
-# every hour, and the first step decides whether there is anything to do.
+# every half hour, and the first step decides whether there is anything to do.
 #
 # The Python step writes `next_run_at` into `state.json` after every collection: the next
-# hour while the tournament is live, the 1st of the next month once it has ended. The
+# half hour while the tournament is live, the 1st of the next month once it has ended. The
 # first run at or after the end time is the one that collects the final standings, and
 # the gate keeps the runner idle for the rest of the month after that.
 #
@@ -20,8 +20,8 @@ name: Hourly Atlantis leaderboard
 #
 # `state.json` is archived to the bucket's public URL with `Cache-Control: no-store`, so
 # the gate can read it with no credentials, no checkout and no Python environment. An
-# idle hour costs a few seconds of runner time and one request. `--prefix atlantis/` on
-# restore and archive means a live hour moves only this folder, never the 278 MB raw
+# idle run costs a few seconds of runner time and one request. `--prefix atlantis/` on
+# restore and archive means a live run moves only this folder, never the 278 MB raw
 # layer.
 #
 # ## Why the concurrency group is its own
@@ -29,7 +29,7 @@ name: Hourly Atlantis leaderboard
 # This job is the only writer of `raw/atlantis/`. A full `archive` with no `--prefix`
 # fences that subtree off in `upload.py`: it neither uploads nor sweeps it, so the nightly
 # cannot interleave with this job on those keys no matter when the two run. The group
-# only has to serialize this workflow with itself, so that two hourly runs delayed by
+# only has to serialize this workflow with itself, so that two runs delayed by
 # GitHub's scheduler do not restore and archive the same folder at once.
 #
 # ## What tells anyone it has stopped
@@ -39,15 +39,16 @@ name: Hourly Atlantis leaderboard
 # before it does that, and any push resets the clock.
 
 on:
-  # Two triggers for the same hour, on purpose. GitHub's scheduler drops this cron
+  # Two triggers for the same half hour, on purpose. GitHub's scheduler drops this cron
   # outright for hours at a time, so a Cloudflare Worker (trigger/) dispatches the
-  # workflow at :07 as well. When both fire, the gate below makes the second a no-op:
-  # `next_run_at` is the top of the hour after a collection, so a late GitHub run
-  # inside the same hour reads `run=false` and stops before checkout.
+  # workflow at :07 and :37 as well. When both fire, the gate below makes the second a
+  # no-op: `next_run_at` is the next :00 or :30 after a collection, so a late GitHub run
+  # inside the same half hour reads `run=false` and stops before checkout.
   schedule:
-    # :07 rather than :00. GitHub drifts scheduled runs, and a run that fires a little
-    # before the hour reads the previous hour's page as if it were this one.
-    - cron: "7 * * * *"
+    # :07 and :37 rather than :00 and :30. GitHub drifts scheduled runs, and a run that
+    # fires a little before the boundary reads the previous half hour's page as if it
+    # were this one.
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -76,11 +77,11 @@ jobs:
 
     steps:
       # Before checkout, on purpose: plain bash against the public bucket, so an idle
-      # hour is over in seconds.
+      # run is over in seconds.
       #
       # Only a 404 means "nothing has ever been collected, so run". Any other failure is
       # a broken origin, not an empty one, and the step fails red: treating it as a first
-      # run would scrape the game's server every hour for the rest of the month. A 200
+      # run would scrape the game's server every half hour for the rest of the month. A 200
       # with no readable `next_run_at` still runs, because a bad state file must not idle
       # the job until the 1st.
       #
@@ -140,7 +141,7 @@ jobs:
 
       # Skipped only when the collection step fails, which a failed HTTP request does. A
       # layout the parser cannot read is caught in Python: it writes a `state.json` with a
-      # retry time and exits 0, so that case archives and the next hour tries again.
+      # retry time and exits 0, so that case archives and the next run tries again.
       - name: Archive Atlantis data
         if: steps.gate.outputs.run == 'true'
         working-directory: pipeline

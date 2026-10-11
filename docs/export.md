@@ -268,7 +268,7 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
   what to fetch. Without R2 credentials `restore` reads it over plain HTTP from
   `PUBLIC_DATA_ORIGIN` and refuses any body whose MD5 does not match; a truncated Parquet
   file decodes into plausible rows for however many arrived, and nothing downstream would
-  notice. `tests/test_restore_public.py` pins the refusal. Both the nightly and the hourly
+  notice. `tests/test_restore_public.py` pins the refusal. Both the nightly and the half-hourly
   Atlantis job rewrite the manifest, each from a complete listing, so whichever runs last
   leaves it whole.
 - **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and

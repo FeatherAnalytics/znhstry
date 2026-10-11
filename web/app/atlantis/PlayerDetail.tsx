@@ -174,7 +174,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       <BattleReports playerName={playerName} month={month} />
 
       <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 12 }}>
-        Hourly observations; a rate is launches gained between observations.
+        Half-hourly observations; a rate is launches gained between observations, per hour.
       </div>
     </div>
   );

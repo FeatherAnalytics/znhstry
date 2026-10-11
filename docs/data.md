@@ -11,7 +11,7 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
-| `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | hourly, tournament days only |
+| `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 30 minutes, tournament days only |
 | `web.archive.org` | cached copies of the Atlantis page | one-off, 31 snapshots 2019-07 to 2026-06 |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
@@ -96,24 +96,24 @@ Parquet tables under `data/raw/atlantis/`, which R2 holds under `raw/atlantis/` 
 
 **The schedule is read off the page, not configured.** A tournament starts 00:00 UTC on the
 1st of each month and the page states `Stacking Days: N  Battle Days: M`; the end is start
-plus N+M days. The job fetches once an hour while a tournament is running and not at all
+plus N+M days. The job fetches every half hour while a tournament is running and not at all
 between them. The first run at or after the end is the final pull. A `state.json` beside the
 data carries `next_run_at`, and the workflow's gate reads it from the public bucket before
-deciding whether to run, so an idle hour costs one small read and no request to the game.
+deciding whether to run, so an idle run costs one small read and no request to the game.
 The gate fails the run when `DATA_ORIGIN` is unset or the state file returns anything but
-200 or 404, so a broken origin cannot turn into an hourly scrape between tournaments.
+200 or 404, so a broken origin cannot turn into a half-hourly scrape between tournaments.
 
-**A Cloudflare Worker dispatches the hourly workflow, because GitHub's scheduler does not.**
+**A Cloudflare Worker dispatches the Atlantis workflow, because GitHub's scheduler does not.**
 GitHub's cron skipped the Atlantis schedule outright for hours at a time and runs the nightly
 about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
-`scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and on `nightly.yml`
+`scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and :37 and on `nightly.yml`
 at 00:45 UTC, deployed by `deploy-trigger.yml`. Both workflows keep their own `schedule:`
-as the fallback. The Atlantis gate reads `next_run_at`, the top of the hour after a collection, so the second run of an hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
+as the fallback. The Atlantis gate reads `next_run_at`, the next :00 or :30 after a collection, so the second run of a half hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
 Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.
 
-**The hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite an hour of rows or delete keys it never fetched.
+**The half-hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite collected rows or delete keys it never fetched.
 
 **The banner names the winner, and only after the end.** During the battle the page's
 `main-banner` h1 reads "The battle for Atlantis is under way."; afterwards it reads "The
@@ -140,7 +140,7 @@ on its formation zones, not from position.
 - **`CubesAllowed`** is true when the zone's rule text that month says use of refresh and
   recharge is allowed. Rules are per position, so `Swarm 1` and `Legion 1` share one.
 - **Counts use a plain space for thousands**, the same as the battle reports.
-- **One request an hour and no retries in a run.** It is the game's live server.
+- **One request every half hour and no retries in a run.** It is the game's live server.
 
 **`Source` is `'portal'` for rows from the live page and `'wayback'` for rows from the Internet Archive.** The `wayback` command is rerunnable; the merge is keyed so re-ingesting a snapshot is a no-op. Formation zones in 2021-era snapshots were named `Swarm Grunt`, `Legion Melee` etc. rather than `S DEF SHOCK`; `_triangle_faction` recognizes both the letter prefix and the full faction-word prefix. When a triangle has no formation zone (every December so far, and 2021-01) the faction is read from the page's own leaderboard, unanimously over at least three of its six names. A wayback month has one observation per snapshot, so it has no intervals.
 

@@ -54,7 +54,7 @@ jobs:
         working-directory: web
         env:
           NEXT_PUBLIC_DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
-          NEXT_PUBLIC_CARTO_API_KEY: ${{ vars.CARTO_API_KEY }}
+          NEXT_PUBLIC_CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
 
       # The token needs Workers Scripts:Edit, Workers Routes:Edit and Zone DNS:Edit on
       # znhstry.com - the last two so the custom-domain route in wrangler.jsonc can

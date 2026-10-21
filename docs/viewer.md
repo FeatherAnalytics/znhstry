@@ -228,7 +228,7 @@ Other behaviour worth keeping:
 
 ## There is a real basemap under the dots
 
-CARTO's `dark_all` raster tiles, via a deck.gl `TileLayer`. An optional API key (`NEXT_PUBLIC_CARTO_API_KEY` in `.env`/`.env.example`, passed by `deploy.yml` from the `CARTO_API_KEY` repository variable) removes the watermark CARTO stamps on unauthenticated tiles. It is drawn
+CARTO's `dark_all` raster tiles, via a deck.gl `TileLayer`. An optional API key (`NEXT_PUBLIC_CARTO_API_KEY` in `.env`/`.env.example`, passed by `deploy.yml` from the `CARTO_API_KEY` repository secret) removes the watermark CARTO stamps on unauthenticated tiles. It is drawn
 dark precisely so data sits on top rather than fighting it.
 
 Admin borders are not orientation. With the basemap you get coastlines, water, roads and

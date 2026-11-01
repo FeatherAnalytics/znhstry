@@ -18,7 +18,7 @@ import {
   type DerivedTournamentSummary,
   type AnyTournament,
 } from "./lib";
-import Dashboard from "./Dashboard";
+import Dashboard, { type TournamentView } from "./Dashboard";
 import DerivedDashboard from "./DerivedDashboard";
 import PlayerDetail from "./PlayerDetail";
 import ZoneDetail from "./ZoneDetail";
@@ -48,8 +48,49 @@ const activeBtnStyle: CSSProperties = {
   background: "var(--hairline)",
 };
 
-type Tab = "dashboard" | "history" | "alltime" | "factions";
-const VALID_TABS = new Set<string>(["dashboard", "history", "alltime", "factions"]);
+const subTabStyle: CSSProperties = {
+  padding: "10px 4px",
+  marginBottom: -1,
+  borderBottom: "2px solid transparent",
+  color: "var(--text-dim)",
+  cursor: "pointer",
+};
+
+const activeSubTabStyle: CSSProperties = {
+  ...subTabStyle,
+  borderBottomColor: "var(--text)",
+  color: "var(--text)",
+};
+
+type Tab = "tournament" | "history";
+type HistoryView = "tournaments" | "factions" | "players";
+
+const TOURNAMENT_VIEWS: [TournamentView, string][] = [["factions", "Factions"], ["players", "Players"], ["zones", "Zones"]];
+// Battle-report reconstructions carry no launch series, so there is nothing for a Factions view to chart.
+const DERIVED_VIEWS = TOURNAMENT_VIEWS.filter(([v]) => v !== "factions");
+const HISTORY_VIEWS: [HistoryView, string][] = [["tournaments", "Tournaments"], ["factions", "Factions"], ["players", "Players"]];
+
+// Links shared before the two-level layout carry tab=dashboard|history|alltime|factions.
+function resolveNav(tab: string | null, view: string | null): { tab: Tab; view: string } {
+  if (tab === "alltime") return { tab: "history", view: "players" };
+  if (tab === "factions") return { tab: "history", view: "factions" };
+  if (tab === "history") {
+    return { tab, view: HISTORY_VIEWS.some(([v]) => v === view) ? view! : "tournaments" };
+  }
+  return { tab: "tournament", view: TOURNAMENT_VIEWS.some(([v]) => v === view) ? view! : "players" };
+}
+
+function SubTabs({ views, active, onSelect }: { views: [string, string][]; active: string; onSelect: (v: string) => void }) {
+  return (
+    <nav style={{ display: "flex", gap: 20, padding: "0 16px", borderBottom: "1px solid var(--hairline)", borderTop: "1px solid var(--hairline)" }}>
+      {views.map(([v, label]) => (
+        <button key={v} type="button" onClick={() => onSelect(v)} style={active === v ? activeSubTabStyle : subTabStyle}>
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export default function AtlantisPage() {
   const searchParams = useSearchParams();
@@ -62,8 +103,7 @@ export default function AtlantisPage() {
 
   const selectedMonth = searchParams.get("t");
   const playerParam = searchParams.get("player");
-  const rawTab = searchParams.get("tab") ?? "dashboard";
-  const tabParam: Tab = VALID_TABS.has(rawTab) ? (rawTab as Tab) : "dashboard";
+  const nav = resolveNav(searchParams.get("tab"), searchParams.get("view"));
 
   const setParam = useCallback(
     (key: string, value: string | null) => {
@@ -140,6 +180,7 @@ export default function AtlantisPage() {
   const onPlayerClose = () => setParam("player", null);
   const onZoneClick = (key: string) => setParam("zone", key);
   const onZoneClose = () => setParam("zone", null);
+  const selectView = (view: string) => setParams({ tab: nav.tab === "tournament" ? null : nav.tab, view, player: null, zone: null });
 
   const scheduleText = selectedTournament
     ? `Stacking ${selectedTournament.stacking_days}d, battle ${selectedTournament.battle_days}d`
@@ -156,7 +197,20 @@ export default function AtlantisPage() {
           <SiteNav />
         </div>
 
-        {allTournaments.length > 1 ? (
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["tournament", "history"] as Tab[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setParams({ tab: tab === "tournament" ? null : tab, view: null, player: null, zone: null })}
+              style={nav.tab === tab ? activeBtnStyle : btnStyle}
+            >
+              {tab === "tournament" ? "Tournament" : "All time"}
+            </button>
+          ))}
+        </div>
+
+        {nav.tab === "tournament" && allTournaments.length > 1 ? (
           <select
             value={resolvedMonth ?? ""}
             onChange={(e) => setParam("t", e.target.value)}
@@ -170,20 +224,7 @@ export default function AtlantisPage() {
           </select>
         ) : null}
 
-        <div style={{ display: "flex", gap: 6 }}>
-          {(["dashboard", "history", "alltime", "factions"] as Tab[]).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setParams({ tab: tab === "dashboard" ? null : tab, player: null, zone: null })}
-              style={tabParam === tab ? activeBtnStyle : btnStyle}
-            >
-              {tab === "dashboard" ? "Leaderboard" : tab === "history" ? "History" : tab === "alltime" ? "Players" : "Factions"}
-            </button>
-          ))}
-        </div>
-
-        {scheduleText ? (
+        {nav.tab === "tournament" && scheduleText ? (
           <span style={{ color: "var(--text-dim)", marginLeft: "auto" }}>{scheduleText}</span>
         ) : null}
       </header>
@@ -192,13 +233,20 @@ export default function AtlantisPage() {
         <div style={{ padding: 16, color: "var(--legion)" }}>{error}</div>
       ) : loading ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading…</div>
-      ) : tabParam === "dashboard" && derivedMonth && derivedTournament ? (
-        <DerivedDashboard month={derivedMonth} tournament={derivedTournament} />
-      ) : tabParam === "dashboard" && boardMonth && boardTournament ? (
+      ) : nav.tab === "tournament" && derivedMonth && derivedTournament ? (
+        <DerivedDashboard
+          month={derivedMonth}
+          tournament={derivedTournament}
+          view={nav.view as TournamentView}
+          subNav={<SubTabs views={DERIVED_VIEWS} active={nav.view === "factions" ? "players" : nav.view} onSelect={selectView} />}
+        />
+      ) : nav.tab === "tournament" && boardMonth && boardTournament ? (
         <>
           <Dashboard
             month={boardMonth}
             tournament={boardTournament}
+            view={nav.view as TournamentView}
+            subNav={<SubTabs views={TOURNAMENT_VIEWS} active={nav.view} onSelect={selectView} />}
             onPlayerClick={onPlayerClick}
             onZoneClick={onZoneClick}
           />
@@ -220,12 +268,17 @@ export default function AtlantisPage() {
             />
           ) : null}
         </>
-      ) : tabParam === "history" && index ? (
-        <History index={index} onMonthClick={(m) => setParams({ t: m, tab: null })} />
-      ) : tabParam === "alltime" && index ? (
-        <AllTime index={index} />
-      ) : tabParam === "factions" && index ? (
-        <Factions index={index} />
+      ) : nav.tab === "history" && index ? (
+        <>
+          <SubTabs views={HISTORY_VIEWS} active={nav.view} onSelect={selectView} />
+          {nav.view === "players" ? (
+            <AllTime index={index} />
+          ) : nav.view === "factions" ? (
+            <Factions index={index} />
+          ) : (
+            <History index={index} onMonthClick={(m) => setParams({ t: m, tab: null, view: null })} />
+          )}
+        </>
       ) : !monthData ? (
         <div style={{ padding: 16, color: "var(--text-dim)" }}>Loading month…</div>
       ) : null}

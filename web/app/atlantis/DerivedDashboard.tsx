@@ -1,6 +1,7 @@
 "use client";
 
-import { type CSSProperties } from "react";
+import { type CSSProperties, type ReactNode } from "react";
+import type { TournamentView } from "./Dashboard";
 import {
   factionColor,
   formatDate,
@@ -16,7 +17,6 @@ interface Props {
 }
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
-const divider: CSSProperties = { borderTop: "1px solid var(--hairline)", margin: 0 };
 
 const cellStyle: CSSProperties = {
   padding: "12px 10px",
@@ -190,17 +190,13 @@ function PlayersTable({ month }: { month: DerivedMonthPayload }) {
   );
 }
 
-export default function DerivedDashboard({ month, tournament }: Props) {
+export default function DerivedDashboard({ month, tournament, view, subNav }: Props & { view: TournamentView; subNav: ReactNode }) {
   return (
     <>
       <Placements month={month} tournament={tournament} />
-      <hr style={divider} />
+      {subNav}
       <div style={section}>
-        <ZonesTable month={month} />
-      </div>
-      <hr style={divider} />
-      <div style={section}>
-        <PlayersTable month={month} />
+        {view === "zones" ? <ZonesTable month={month} /> : <PlayersTable month={month} />}
       </div>
     </>
   );

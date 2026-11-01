@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { MultiSeries, type Series } from "@/components/charts/MultiSeries";
 import {
   parseObsTimestamps,
@@ -17,15 +17,18 @@ import {
 import Leaderboard from "./Leaderboard";
 import ZoneCards from "./ZoneCards";
 
+export type TournamentView = "factions" | "players" | "zones";
+
 interface Props {
   month: MonthPayload;
   tournament: TournamentSummary;
+  view: TournamentView;
+  subNav: ReactNode;
   onPlayerClick: (faction: string, name: string) => void;
   onZoneClick: (key: string) => void;
 }
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
-const divider: CSSProperties = { borderTop: "1px solid var(--hairline)", margin: 0 };
 
 function factionTotalBots(month: MonthPayload, faction: string): number {
   const key = faction.toLowerCase() as "legion" | "swarm" | "faceless";
@@ -159,22 +162,24 @@ function FactionCharts({ month, tournament }: { month: MonthPayload; tournament:
   );
 }
 
-export default function Dashboard({ month, tournament, onPlayerClick, onZoneClick }: Props) {
+export default function Dashboard({ month, tournament, view, subNav, onPlayerClick, onZoneClick }: Props) {
   const obsTs = useMemo(() => parseObsTimestamps(month.observations), [month.observations]);
 
   return (
     <>
       <Placements month={month} tournament={tournament} />
-      <hr style={divider} />
-      <FactionCharts month={month} tournament={tournament} />
-      <hr style={divider} />
-      <div style={section}>
-        <Leaderboard month={month} obsTimestamps={obsTs} onPlayerClick={onPlayerClick} />
-      </div>
-      <hr style={divider} />
-      <div style={section}>
-        <ZoneCards month={month} obsTimestamps={obsTs} onZoneClick={onZoneClick} />
-      </div>
+      {subNav}
+      {view === "factions" ? (
+        <FactionCharts month={month} tournament={tournament} />
+      ) : view === "zones" ? (
+        <div style={section}>
+          <ZoneCards month={month} obsTimestamps={obsTs} onZoneClick={onZoneClick} />
+        </div>
+      ) : (
+        <div style={section}>
+          <Leaderboard month={month} obsTimestamps={obsTs} onPlayerClick={onPlayerClick} />
+        </div>
+      )}
     </>
   );
 }

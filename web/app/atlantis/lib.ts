@@ -269,6 +269,28 @@ export function computePerHourRates(
   return result;
 }
 
+/** A faction's bots across every zone, at each observation. */
+export function factionBotTotals(month: MonthPayload, faction: string): number[] {
+  const key = faction.toLowerCase() as "legion" | "swarm" | "faceless";
+  const totals: number[] = new Array(month.observations.length).fill(0);
+  for (const zone of Object.values(month.zones)) {
+    // A null is a zone we did not read, not bots leaving it. Counting it as zero
+    // would chart a collapse and a rebound that never happened.
+    let last = 0;
+    for (let i = 0; i < totals.length; i++) {
+      last = zone[key][i] ?? last;
+      totals[i] += last;
+    }
+  }
+  return totals;
+}
+
+export function perHourDeltas(values: (number | null)[], obsTs: number[]): (number | null)[] {
+  const result: (number | null)[] = new Array(values.length).fill(null);
+  for (const iv of deriveIntervals(values, obsTs)) result[iv.index] = iv.perHour;
+  return result;
+}
+
 export const FACTION_ORDER = ["Legion", "Swarm", "Faceless"] as const;
 
 export interface DerivedTournamentSummary {

@@ -16,9 +16,15 @@ interface Props {
   labelOf: (x: number) => string;
   height?: number;
   unit?: string;
+  /** For a measure that crosses zero: the axis extends below it and negative values are drawn. */
+  signed?: boolean;
 }
 
 const PAD = { top: 10, right: 12, bottom: 26, left: 52 };
+const MIN_TICK_GAP = 12;
+
+const isPositive = (v: number) => v > 0;
+const isNonZero = (v: number) => v !== 0;
 
 // A zero breaks the line like a missing value does: a run of zeros reads as
 // "nothing happened" and drawing it along the axis buries the series that did
@@ -27,12 +33,13 @@ export function linePath(
   values: (number | null)[],
   px: (i: number) => number,
   py: (v: number) => number,
+  isDrawn: (v: number) => boolean = isPositive,
 ): { d: string; dots: { x: number; y: number }[] } {
   let d = "";
   const dots: { x: number; y: number }[] = [];
   const isPoint = (i: number) => {
     const v = values[i];
-    return v != null && v > 0;
+    return v != null && isDrawn(v);
   };
   for (let i = 0; i < values.length; i++) {
     if (!isPoint(i)) continue;
@@ -46,14 +53,16 @@ export function linePath(
 }
 
 const compact = (n: number): string =>
-  n >= 1_000_000
-    ? `${(n / 1_000_000).toFixed(1)}M`
-    : n >= 1_000
-      ? `${(n / 1_000).toFixed(n < 10_000 ? 1 : 0)}k`
-      : `${Math.round(n)}`;
+  n < 0
+    ? `-${compact(-n)}`
+    : n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(1)}M`
+      : n >= 1_000
+        ? `${(n / 1_000).toFixed(n < 10_000 ? 1 : 0)}k`
+        : `${Math.round(n)}`;
 
 export function MultiSeries(props: Props) {
-  const { x, series, title, subtitle, labelOf, height = 200, unit = "" } = props;
+  const { x, series, title, subtitle, labelOf, height = 200, unit = "", signed = false } = props;
   const svg = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -61,25 +70,28 @@ export function MultiSeries(props: Props) {
   const plotWidth = width - PAD.left - PAD.right;
   const plotHeight = height - PAD.top - PAD.bottom;
   const n = x.length;
+  const isDrawn = signed ? isNonZero : isPositive;
 
-  const { top, xMin, xSpan, paths } = useMemo(() => {
+  const { top, bottom, xMin, xSpan, paths } = useMemo(() => {
     let top = 1;
+    let bottom = 0;
     for (const s of series) {
       for (let i = 0; i < n; i++) {
         const v = s.values[i];
         if (v !== null && v > top) top = v;
+        if (signed && v !== null && v < bottom) bottom = v;
       }
     }
     const xMin = n ? x[0] : 0;
     const xSpan = Math.max(1, (n ? x[n - 1] : 1) - xMin);
 
     const px = (i: number) => PAD.left + ((x[i] - xMin) / xSpan) * plotWidth;
-    const py = (v: number) => PAD.top + plotHeight - (v / top) * plotHeight;
+    const py = (v: number) => PAD.top + plotHeight - ((v - bottom) / (top - bottom)) * plotHeight;
 
-    const paths = series.map((s) => linePath(s.values.slice(0, n), px, py));
+    const paths = series.map((s) => linePath(s.values.slice(0, n), px, py, isDrawn));
 
-    return { top, xMin, xSpan, paths };
-  }, [x, series, n, plotWidth, plotHeight]);
+    return { top, bottom, xMin, xSpan, paths };
+  }, [x, series, n, plotWidth, plotHeight, signed, isDrawn]);
 
   const onMove = (event: React.MouseEvent) => {
     const box = svg.current?.getBoundingClientRect();
@@ -100,8 +112,11 @@ export function MultiSeries(props: Props) {
   };
 
   const xOf = (i: number) => PAD.left + ((x[i] - xMin) / xSpan) * plotWidth;
-  const yOf = (v: number) => PAD.top + plotHeight - (v / top) * plotHeight;
-  const ticks = [0, 0.5, 1].map((f) => top * f);
+  const yOf = (v: number) => PAD.top + plotHeight - ((v - bottom) / (top - bottom)) * plotHeight;
+  // A small excursion past zero would print its label on top of zero's.
+  const ticks = bottom < 0
+    ? [bottom, 0, top].filter((t) => t === 0 || Math.abs(yOf(t) - yOf(0)) >= MIN_TICK_GAP)
+    : [0, top / 2, top];
 
   return (
     <figure style={{ margin: 0 }}>
@@ -130,7 +145,7 @@ export function MultiSeries(props: Props) {
               x2={width - PAD.right}
               y1={yOf(t)}
               y2={yOf(t)}
-              stroke="var(--hairline)"
+              stroke={t === 0 && bottom < 0 ? "var(--text-dim)" : "var(--hairline)"}
               strokeWidth={1}
             />
             <text
@@ -166,7 +181,7 @@ export function MultiSeries(props: Props) {
             />
             {series.map((s) => {
               const v = s.values[hover];
-              if (v === null || v <= 0) return null;
+              if (v === null || !isDrawn(v)) return null;
               return (
                 <circle
                   key={s.label}

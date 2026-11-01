@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { MultiSeries, type Series } from "@/components/charts/MultiSeries";
 import {
   formatObs,
@@ -78,6 +78,13 @@ function formatDelta(n: number): string {
 
 export default function ZoneDetail({ zoneKey, month, obsTimestamps, onClose }: Props) {
   const data = month.zones[zoneKey];
+  const root = useRef<HTMLDivElement>(null);
+
+  // This renders below the whole zone list, so without the scroll a click on a
+  // row shows no change on screen.
+  useEffect(() => {
+    root.current?.scrollIntoView({ block: "start" });
+  }, [zoneKey]);
 
   const series: Series[] = useMemo(
     () =>
@@ -96,13 +103,24 @@ export default function ZoneDetail({ zoneKey, month, obsTimestamps, onClose }: P
     [data],
   );
 
+  const deltaSeries: Series[] = useMemo(
+    () =>
+      series.map((s) => {
+        const key = s.label.toLowerCase() as "legion" | "swarm" | "faceless";
+        const values: (number | null)[] = new Array(obsTimestamps.length).fill(null);
+        for (const d of deltas) values[d.index] = d[key];
+        return { ...s, values };
+      }),
+    [series, deltas, obsTimestamps.length],
+  );
+
   if (!data) return null;
 
   const lastIdx = month.observations.length - 1;
   const holder = holderOf(data, lastIdx);
 
   return (
-    <div style={section}>
+    <div ref={root} style={section}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
         <button type="button" onClick={onClose} style={{ color: "var(--text-dim)", cursor: "pointer", background: "none", border: "none", fontSize: 16 }}>✕</button>
         <span className="display" style={{ fontSize: 16 }}>{zoneKey}</span>
@@ -113,8 +131,18 @@ export default function ZoneDetail({ zoneKey, month, obsTimestamps, onClose }: P
         ) : null}
       </div>
 
-      <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Zone counts</div>
-      <MultiSeries x={obsTimestamps} series={series} title="" labelOf={formatObs} />
+      <div className="chart-pairs">
+        <div>
+          <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Zone counts</div>
+          <MultiSeries x={obsTimestamps} series={series} title="" labelOf={formatObs} />
+        </div>
+        {deltas.length > 0 ? (
+          <div>
+            <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Bot count delta</div>
+            <MultiSeries x={obsTimestamps} series={deltaSeries} title="" labelOf={formatObs} signed />
+          </div>
+        ) : null}
+      </div>
 
       {deltas.length > 0 ? (
         <>

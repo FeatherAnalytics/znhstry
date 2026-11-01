@@ -9,13 +9,15 @@ import {
   factionColor,
   factionHex,
   computePerHourRates,
+  factionBotTotals,
+  perHourDeltas,
   compact,
   FACTION_ORDER,
   type MonthPayload,
   type TournamentSummary,
 } from "./lib";
 import Leaderboard from "./Leaderboard";
-import ZoneCards from "./ZoneCards";
+import ZoneTables from "./ZoneTables";
 
 export type TournamentView = "factions" | "players" | "zones";
 
@@ -30,18 +32,6 @@ interface Props {
 
 const section: CSSProperties = { padding: "16px 16px 24px" };
 
-function factionTotalBots(month: MonthPayload, faction: string): number {
-  const key = faction.toLowerCase() as "legion" | "swarm" | "faceless";
-  let total = 0;
-  for (const zone of Object.values(month.zones)) {
-    const arr = zone[key];
-    for (let i = arr.length - 1; i >= 0; i--) {
-      if (arr[i] !== null) { total += arr[i]!; break; }
-    }
-  }
-  return total;
-}
-
 function Placements({ month, tournament }: { month: MonthPayload; tournament: TournamentSummary }) {
   const label = tournament.is_finished ? "Final" : "If standings held";
   return (
@@ -54,7 +44,7 @@ function Placements({ month, tournament }: { month: MonthPayload; tournament: To
             <span style={{ width: 10, height: 10, borderRadius: 2, background: factionColor(faction) }} />
             <span style={{ fontWeight: 600 }}>{faction}</span>
             <span className="tabular" style={{ color: "var(--text-dim)" }}>
-              {zones} zones · {compact(factionTotalBots(month, faction))} bots
+              {zones} zones · {compact(factionBotTotals(month, faction).at(-1) ?? 0)} bots
             </span>
           </div>
         ))}
@@ -143,21 +133,39 @@ function FactionCharts({ month, tournament }: { month: MonthPayload; tournament:
       values: computePerHourRates(month.factions[f].launches_gained, obsTs),
     }));
 
+  const botSeries: Series[] =
+    FACTION_ORDER.filter((f) => month.factions[f]).map((f) => ({
+      label: f,
+      color: factionHex(f),
+      values: factionBotTotals(month, f),
+    }));
+
+  const botDeltaSeries: Series[] = botSeries.map((s) => ({
+    ...s,
+    values: perHourDeltas(s.values, obsTs),
+  }));
+
   return (
-    <div style={{ ...section, display: "flex", gap: 24, flexWrap: "wrap" }}>
-      <div style={{ flex: 1, minWidth: 280 }}>
-        <MultiSeries x={obsTs} series={launchesSeries} title="Faction launches" labelOf={formatObs} />
-      </div>
-      <div style={{ flex: 1, minWidth: 280 }}>
-        <MultiSeries
-          x={obsTs}
-          series={rateSeries}
-          title="Launches per hour"
-          subtitle="normalized by interval length"
-          labelOf={formatObs}
-          unit="/hr"
-        />
-      </div>
+    <div className="chart-pairs" style={section}>
+      <MultiSeries x={obsTs} series={launchesSeries} title="Faction launches" subtitle="running total" labelOf={formatObs} />
+      <MultiSeries
+        x={obsTs}
+        series={rateSeries}
+        title="Launches per hour"
+        subtitle="normalized by interval length"
+        labelOf={formatObs}
+        unit="/hr"
+      />
+      <MultiSeries x={obsTs} series={botSeries} title="Bot counts" subtitle="across all zones" labelOf={formatObs} />
+      <MultiSeries
+        x={obsTs}
+        series={botDeltaSeries}
+        title="Bot count delta per hour"
+        subtitle="normalized by interval length"
+        labelOf={formatObs}
+        unit="/hr"
+        signed
+      />
     </div>
   );
 }
@@ -173,7 +181,7 @@ export default function Dashboard({ month, tournament, view, subNav, onPlayerCli
         <FactionCharts month={month} tournament={tournament} />
       ) : view === "zones" ? (
         <div style={section}>
-          <ZoneCards month={month} obsTimestamps={obsTs} onZoneClick={onZoneClick} />
+          <ZoneTables month={month} obsTimestamps={obsTs} onZoneClick={onZoneClick} />
         </div>
       ) : (
         <div style={section}>

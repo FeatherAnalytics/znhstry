@@ -153,6 +153,136 @@ input[type="date"]:focus-visible {
   }
 }
 
+/* Two across when both charts stay readable, otherwise stacked. */
+.chart-pairs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(420px, calc(50% - 12px))), 1fr));
+  gap: 24px;
+}
+
+.zone-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 18px;
+}
+.zone-table caption {
+  text-align: left;
+  margin-bottom: 4px;
+}
+.zone-table th,
+.zone-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: middle;
+}
+.zone-table th {
+  font-weight: 400;
+  white-space: nowrap;
+}
+.zone-table tbody tr {
+  cursor: pointer;
+}
+.zone-table tbody tr:hover {
+  background: var(--ink-raised);
+}
+.zone-table abbr {
+  text-decoration: none;
+}
+.zone-table th:first-child {
+  width: 26%;
+}
+.zone-table-snapshot th:first-child {
+  width: auto;
+}
+.zone-table .zone-count {
+  width: 76px;
+  text-align: right;
+}
+.zone-table .zone-holder {
+  width: 84px;
+}
+.zone-table .zone-trend {
+  padding-left: 12px;
+}
+.zone-id {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.zone-key {
+  flex: none;
+  width: 92px;
+  padding: 0;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+}
+.zone-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.zone-holder-inline {
+  display: none;
+  font-size: 11px;
+}
+.zone-spark {
+  display: block;
+  width: 100%;
+  height: 44px;
+  overflow: visible;
+}
+@media (max-width: 640px) {
+  .zone-table th,
+  .zone-table td {
+    padding: 6px 4px;
+  }
+  .zone-table th:first-child {
+    width: auto;
+  }
+  .zone-table .zone-count {
+    width: 40px;
+    font-size: 11px;
+  }
+  .zone-table .zone-holder {
+    display: none;
+  }
+  .zone-table .zone-trend {
+    width: 26%;
+    padding-left: 8px;
+  }
+  /* "Faceless" does not fit a count column; the initial and its color carry it. */
+  .zone-table th.zone-count abbr {
+    display: inline-block;
+    width: 1.2em;
+    overflow: hidden;
+    letter-spacing: 0;
+    vertical-align: bottom;
+  }
+  .zone-spark {
+    height: 36px;
+  }
+  .zone-id {
+    flex-wrap: wrap;
+    gap: 0 8px;
+  }
+  .zone-key {
+    width: auto;
+  }
+  .zone-holder-inline {
+    display: inline;
+  }
+  .zone-name {
+    flex-basis: 100%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

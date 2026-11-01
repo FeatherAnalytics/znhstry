@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { linePath } from "@/components/charts/MultiSeries";
 import {
   deriveIntervals,
@@ -126,6 +126,13 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
 
 export default function PlayerDetail({ faction, playerName, month, obsTimestamps, onClose }: Props) {
   const data = month.players[faction]?.[playerName];
+  const root = useRef<HTMLDivElement>(null);
+
+  // This renders below the whole leaderboard, so without the scroll a click on a
+  // name shows no change on screen.
+  useEffect(() => {
+    root.current?.scrollIntoView({ block: "start" });
+  }, [faction, playerName]);
 
   const intervals = useMemo(
     () => (data ? deriveIntervals(data.launches, obsTimestamps) : []),
@@ -141,7 +148,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
   const color = factionHex(faction);
 
   return (
-    <div style={section}>
+    <div ref={root} style={section}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
         <button type="button" onClick={onClose} style={{ color: "var(--text-dim)", cursor: "pointer", background: "none", border: "none", fontSize: 16 }}>✕</button>
         <span className="display" style={{ fontSize: 16 }}>{playerName}</span>
@@ -157,7 +164,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Launches</div>
       <LaunchesCurve data={data.launches} obsTs={obsTimestamps} color={color} />
 
-      <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval (in coverage)</div>
+      <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval</div>
       <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />
       <span className="compact-footnote eyebrow" style={{ color: "var(--text-dim)", marginTop: 4, fontSize: 9 }}>
         Gains cover observed hours only
@@ -168,7 +175,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       <BattleReports playerName={playerName} month={month} />
 
       <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 12 }}>
-        Half-hourly observations; a rate is launches gained between observations, per hour.
+        Hourly launch trend, based on observed data. Labels mark the busiest intervals, as launches per hour.
       </div>
     </div>
   );

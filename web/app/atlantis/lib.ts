@@ -259,14 +259,12 @@ export function computePerHourRates(
   obsTs: number[],
 ): (number | null)[] {
   const result: (number | null)[] = new Array(raw.length).fill(null);
-  let prevIdx = -1;
-  for (let i = 0; i < raw.length; i++) {
+  // A gain at i is already measured against the observation before it, so the
+  // first gain has a rate too; waiting for a second one dropped it.
+  for (let i = 1; i < raw.length; i++) {
     if (raw[i] === null) continue;
-    if (prevIdx >= 0) {
-      const minutes = (obsTs[i] - obsTs[prevIdx]) / 60;
-      result[i] = minutes > 0 ? (raw[i]! / minutes) * 60 : 0;
-    }
-    prevIdx = i;
+    const minutes = (obsTs[i] - obsTs[i - 1]) / 60;
+    result[i] = minutes > 0 ? (raw[i]! / minutes) * 60 : 0;
   }
   return result;
 }

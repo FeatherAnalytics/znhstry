@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, type CSSProperties } from "react";
+import { linePath } from "@/components/charts/MultiSeries";
 import {
   deriveIntervals,
   formatObs,
@@ -39,7 +40,7 @@ function LaunchesCurve({ data, obsTs, color }: { data: (number | null)[]; obsTs:
   const plotW = WIDTH - PAD.left - PAD.right;
   const plotH = HEIGHT - PAD.top - PAD.bottom;
 
-  const { path, top, xMin, xSpan } = useMemo(() => {
+  const { line, top, xMin, xSpan } = useMemo(() => {
     let top = 1;
     for (const v of data) if (v !== null && v > top) top = v;
     const xMin = n > 0 ? obsTs[0] : 0;
@@ -48,15 +49,7 @@ function LaunchesCurve({ data, obsTs, color }: { data: (number | null)[]; obsTs:
     const px = (i: number) => PAD.left + ((obsTs[i] - xMin) / xSpan) * plotW;
     const py = (v: number) => PAD.top + plotH - (v / top) * plotH;
 
-    let path = "";
-    let drawing = false;
-    for (let i = 0; i < n; i++) {
-      const v = data[i];
-      if (v === null) { drawing = false; continue; }
-      path += `${drawing ? "L" : "M"}${px(i).toFixed(1)} ${py(v).toFixed(1)}`;
-      drawing = true;
-    }
-    return { path, top, xMin, xSpan };
+    return { line: linePath(data.slice(0, n), px, py), top, xMin, xSpan };
   }, [data, obsTs, n, plotW, plotH]);
 
   return (
@@ -70,7 +63,8 @@ function LaunchesCurve({ data, obsTs, color }: { data: (number | null)[]; obsTs:
           </g>
         );
       })}
-      <path d={path} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
+      <path d={line.d} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
+      {line.dots.map((p) => <circle key={p.x} cx={p.x} cy={p.y} r={2.5} fill={color} />)}
       {n > 0 ? (
         <>
           <text x={PAD.left} y={HEIGHT - 8} fontSize={9} fill="var(--text-dim)" className="tabular">{formatObs(obsTs[0])}</text>

@@ -1715,8 +1715,8 @@ def _build_factions_dict(
         idx = obs_index.get(key)
         if idx is None or faction not in result:
             continue
-        result[faction]["launches_gained"][idx] = int(lg)
-        result[faction]["active_players"][idx] = int(ap)
+        result[faction]["launches_gained"][idx] = None if lg is None else int(lg)
+        result[faction]["active_players"][idx] = None if ap is None else int(ap)
         result[faction]["players_on_board"][idx] = int(pob)
         result[faction]["launches_total"][idx] = int(lt)
 

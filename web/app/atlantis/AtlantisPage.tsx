@@ -51,7 +51,9 @@ const activeBtnStyle: CSSProperties = {
 const subTabStyle: CSSProperties = {
   padding: "10px 4px",
   marginBottom: -1,
-  borderBottom: "2px solid transparent",
+  borderBottomWidth: 2,
+  borderBottomStyle: "solid",
+  borderBottomColor: "transparent",
   color: "var(--text-dim)",
   cursor: "pointer",
 };
@@ -77,7 +79,7 @@ function resolveNav(tab: string | null, view: string | null): { tab: Tab; view: 
   if (tab === "history") {
     return { tab, view: HISTORY_VIEWS.some(([v]) => v === view) ? view! : "tournaments" };
   }
-  return { tab: "tournament", view: TOURNAMENT_VIEWS.some(([v]) => v === view) ? view! : "players" };
+  return { tab: "tournament", view: TOURNAMENT_VIEWS.some(([v]) => v === view) ? view! : "factions" };
 }
 
 function SubTabs({ views, active, onSelect }: { views: [string, string][]; active: string; onSelect: (v: string) => void }) {

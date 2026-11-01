@@ -186,8 +186,9 @@ models:
 
   - name: fct_atlantis_faction_hourly
     description: >
-      Grain: one row per tournament month, faction, and observation that has at
-      least one interval ending at it.
+      Grain: one row per tournament month, faction, and observation the faction
+      appears on the board. Interval columns are null at a faction's first
+      observation.
     columns:
       - name: tournament_month
         data_tests: [not_null]

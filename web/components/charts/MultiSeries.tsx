@@ -20,6 +20,31 @@ interface Props {
 
 const PAD = { top: 10, right: 12, bottom: 26, left: 52 };
 
+// A zero breaks the line like a missing value does: a run of zeros reads as
+// "nothing happened" and drawing it along the axis buries the series that did
+// move. A run of one point has no line to draw, so it comes back as a dot.
+export function linePath(
+  values: (number | null)[],
+  px: (i: number) => number,
+  py: (v: number) => number,
+): { d: string; dots: { x: number; y: number }[] } {
+  let d = "";
+  const dots: { x: number; y: number }[] = [];
+  const isPoint = (i: number) => {
+    const v = values[i];
+    return v != null && v > 0;
+  };
+  for (let i = 0; i < values.length; i++) {
+    if (!isPoint(i)) continue;
+    const x = px(i);
+    const y = py(values[i]!);
+    if (isPoint(i - 1)) d += `L${x.toFixed(1)} ${y.toFixed(1)}`;
+    else if (isPoint(i + 1)) d += `M${x.toFixed(1)} ${y.toFixed(1)}`;
+    else dots.push({ x, y });
+  }
+  return { d, dots };
+}
+
 const compact = (n: number): string =>
   n >= 1_000_000
     ? `${(n / 1_000_000).toFixed(1)}M`
@@ -51,20 +76,7 @@ export function MultiSeries(props: Props) {
     const px = (i: number) => PAD.left + ((x[i] - xMin) / xSpan) * plotWidth;
     const py = (v: number) => PAD.top + plotHeight - (v / top) * plotHeight;
 
-    const paths = series.map((s) => {
-      let d = "";
-      let drawing = false;
-      for (let i = 0; i < n; i++) {
-        const v = s.values[i];
-        if (v === null) {
-          drawing = false;
-          continue;
-        }
-        d += `${drawing ? "L" : "M"}${px(i).toFixed(1)} ${py(v).toFixed(1)}`;
-        drawing = true;
-      }
-      return d;
-    });
+    const paths = series.map((s) => linePath(s.values.slice(0, n), px, py));
 
     return { top, xMin, xSpan, paths };
   }, [x, series, n, plotWidth, plotHeight]);
@@ -134,18 +146,12 @@ export function MultiSeries(props: Props) {
           </g>
         ))}
 
-        {paths.map((d, i) =>
-          d ? (
-            <path
-              key={series[i].label}
-              d={d}
-              fill="none"
-              stroke={series[i].color}
-              strokeWidth={2}
-              strokeLinejoin="round"
-            />
-          ) : null,
-        )}
+        {paths.map(({ d, dots }, i) => (
+          <g key={series[i].label}>
+            {d ? <path d={d} fill="none" stroke={series[i].color} strokeWidth={2} strokeLinejoin="round" /> : null}
+            {dots.map((p) => <circle key={p.x} cx={p.x} cy={p.y} r={2.5} fill={series[i].color} />)}
+          </g>
+        ))}
 
         {hover !== null ? (
           <g>
@@ -160,7 +166,7 @@ export function MultiSeries(props: Props) {
             />
             {series.map((s) => {
               const v = s.values[hover];
-              if (v === null) return null;
+              if (v === null || v <= 0) return null;
               return (
                 <circle
                   key={s.label}

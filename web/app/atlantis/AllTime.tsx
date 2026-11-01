@@ -295,7 +295,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
   const cumVals = months.map(m => { cumMax += valMap.get(m) ?? 0; return cumMax; });
   const h = 240;
   const ph = h - 18;
-  const pts = cumVals.map((v, i) => `${i * step},${4 + ph - (v / cumMax) * ph}`).join(" ");
+  const pts = cumVals.flatMap((v, i) => (v > 0 ? [`${i * step},${4 + ph - (v / cumMax) * ph}`] : [])).join(" ");
   const halfY = 4 + ph - (0.5 * ph);
 
   return (

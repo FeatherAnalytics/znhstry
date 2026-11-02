@@ -153,6 +153,11 @@ input[type="date"]:focus-visible {
   }
 }
 
+/* A horizontal drag scrubs the chart; a vertical one still scrolls the page. */
+.chart-scrub {
+  touch-action: pan-y;
+}
+
 /* Two across when both charts stay readable, otherwise stacked. */
 .chart-pairs {
   display: grid;

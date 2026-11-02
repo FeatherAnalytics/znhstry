@@ -232,7 +232,7 @@ function FactionBarChart(props: { data: FactionMonthVal[]; label: string; allMon
         <div style={{ position: "absolute", top: `${((maxV - medianV) / maxV) * (h - 14)}px`, left: 0, right: 0, borderTop: "1px dashed var(--hairline)", pointerEvents: "none" }}>
           <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)", position: "absolute", left: 0, top: -8, background: "var(--ink)", padding: "0 4px", borderRadius: 2 }}>median {compact(medianV)}</span>
         </div>
-        <div ref={bar.ref} onPointerMove={bar.onPointerMove} onPointerLeave={bar.onPointerLeave}
+        <div ref={bar.ref} {...bar.handlers}
           style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
           {months.map((m, i) => {
             const entry = valMap.get(m);
@@ -287,7 +287,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
   const w = useWidth(containerRef);
   const months = allMonths ?? data.map(d => d.month);
   const step = w / Math.max(months.length - 1, 1);
-  const { hover, onPointerMove, onPointerLeave } = useChartHover(months.length, step);
+  const { hover, handlers } = useChartHover(months.length, step);
 
   if (data.length < 2) return null;
   const valMap = new Map(data.map(d => [d.month, d.value]));
@@ -302,7 +302,7 @@ function CumulativeLine({ data, label, allMonths }: { data: MonthVal[]; label: s
     <div style={{ flex: 1, minWidth: 0 }} ref={containerRef}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>{label}</div>
       <div style={{ position: "relative" }}>
-        <svg width={w} height={h} style={{ display: "block" }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
+        <svg width={w} height={h} style={{ display: "block" }} {...handlers}>
           <line x1={0} x2={w} y1={halfY} y2={halfY} stroke="var(--hairline)" strokeWidth={1} strokeDasharray="3,3" />
           <polyline points={pts} fill="none" stroke="var(--text)" strokeWidth={1.5} opacity={0.8} />
           {(() => {
@@ -382,27 +382,32 @@ function PlacementBars({ player }: { player: AllTimePlayer }) {
 }
 
 function YearBars({ data }: { data: { year: string; count: number }[] }) {
-  if (data.length === 0) return null;
   const currentYear = new Date().getUTCFullYear();
   const allYears: string[] = [];
   for (let y = 2014; y <= currentYear; y++) allYears.push(String(y));
+  const bar = useBarHover(allYears.length);
+  if (data.length === 0) return null;
   const countMap = new Map(data.map(d => [d.year, d.count]));
   const maxC = Math.max(...data.map(d => d.count), 1);
   const h = 160;
   return (
     <div style={{ flex: "1 1 320px", minWidth: 320 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 2 }}>Per year</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
-        {allYears.map(y => {
+      <div ref={bar.ref} {...bar.handlers} style={{ display: "flex", alignItems: "flex-end", gap: 2, height: h }}>
+        {allYears.map((y, i) => {
           const c = countMap.get(y) ?? 0;
           return (
-            <div key={y} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0", minWidth: 20 }}>
-              <div style={{ width: "80%", maxWidth: 20, height: c > 0 ? (c / maxC) * (h - 20) : 0, background: "var(--text-dim)", borderRadius: 1 }}
-                title={c > 0 ? `${y}: ${c}` : y} />
+            <div key={y} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0", minWidth: 20, opacity: bar.index != null && bar.index !== i ? 0.4 : 1 }}>
+              <div style={{ width: "80%", maxWidth: 20, height: c > 0 ? (c / maxC) * (h - 20) : 0, background: "var(--text-dim)", borderRadius: 1 }} />
               <span className="tabular" style={{ fontSize: 7, color: "var(--text-dim)" }}>{y}</span>
             </div>
           );
         })}
+      </div>
+      <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
+        {bar.index != null ? (
+          <><span style={{ fontWeight: 600 }}>{allYears[bar.index]}</span>: {countMap.get(allYears[bar.index]) ?? 0} tournaments</>
+        ) : null}
       </div>
     </div>
   );

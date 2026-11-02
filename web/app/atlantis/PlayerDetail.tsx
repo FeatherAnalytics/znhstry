@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
-import { linePath } from "@/components/charts/MultiSeries";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { MultiSeries } from "@/components/charts/MultiSeries";
+import { useChartPointer } from "@/components/charts/useChartPointer";
 import {
   deriveIntervals,
   formatObs,
@@ -22,7 +23,6 @@ interface Props {
 
 const PAD = { top: 10, right: 12, bottom: 26, left: 52 };
 const WIDTH = 640;
-const HEIGHT = 180;
 const BAR_HEIGHT = 100;
 
 const section: CSSProperties = {
@@ -35,61 +35,32 @@ function topIntervals(intervals: Interval[], count: number): Interval[] {
   return [...intervals].sort((a, b) => b.perHour - a.perHour).slice(0, count);
 }
 
-function LaunchesCurve({ data, obsTs, color }: { data: (number | null)[]; obsTs: number[]; color: string }) {
-  const n = obsTs.length;
-  const plotW = WIDTH - PAD.left - PAD.right;
-  const plotH = HEIGHT - PAD.top - PAD.bottom;
-
-  const { line, top, xMin, xSpan } = useMemo(() => {
-    let top = 1;
-    for (const v of data) if (v !== null && v > top) top = v;
-    const xMin = n > 0 ? obsTs[0] : 0;
-    const xSpan = Math.max(1, (n > 0 ? obsTs[n - 1] : 1) - xMin);
-
-    const px = (i: number) => PAD.left + ((obsTs[i] - xMin) / xSpan) * plotW;
-    const py = (v: number) => PAD.top + plotH - (v / top) * plotH;
-
-    return { line: linePath(data.slice(0, n), px, py), top, xMin, xSpan };
-  }, [data, obsTs, n, plotW, plotH]);
-
-  return (
-    <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} style={{ width: "100%", height: "auto" }} role="img" aria-label="Launches">
-      {[0, 0.5, 1].map((f) => {
-        const y = PAD.top + plotH - f * plotH;
-        return (
-          <g key={f}>
-            <line x1={PAD.left} x2={WIDTH - PAD.right} y1={y} y2={y} stroke="var(--hairline)" strokeWidth={1} />
-            <text x={PAD.left - 8} y={y + 3} textAnchor="end" fontSize={9} fill="var(--text-dim)" className="tabular">{compact(top * f)}</text>
-          </g>
-        );
-      })}
-      <path d={line.d} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" />
-      {line.dots.map((p) => <circle key={p.x} cx={p.x} cy={p.y} r={2.5} fill={color} />)}
-      {n > 0 ? (
-        <>
-          <text x={PAD.left} y={HEIGHT - 8} fontSize={9} fill="var(--text-dim)" className="tabular">{formatObs(obsTs[0])}</text>
-          <text x={WIDTH - PAD.right} y={HEIGHT - 8} fontSize={9} fill="var(--text-dim)" textAnchor="end" className="tabular">{formatObs(obsTs[n - 1])}</text>
-        </>
-      ) : null}
-    </svg>
-  );
-}
-
 function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: number[]; color: string }) {
   const n = obsTs.length;
-  if (!n || intervals.length === 0) return null;
-
   const plotW = WIDTH - PAD.left - PAD.right;
   const plotH = BAR_HEIGHT - PAD.top - 10;
   const xMin = obsTs[0];
   const xSpan = Math.max(1, obsTs[n - 1] - xMin);
-  const maxGain = Math.max(1, ...intervals.map((iv) => iv.gained));
-  const top3 = topIntervals(intervals, 3);
-
   const px = (i: number) => PAD.left + ((obsTs[i] - xMin) / xSpan) * plotW;
 
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const clearHover = useCallback(() => setHoverIdx(null), []);
+  const pointer = useChartPointer<SVGSVGElement>((event) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - box.left) / box.width) * WIDTH;
+    const next = intervals.findIndex((iv) => x <= px(iv.index));
+    setHoverIdx(next >= 0 ? next : intervals.length - 1);
+  }, clearHover);
+
+  if (!n || intervals.length === 0) return null;
+
+  const maxGain = Math.max(1, ...intervals.map((iv) => iv.gained));
+  const top3 = topIntervals(intervals, 3);
+  const hovered = hoverIdx !== null ? intervals[hoverIdx] : undefined;
+
   return (
-    <svg viewBox={`0 0 ${WIDTH} ${BAR_HEIGHT}`} style={{ width: "100%", height: "auto" }} role="img" aria-label="Gains per interval">
+    <>
+    <svg {...pointer} viewBox={`0 0 ${WIDTH} ${BAR_HEIGHT}`} style={{ width: "100%", height: "auto" }} role="img" aria-label="Gains per interval">
       {intervals.map((iv) => {
         const x1 = px(iv.prevIndex);
         const x2 = px(iv.index);
@@ -103,7 +74,7 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
               width={Math.max(2, x2 - x1 - 1)}
               height={barH}
               fill={color}
-              opacity={isTop ? 0.9 : 0.4}
+              opacity={iv === hovered ? 1 : isTop ? 0.9 : 0.4}
             />
             {isTop ? (
               <text
@@ -121,6 +92,16 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
         );
       })}
     </svg>
+    <div className="tabular" style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2, minHeight: 16 }}>
+      {hovered ? (
+        <>
+          {formatObs(obsTs[hovered.prevIndex])} to {formatObs(obsTs[hovered.index])}
+          <span style={{ color: "var(--text)", marginLeft: 8 }}>+{compact(hovered.gained)}</span>
+          <span style={{ marginLeft: 8 }}>{compact(hovered.perHour)}/hr</span>
+        </>
+      ) : null}
+    </div>
+    </>
   );
 }
 
@@ -162,7 +143,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       </div>
 
       <div className="display" style={{ fontSize: 11, marginBottom: 4 }}>Launches</div>
-      <LaunchesCurve data={data.launches} obsTs={obsTimestamps} color={color} />
+      <MultiSeries x={obsTimestamps} series={[{ label: "Launches", color, values: data.launches }]} title="" labelOf={formatObs} height={180} />
 
       <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval</div>
       <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />

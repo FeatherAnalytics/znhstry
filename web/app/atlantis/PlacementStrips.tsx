@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type PointerEvent } from "react";
+import { useBarHover } from "./useChartHover";
 import { factionHex, isDerived, type AnyTournament } from "./lib";
 
 function stripTitle(t: AnyTournament): string {
@@ -22,29 +22,11 @@ function yearGap(month: string): number {
 export default function PlacementStrips(props: { tournaments: AnyTournament[] }) {
   const sorted = [...props.tournaments].sort((a, b) => a.month.localeCompare(b.month));
   const labels = ["1st", "2nd", "3rd"];
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-
-  const onPointerMove = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    if (!ref.current) return;
-    const cx = e.clientX;
-    const children = ref.current.children;
-    let best = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < children.length && i < sorted.length; i++) {
-      const r = (children[i] as HTMLElement).getBoundingClientRect();
-      if (cx >= r.left && cx <= r.right) { best = i; break; }
-      const dist = Math.min(Math.abs(cx - r.left), Math.abs(cx - r.right));
-      if (dist < bestDist) { bestDist = dist; best = i; }
-    }
-    setHoverIdx(best >= 0 ? best : null);
-  }, [sorted.length]);
-
-  const onPointerLeave = useCallback(() => setHoverIdx(null), []);
+  const { index: hoverIdx, ref, handlers } = useBarHover(sorted.length);
   const hovered = hoverIdx != null ? sorted[hoverIdx] : null;
 
   return (
-    <div style={{ marginBottom: 16 }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
+    <div {...handlers} style={{ marginBottom: 16 }}>
       {labels.map((label, place) => (
         <div key={label} style={{ display: "flex", alignItems: "center", marginBottom: place < 2 ? 4 : 0 }}>
           <span className="eyebrow" style={{ width: 24, flexShrink: 0, fontSize: 10 }}>{label}</span>

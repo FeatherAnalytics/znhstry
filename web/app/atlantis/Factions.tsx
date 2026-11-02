@@ -137,7 +137,7 @@ function LineChart(props: LineChartProps) {
   const maxV = Math.max(...FACTIONS.flatMap(f => data.map((d, i) => getVal(d, f, i) ?? 0)), 1);
   const n = data.length;
   const step = w / Math.max(n - 1, 1);
-  const { hover, onPointerMove, onPointerLeave } = useChartHover(n, step);
+  const { hover, handlers } = useChartHover(n, step);
   const ph = height - 18;
 
   return (
@@ -145,7 +145,7 @@ function LineChart(props: LineChartProps) {
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
       <div style={{ position: "relative" }}>
         <span className="tabular" style={{ position: "absolute", top: 0, left: 0, fontSize: 8, color: "var(--text-dim)" }}>{compact(maxV)}</span>
-        <svg width={w} height={height} style={{ display: "block" }} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}>
+        <svg width={w} height={height} style={{ display: "block" }} {...handlers}>
           {FACTIONS.map(f => {
             const { segments, singles } = buildSegments(data, getVal, f, step, ph, maxV);
             return [
@@ -280,16 +280,22 @@ function Histogram({ values, label, rangeMin }: { values: number[]; label: strin
   const max = Math.max(...Object.values(counts), 1);
   const keys: number[] = [];
   for (let k = lo; k <= hi; k++) keys.push(k);
+  const { index: hoverIdx, ref: barRef, handlers } = useBarHover(keys.length);
   return (
     <div style={{ flex: 1, minWidth: 120 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 158 }}>
-        {keys.map(k => (
-          <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0" }}>
-            <div style={{ width: "100%", maxWidth: 24, height: ((counts[k] ?? 0) / max) * 140, background: "var(--text-dim)", borderRadius: 1 }} title={`${k}: ${counts[k] ?? 0}`} />
+      <div ref={barRef} {...handlers} style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 158 }}>
+        {keys.map((k, i) => (
+          <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "1 1 0", opacity: hoverIdx != null && hoverIdx !== i ? 0.4 : 1 }}>
+            <div style={{ width: "100%", maxWidth: 24, height: ((counts[k] ?? 0) / max) * 140, background: "var(--text-dim)", borderRadius: 1 }} />
             <span className="tabular" style={{ fontSize: 9, color: "var(--text-dim)" }}>{k}</span>
           </div>
         ))}
+      </div>
+      <div style={readoutStyle}>
+        {hoverIdx != null ? (
+          <><span style={{ fontWeight: 600 }}>{keys[hoverIdx]} days</span>: {counts[keys[hoverIdx]] ?? 0} tournaments</>
+        ) : null}
       </div>
     </div>
   );
@@ -336,7 +342,7 @@ function FactionHistogram({ data, field, label, perDay, bins }: { data: FM[]; fi
   const isZones = field === "zones";
   const entries = bucketEntries(data, field, perDay);
   const { buckets, bucketCount, min, step } = entries.length > 0 ? bucketize(entries, isZones, bins ?? 10) : { buckets: {}, bucketCount: 0, min: 0, step: 1 };
-  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(bucketCount);
+  const { index: hoverIdx, ref: barRef, handlers } = useBarHover(bucketCount);
 
   if (entries.length === 0) return null;
   const maxStack = Math.max(...Array.from({ length: bucketCount }, (_, i) => FACTIONS.reduce((s, f) => s + (buckets[f]?.[i] ?? 0), 0)), 1);
@@ -344,7 +350,7 @@ function FactionHistogram({ data, field, label, perDay, bins }: { data: FM[]; fi
   return (
     <div style={{ flex: 1, minWidth: 180 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
+      <div ref={barRef} {...handlers}
         style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 280 }}>
         {Array.from({ length: bucketCount }, (_, i) => (
           <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", width: "100%", opacity: hoverIdx != null && hoverIdx !== i ? 0.4 : 1 }}>
@@ -425,13 +431,13 @@ interface GroupedBarsProps {
 
 function GroupedBars({ data, xField, yFn, label, xLabel }: GroupedBarsProps) {
   const { xVals, means, ns, maxMean } = groupMeans(data, xField, yFn);
-  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(xVals.length);
+  const { index: hoverIdx, ref: barRef, handlers } = useBarHover(xVals.length);
   if (xVals.length === 0) return null;
 
   return (
     <div style={{ flex: "1 1 320px", minWidth: 320 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave} style={{ display: "flex", height: 160 }}>
+      <div ref={barRef} {...handlers} style={{ display: "flex", height: 160 }}>
         {xVals.map((x, xi) => (
           <div key={x} style={{ flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", opacity: hoverIdx != null && hoverIdx !== xi ? 0.4 : 1 }}>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 112 }}>
@@ -580,11 +586,11 @@ interface SeenBarProps {
 
 function SeenBar({ counts, label, allMonths, maxY, data }: SeenBarProps) {
   const h = 160;
-  const { index: hoverIdx, ref: barRef, onPointerMove, onPointerLeave } = useBarHover(allMonths.length);
+  const { index: hoverIdx, ref: barRef, handlers } = useBarHover(allMonths.length);
   return (
     <div style={{ flex: 1, minWidth: 200 }}>
       <div className="eyebrow" style={{ fontSize: 10, marginBottom: 4 }}>{label}</div>
-      <div ref={barRef} onPointerMove={onPointerMove} onPointerLeave={onPointerLeave}
+      <div ref={barRef} {...handlers}
         style={{ display: "flex", alignItems: "flex-end", gap: 1, height: h }}>
         {allMonths.map((m, i) => {
           const c = counts[m] ?? 0;

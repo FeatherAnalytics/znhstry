@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useChartPointer } from "./useChartPointer";
 
 export interface Series {
   label: string;
@@ -65,6 +66,7 @@ export function MultiSeries(props: Props) {
   const { x, series, title, subtitle, labelOf, height = 200, unit = "", signed = false } = props;
   const svg = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<number | null>(null);
+  const clearHover = useCallback(() => setHover(null), []);
 
   const width = 640;
   const plotWidth = width - PAD.left - PAD.right;
@@ -93,7 +95,7 @@ export function MultiSeries(props: Props) {
     return { top, bottom, xMin, xSpan, paths };
   }, [x, series, n, plotWidth, plotHeight, signed, isDrawn]);
 
-  const onMove = (event: React.MouseEvent) => {
+  const pointer = useChartPointer<SVGSVGElement>((event) => {
     const box = svg.current?.getBoundingClientRect();
     if (!box || !n) return;
     const fraction = ((event.clientX - box.left) / box.width) * width;
@@ -109,7 +111,7 @@ export function MultiSeries(props: Props) {
       }
     }
     setHover(best);
-  };
+  }, clearHover);
 
   const xOf = (i: number) => PAD.left + ((x[i] - xMin) / xSpan) * plotWidth;
   const yOf = (v: number) => PAD.top + plotHeight - ((v - bottom) / (top - bottom)) * plotHeight;
@@ -133,8 +135,7 @@ export function MultiSeries(props: Props) {
         ref={svg}
         viewBox={`0 0 ${width} ${height}`}
         style={{ width: "100%", height: "auto", overflow: "visible" }}
-        onPointerMove={onMove}
-        onPointerLeave={() => setHover(null)}
+        {...pointer}
         role="img"
         aria-label={title}
       >

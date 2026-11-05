@@ -105,6 +105,19 @@ WEB_DATA = ROOT / "dist" / "data"
 # warehouse from outside the map. Uploaded under `marts/`, apart from the export.
 MARTS_OUT = ROOT / "dist" / "marts"
 
+# The marts built from half-hourly snapshots, which the Atlantis job publishes between
+# nightlies. Their own directory: a partial set inside MARTS_OUT would reach `upload_marts`,
+# which treats that directory as the complete list of live tables and sweeps the rest.
+LIVE_ATLANTIS_MARTS = (
+    "stg_atlantis_zones",
+    "stg_atlantis_leaderboard",
+    "fct_atlantis_zone_interval",
+    "fct_atlantis_player_interval",
+    "fct_atlantis_faction_hourly",
+)
+LIVE_ATLANTIS_MARTS_OUT = ROOT / "dist" / "marts-atlantis"
+LIVE_ATLANTIS_ENTRIES = "_entries.json"
+
 # Written by `dbt build`. `marts` reads the model and column descriptions out of it so
 # the published dictionary is dbt's own text rather than a second copy that can drift.
 DBT_MANIFEST = ROOT / "transform" / "target" / "manifest.json"

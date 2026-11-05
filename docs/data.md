@@ -113,6 +113,8 @@ Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.
 
+**The half-hourly job also publishes the marts built from its snapshots.** After the Atlantis export it writes and uploads the five half-hourly marts under `marts/`, so `read_parquet` on them is as fresh as the last collection rather than the last nightly. See "The marts, as Parquet" in [export.md](export.md). A failure there turns the run red after the raw data is archived, so no collected row depends on it.
+
 **The half-hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite collected rows or delete keys it never fetched.
 
 **The banner names the winner, and only after the end.** During the battle the page's

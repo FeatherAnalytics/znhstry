@@ -148,8 +148,9 @@ jobs:
         run: uv run python -m znhstry archive --prefix atlantis/
 
       # Publish what was just collected instead of waiting for the nightly. Only the
-      # Atlantis models and the battle-report sources they read are built, and the upload
-      # is fenced to `global/atlantis/`, so the rest of the site is never touched.
+      # Atlantis models and the battle-report sources they read are built, and the uploads
+      # are fenced to `global/atlantis/` and the half-hourly marts, so the rest of the site
+      # is never touched.
       - name: Restore battle reports
         if: steps.gate.outputs.run == 'true'
         working-directory: pipeline
@@ -171,6 +172,15 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry upload --only atlantis
+
+      # This warehouse holds only the Atlantis build, so a plain `marts` would fail on
+      # `fct_zone_events` and a plain `upload --marts` would sweep every other mart.
+      - name: Publish the live Atlantis marts
+        if: steps.gate.outputs.run == 'true'
+        working-directory: pipeline
+        run: |
+          uv run python -m znhstry marts --only atlantis
+          uv run python -m znhstry upload --marts --only atlantis
 
       - name: Report
         if: steps.gate.outputs.run == 'true'

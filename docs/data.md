@@ -113,6 +113,8 @@ Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.
 
+**The half-hourly job also publishes the marts built from its snapshots.** After the Atlantis export it writes and uploads the five half-hourly marts under `marts/`, so `read_parquet` on them is as fresh as the last collection rather than the last nightly. See "The marts, as Parquet" in [export.md](export.md). A failure there turns the run red after the raw data is archived, so no collected row depends on it.
+
 **The half-hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite collected rows or delete keys it never fetched.
 
 **The banner names the winner, and only after the end.** During the battle the page's
@@ -122,6 +124,8 @@ final board and the schedule under that banner until the next tournament starts.
 in `tournaments/` is parsed from it and is null on every row written during the battle. A
 forced run after the final pull writes only the tournaments row, so it backfills the winner
 without recording the post-tournament board as part of the battle.
+
+**A player can drop off the board and return, and that is ordinary play.** `fct_atlantis_player_interval` then has one interval spanning the whole absence, and all of the launches made across it land on the observation where the player returns. `fct_atlantis_faction_hourly` keeps one row per observation with `minutes` taken from the faction's own observations, so its rate divides by the same gap the Atlantis page uses. `launches_total` is a sum over whoever is on the board, so it dips when a player leaves and jumps by their whole count on return; `launches_gained` is the steadier series. `fct_atlantis_payout` covers the last observation only, so a player absent from it has no payout row.
 
 **Launch counts reset to zero each month, and a player can appear under more than one
 faction in a month.** That is why faction is in the leaderboard key. Rank is not stored; it

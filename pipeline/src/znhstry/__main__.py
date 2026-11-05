@@ -59,7 +59,10 @@ def main() -> int:
     parser.add_argument(
         "--only",
         choices=["atlantis"],
-        help="Export and upload steps only. Rebuild or push only the named tree.",
+        help=(
+            "Export, marts and upload steps only. Rebuild or push only the named tree; with "
+            "marts or upload --marts, only the half-hourly Atlantis marts."
+        ),
     )
     args = parser.parse_args()
 
@@ -81,7 +84,9 @@ def _run_ingest(args: argparse.Namespace) -> None:
 
 
 def _run_upload(args: argparse.Namespace) -> None:
-    if args.only == "atlantis":
+    if args.marts and args.only == "atlantis":
+        upload.upload_live_atlantis_marts()
+    elif args.only == "atlantis":
         upload.upload_atlantis()
     else:
         (upload.upload_marts if args.marts else upload.upload_all)()
@@ -109,7 +114,9 @@ _DISPATCH = {
     "archive": lambda a: upload.archive_raw(prefix=a.prefix),
     "restore": lambda a: upload.restore_raw(prefix=a.prefix),
     "boundaries": lambda _: boundaries.export_boundaries(),
-    "marts": lambda _: marts.export_marts(),
+    "marts": lambda a: (
+        marts.export_live_atlantis_marts() if a.only == "atlantis" else marts.export_marts()
+    ),
 }
 
 

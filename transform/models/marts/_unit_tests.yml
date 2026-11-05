@@ -37,3 +37,30 @@ unit_tests:
       rows:
         - {zone_id: 1, country_name: "Realland", region_name: "Right Place"}
         - {zone_id: 2, country_name: "Realland", region_name: "Wrong Continent"}
+
+  - name: returning_player_does_not_split_the_faction_row
+    description: >
+      A player can drop off the board and come back, which is ordinary play. Player B's
+      interval then spans two observations while player A's spans one. The faction still
+      has one row at that observation, its launches summed across both players and its
+      rate taken over the gap between the faction's own observations, the same gap the
+      Atlantis page divides by.
+    model: fct_atlantis_faction_hourly
+    given:
+      - input: ref('stg_atlantis_leaderboard')
+        rows:
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: A, observed_at: "2026-11-05 00:00:00", launches: 100}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: B, observed_at: "2026-11-05 00:00:00", launches: 50}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: A, observed_at: "2026-11-05 00:30:00", launches: 130}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: A, observed_at: "2026-11-05 01:00:00", launches: 140}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: B, observed_at: "2026-11-05 01:00:00", launches: 59}
+      - input: ref('fct_atlantis_player_interval')
+        rows:
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: A, observed_at: "2026-11-05 00:30:00", minutes: 30.0, launches_gained: 30}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: A, observed_at: "2026-11-05 01:00:00", minutes: 30.0, launches_gained: 10}
+          - {tournament_month: 2026-11-01, faction: Swarm, player_name: B, observed_at: "2026-11-05 01:00:00", minutes: 60.0, launches_gained: 9}
+    expect:
+      rows:
+        - {observed_at: "2026-11-05 00:00:00", minutes: null, launches_gained: null, launches_per_hour: null, active_players: null, players_on_board: 2, launches_total: 150}
+        - {observed_at: "2026-11-05 00:30:00", minutes: 30.0, launches_gained: 30, launches_per_hour: 60.0, active_players: 1, players_on_board: 1, launches_total: 130}
+        - {observed_at: "2026-11-05 01:00:00", minutes: 30.0, launches_gained: 19, launches_per_hour: 38.0, active_players: 2, players_on_board: 2, launches_total: 199}

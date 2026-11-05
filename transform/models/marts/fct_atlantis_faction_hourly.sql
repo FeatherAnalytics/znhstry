@@ -8,7 +8,14 @@ with board as (
         faction,
         observed_at,
         count(*) as players_on_board,
-        sum(launches) as launches_total
+        sum(launches) as launches_total,
+        -- From the faction's own observations, not its players' intervals: a player who
+        -- leaves the board and returns has a longer interval than the rest of the faction.
+        epoch(
+            observed_at - lag(observed_at) over (
+                partition by tournament_month, faction order by observed_at
+            )
+        ) / 60.0 as minutes
     from {{ ref('stg_atlantis_leaderboard') }}
     group by 1, 2, 3
 ),
@@ -18,21 +25,19 @@ intervals as (
         tournament_month,
         faction,
         observed_at,
-        minutes,
         sum(launches_gained) as launches_gained,
-        sum(launches_gained) / minutes * 60.0 as launches_per_hour,
         count(*) filter (where launches_gained > 0) as active_players
     from {{ ref('fct_atlantis_player_interval') }}
-    group by 1, 2, 3, 4
+    group by 1, 2, 3
 )
 
 select
     b.tournament_month,
     b.faction,
     b.observed_at,
-    i.minutes,
+    b.minutes,
     i.launches_gained,
-    i.launches_per_hour,
+    i.launches_gained / b.minutes * 60.0 as launches_per_hour,
     i.active_players,
     b.players_on_board,
     b.launches_total

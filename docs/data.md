@@ -125,6 +125,8 @@ in `tournaments/` is parsed from it and is null on every row written during the 
 forced run after the final pull writes only the tournaments row, so it backfills the winner
 without recording the post-tournament board as part of the battle.
 
+**A player can drop off the board and return, and that is ordinary play.** `fct_atlantis_player_interval` then has one interval spanning the whole absence, and all of the launches made across it land on the observation where the player returns. `fct_atlantis_faction_hourly` keeps one row per observation with `minutes` taken from the faction's own observations, so its rate divides by the same gap the Atlantis page uses. `launches_total` is a sum over whoever is on the board, so it dips when a player leaves and jumps by their whole count on return; `launches_gained` is the steadier series. `fct_atlantis_payout` covers the last observation only, so a player absent from it has no payout row.
+
 **Launch counts reset to zero each month, and a player can appear under more than one
 faction in a month.** That is why faction is in the leaderboard key. Rank is not stored; it
 is derived, with ties sharing a rank the way the site shows them.

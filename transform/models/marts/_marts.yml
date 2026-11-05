@@ -188,7 +188,8 @@ models:
     description: >
       Grain: one row per tournament month, faction, and observation the faction
       appears on the board. Interval columns are null at a faction's first
-      observation.
+      observation. `minutes` is the gap between the faction's own observations, so a
+      player who leaves the board and returns does not split the row.
     columns:
       - name: tournament_month
         data_tests: [not_null]

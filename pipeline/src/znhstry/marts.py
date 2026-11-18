@@ -85,6 +85,12 @@ TABLES = (
         "stg_atlantis_faction_review",
         ("tournament_month", "player_name"),
     ),
+    Table("fct_exchange_rate_daily", ("rate_date",)),
+    Table("fct_player_profile", ("player_key", "scraped_at")),
+    Table("dim_player", ("player_key",)),
+    # Leads with the player: "where did this player launch" is its question. A zone or
+    # date filter reads more of the file.
+    Table("fct_battle_player", ("player_key", "battle_report_number")),
 )
 
 # Rows per row group. ~100 groups over the 9.9M-row event table: small enough that a

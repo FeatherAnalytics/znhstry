@@ -9,7 +9,7 @@ headings, and prose. The slug is for the repo, URL, and package only.
 
 **This repo is self-contained.** It reads QONQR's own published data and nothing else — no
 third-party mirror, no other repository, no server that belongs to a person rather than the
-game — with one exception: the Internet Archive's cached copies of QONQR's own Atlantis page, which are that page verbatim rather than a mirror's reprocessing. See "Where the data comes from".
+game — with two exceptions: the Internet Archive's cached copies of QONQR's own Atlantis page, which are that page verbatim rather than a mirror's reprocessing, and a one-time backfill of the daily exchange rate from `neon-ninja/QONQR_zonedata` for dates before we collected it ourselves, tagged `source = 'neon-ninja'`. Live collection, including the login-only portal pages, stays QONQR's own. See "Where the data comes from".
 
 ## Tech Stack
 
@@ -47,6 +47,11 @@ Other steps:
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone, no key needed
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
+uv run python -m znhstry profiles         # fetch up to 300 player profiles (login-only; QONQR_USERNAME/PASSWORD)
+uv run python -m znhstry profiles --names "a, b"  # fetch named players now; also the "Fetch player profiles by name" workflow
+uv run python -m znhstry profiles --new-only  # fetch every never-fetched player, then stop (no refreshes)
+uv run python -m znhstry seed-names       # one-time: queue every name on the boards, country and region leaderboards (~11 h)
+uv run python -m znhstry exchange         # today's cube-to-Qredit exchange rate (login-only)
 uv run python -m znhstry wayback          # ingest archived Atlantis snapshots from the Internet Archive
 uv run python -m znhstry backfill         # re-fetch historical battle report pages for per-player rows
 uv run python -m znhstry ingest --slots 7 # force specific ring slots (day of month)
@@ -90,7 +95,7 @@ See [docs/data.md](docs/data.md) for data sources, battle reports, Atlantis tour
 - **Never mistake a day's first sliver for the whole day.** A slot spans midnight, so
   having events *dated* day D usually means slot D-1 was read and D is a fragment. Deciding
   completeness by comparing dates skips D forever. `plan_slots` requires events strictly
-  after D, and `tests/test_ingest.py` pins it. Never assume a thin final day is real.
+  after D, and `tests/test_ingest.py` pins it.
 - **`fct_zone_checkpoints` must compare timestamps, not dates.** Casting to date drops every
   boundary an event lands on — the preceding event fails `next > B` and the event itself
   fails `B > observed`, so no row matches, and 19,062 checkpoints vanish.

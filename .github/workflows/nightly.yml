@@ -78,13 +78,16 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # 90 for the publish, plus up to 60 for the player-profile step at its 10 s floor.
+    timeout-minutes: 150
 
     env:
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      QONQR_USERNAME: ${{ secrets.QONQR_USERNAME }}
+      QONQR_PASSWORD: ${{ secrets.QONQR_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -136,6 +139,17 @@ jobs:
         working-directory: pipeline
         run: uv run python -m znhstry battlestats
 
+      # Login-only, so it needs the portal account; without the secrets it skips rather than failing the night. Like battle reports it may fail without stopping the publish: a stale rate only means the Calculator defaults to yesterday's. It does not open the gate below, because a new rate alone is not worth a full export, and events arrive nearly every night anyway.
+      - name: Collect exchange rate
+        continue-on-error: true
+        working-directory: pipeline
+        run: |
+          if [ -z "$QONQR_USERNAME" ]; then
+            echo "QONQR_USERNAME not set - skipping the exchange rate" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          uv run python -m znhstry exchange
+
       # One place to decide, because six copies of the same expression is six chances
       # to get it wrong. A failed battlestats step leaves its output empty, and empty
       # must not read as "new data".
@@ -185,6 +199,28 @@ jobs:
         if: steps.changed.outputs.any == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry upload
+
+      # After the map is live, so its ~50 minutes at the 10 s floor never delays the publish. Up to 300 profiles in queue order (see profiles._targets). A failure or timeout keeps every profile saved before it, because the scraper merges every 25 and again on the way out; the next night continues the queue.
+      - name: Collect player profiles
+        id: profiles
+        if: steps.changed.outputs.any == 'true'
+        continue-on-error: true
+        timeout-minutes: 60
+        working-directory: pipeline
+        run: |
+          if [ -z "$QONQR_USERNAME" ]; then
+            echo "QONQR_USERNAME not set - skipping player profiles" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          uv run python -m znhstry profiles
+
+      # The player marts are tables over a view of the raw file, so the profiles collected above reach them only through a rebuild. Scoped to those models: seconds, not the full build.
+      - name: Rebuild player models
+        if: steps.changed.outputs.any == 'true'
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt build --select stg_player_profiles+
 
       # The same marts as Parquet, under `marts/`, for anything that reads the warehouse
       # from outside the map. Its own tree and its own prefix: the export's manifest and

@@ -12,6 +12,10 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 | `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 30 minutes, tournament days only |
+| `portal.qonqr.com/Player/Details` | player level, faction, status, current rank and 35 medal flags; login-only, one page per player | nightly after the map upload, up to 300 per run, queued by `profiles._targets`; skipped without the `QONQR_*` secrets |
+| `portal.qonqr.com/Leaderboard/*` | player names only from the seven boards, every country and every region page, a one-time seed (`seed-names`) that writes each new name into the profile table as a placeholder for the queue; the numbers sit behind decoy columns and are not collected | once |
+| `portal.qonqr.com/Depot/Exchange` | the day's cube-to-Qredit exchange rate; login-only | nightly, before the warehouse build; skipped without the `QONQR_*` secrets |
+| `neon-ninja/QONQR_zonedata` | `exchange_rates.csv`, a one-time backfill of 2023-10-16 to 2026-11-15; agreed with our own read on 2026-11-16 | once |
 | `web.archive.org` | cached copies of the Atlantis page | one-off, 31 snapshots 2019-07 to 2026-06 |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
@@ -76,6 +80,7 @@ numbers it does not already have. A normal run costs one index page and stops.
   row faction and compare against `Legion/Swarm/Faceless Total Launches`. Reports scraped
   near their battle date match exactly; old ones put launches under factions the header
   says never launched at all.
+- **Every report's player list is in `battlestats.parquet` as one string; the per-player rows under `battlestats/players/` cover mostly tournament reports.** The backfill walks tournament reports only, so 690 of the 46,680 regular reports have per-player rows. `stg_battle_players` reads the rows where they exist and unpacks the string for the rest (groups of five: rank, name, launches, bots killed, bots lost), and `fct_battle_player` publishes every player in every report. Faction and badges exist only on the per-player rows, so they are null for most regular reports. The profile queue reads names from the string too; reading the rows alone missed thousands of regular-report players.
 - The parser builds column names from the page's own stat labels and each cell's CSS
   class, which is what makes new rows land in the seeded history's exact 77 columns.
   `pipeline/tests/test_portal.py` pins that contract against a real saved page.
@@ -335,3 +340,24 @@ around 2026-08-25, so they now join `dim_zone` normally and the gap has narrowed
 The remaining gap is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
+
+## Player profiles
+
+**Status is the portal's, never ours.** The portal's own tooltips define it: Active has launched recently, On Leave has not launched in 2 weeks, Missing in Action in a month, Retired in 3 months, and Fallen "was reported as deceased". Fallen is the only permanent status; a Retired player who launches again goes back to Active. We cannot derive it, because most launches happen in zones no battle report or Atlantis board covers.
+
+**Each run fetches 300, in this order** (`profiles._targets`):
+
+1. Never fetched, most recently seen first.
+2. Seen in a battle report or on the Atlantis board after their last fetch while their stored status was not Active. The sighting is a reason to look, not a status.
+3. Status changed between the last two fetches, re-checked after 7 days, which catches each step of the ladder soon after it lands.
+4. Everyone else, Retired included, oldest fetch first. Retired players come back often, so they get no slower schedule.
+
+Fallen players are never fetched again.
+
+At ~8,700 names and 300 a run, a full pass takes about a month.
+
+**`profiles --new-only` fetches every never-fetched name and stops**, for a catch-up after new names arrive; without it the run fills its cap with refreshes once the new names run out.
+
+**One player or a few can be fetched at once by name:** `profiles --names "a, b"`, or the "Fetch player profiles by name" workflow, which also republishes the marts and archives the file. Names are checked before any request (letters, digits, `_ . -`, at most 50).
+
+**The portal's error page doubles as "no such player".** Both redirect to `/500.html` with status 200. Three retries, then a `found = false` row, and the name goes back into the oldest-first rotation.

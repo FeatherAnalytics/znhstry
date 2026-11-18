@@ -1382,6 +1382,21 @@ _TRIANGLE_ORDER = {"Central": 0, "Legion": 1, "Swarm": 2, "Faceless": 3}
 _DERIVED_PLAYER_ORDER = ("Legion", "Swarm", "Faceless", "Unconfirmed")
 
 
+def _export_depot(con: duckdb.DuckDBPyConnection, out: Path) -> int:
+    """The newest exchange rate, the Calculator's default, and every rate seen, its choices."""
+    row = con.execute(
+        "select rate_date, qredits_per_cube from stg_exchange_rates order by rate_date desc limit 1"
+    ).fetchone()
+    rate = {"date": row[0].isoformat(), "qredits_per_cube": row[1]} if row else None
+    seen = con.execute(
+        "select distinct qredits_per_cube from stg_exchange_rates order by 1"
+    ).fetchall()
+    return _write_json(
+        out / "depot.json.br",
+        {"exchange_rate": rate, "rates_seen": [r[0] for r in seen]},
+    )
+
+
 def _export_atlantis(con: duckdb.DuckDBPyConnection, out: Path) -> dict[str, Any]:
     tree = out / "atlantis"
     tree.mkdir(parents=True, exist_ok=True)
@@ -2397,6 +2412,7 @@ def export_all(scope_name: str | None = None, out: Path | None = None) -> None:
         maz = _export_maz(con, out)
         flashpoints = _export_flashpoints(con, out)
         atlantis = _export_atlantis(con, out)
+        _export_depot(con, out)
 
         span = con.execute(
             "select min(activity_date), max(activity_date) from zone_events e "

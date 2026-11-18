@@ -76,6 +76,17 @@ PORTAL_MIN_INTERVAL = 2.0
 # crawl of thousands of pages in one. Four days' worth.
 PORTAL_MAX_PER_RUN = 40
 
+# Player profiles: login-only pages, one per player, ~8,700 names known. A run of 300 is
+# about 50 minutes; the full set fills in over a month of nightly runs.
+PROFILE_INTERVAL = 10.0
+PROFILE_RETRIES = 3
+PROFILES_MAX_PER_RUN = 300
+PROFILE_FLUSH_EVERY = 25
+PROFILE_BACKOFF = 60.0
+# A changed status is re-checked a week on; the portal's own steps are 2 weeks, 1 month
+# and 3 months without a launch, so a week catches each step soon after it lands.
+PROFILE_RECHECK_DAYS = 7
+
 BACKFILL_INTERVAL = 10.0
 BACKFILL_BUDGET = 5 * 3600
 

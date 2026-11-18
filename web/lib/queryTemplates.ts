@@ -165,7 +165,7 @@ const ownBots = (prefix = "") =>
  * prune row groups. Same query, 59.47 MB against 4.07.
  */
 export interface Context {
-  /** Newest date in the record. Usually a partial day; partial is still data. */
+  /** Newest date in the record. */
   newestDay: string;
 }
 

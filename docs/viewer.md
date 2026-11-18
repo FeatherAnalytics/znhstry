@@ -469,6 +469,16 @@ that ingest does not unpack. See `thoughts/future-features.md`.
 
 **Derived months render a static dashboard from battle report data.** No time-series charts (there are no hourly observations); a single zones table ordered by triangle, with no trend column, replaces the grouped zone tables; players are grouped by attributed faction with an Unconfirmed group at the end; rows are not clickable (no player or zone detail). "Not yet attributed" appears where the backfill has not reached and all players are Unconfirmed. History and All Time merge derived months with collected ones, labeled "derived" in muted text.
 
+## The Calculator
+
+`/calculator` answers one question: what a number of launches of one formation costs. Formation and launches give bots and energy, hence Nanobot Refreshes (1 Cube = 5,000 bots) and Energy Recharges (1 Cube = 4 × 100 energy). A formation that consumes ordnance adds its Qredit cost; Qredits the player already has are spent first and the shortfall is converted to Cubes at the chosen rate. The page shows one total in Cubes, the breakdown, and total Qredits and Cubes used.
+
+**The constants live in `lib/depot.ts`.** Prices and refresh yields are the portal's Depot page; bots and energy per launch are the QONQR wiki's Launching page, whose Qredit costs agree with the Depot's. They change only when the game does, so they are code, not data.
+
+**The dollar cost is the cheapest set of Cube packs that covers the total.** Pack prices and subscriber bonuses are the portal's Market/Cubes page, in `CUBE_PACKS`; the Save The NanoBots packs count with their free Cubes. `cheapestPurchase` minimizes cost over "at least N Cubes", because a bigger pack can be cheaper than an exact fit, and shows a non-subscriber and a subscriber price. The $1.00 Save The NanoBots add-on buys 5, 10 or 50 more Cubes depending on the size, so the 110 and 550 packs beat their plain twins; per Cube the order is 550, 500, then 110 for either buyer. A subscriber's single-Cube pack yields 4 Cubes, so small top-ups to a 110 pack can come out cheapest. Past a few thousand Cubes the bulk is filled with 550 packs first, so the search stays small. The $49.99 subscription itself is not added.
+
+**The rate is a dropdown of every rate the record has seen, defaulting to the newest.** Both come from `depot.json.br`, so the default moves when the nightly collects a new day's rate. A failed fetch leaves the dropdown empty and the exchange line reads "rate unavailable" rather than guessing.
+
 ## The SQL console
 
 `/query` runs DuckDB-WASM in the browser over the published marts. The SQL uses plain table names (`select * from dim_country`); `lib/duckdbWasm.ts` binds each referenced table on demand from `_meta.json` as a `CREATE VIEW … read_parquet(url)`. `?sql=` is a permalink that loads and runs the query on page open; a "Copy link" button writes it.

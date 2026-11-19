@@ -15,7 +15,7 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `portal.qonqr.com/Player/Details` | player level, faction, status, current rank, start date (Private) and 35 medal flags; login-only, one page per player | four batches a day (`player-refresh.yml`), 175 per batch, queued by `profiles._targets` |
 | `portal.qonqr.com/Leaderboard/*` | player names only from the seven boards, every country and every region page, a one-time seed (`seed-names`) that writes each new name into the profile table as a placeholder for the queue; the numbers sit behind decoy columns and are not collected | once |
 | `portal.qonqr.com/Depot/Exchange` | the day's cube-to-Qredit exchange rate; login-only | nightly, before the warehouse build; skipped without the `QONQR_*` secrets |
-| `neon-ninja/QONQR_zonedata` | `exchange_rates.csv`, a one-time backfill of 2023-10-16 to 2026-11-15; agreed with our own read on 2026-11-16 | once |
+| `neon-ninja/QONQR_zonedata` | `exchange_rates.csv`, backfills for dates we did not read ourselves (2023-10-16 onward); only missing dates are added, and it has agreed with every date we read | by hand, when the nightly has missed days |
 | `web.archive.org` | cached copies of the Atlantis page | one-off, 31 snapshots 2019-07 to 2026-06 |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
@@ -365,5 +365,7 @@ At ~19,400 names and four batches a day (~700), a full pass takes about 28 days.
 **`profiles --new-only` fetches every never-fetched name and stops**, for a catch-up after new names arrive; without it the run fills its cap with refreshes once the new names run out.
 
 **One player or a few can be fetched at once by name:** `profiles --names "a, b"`, or the "Fetch player profiles by name" workflow, which also republishes the marts and archives the file. Names are checked before any request (letters, digits, `_ . -`, at most 50).
+
+**The signed-in account is fetched from `/Player`.** Its `/Player/Details` page redirects to its own-account view, which nests the card differently, lists unearned medals as progress panels and shows no status line. The parser finds the card by its Level heading and reads only earned medals, so one parser serves both layouts, and the account whose name is `QONQR_USERNAME` gets status `Retired` (`SELF_STATUS`, set by the owner). Any other profile request that lands on a different page than it asked for is recorded as unavailable rather than parsed.
 
 **The portal's error page doubles as "no such player".** Both redirect to `/500.html` with status 200. Three retries, then a `found = false` row, and the name goes back into the oldest-first rotation.

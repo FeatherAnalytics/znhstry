@@ -4,9 +4,9 @@ The page states "Today's Exchange Rate 1 = 6500": one cube buys that many Qredit
 login-only, so this signs in with the same account as `profiles`. One row per UTC date;
 a second read on the same day replaces the first, so the table holds the day's latest.
 
-Dates before 2026-11-16 were backfilled once from `neon-ninja/QONQR_zonedata`'s
-`exchange_rates.csv` and carry `source = 'neon-ninja'` and no `observed_at`. Its value for
-2026-11-16 matched our own read.
+Dates we did not read ourselves are backfilled from `neon-ninja/QONQR_zonedata`'s
+`exchange_rates.csv` and carry `source = 'neon-ninja'` and no `observed_at`; a backfill only
+adds missing dates. Its values have matched every date we read ourselves.
 """
 
 from __future__ import annotations

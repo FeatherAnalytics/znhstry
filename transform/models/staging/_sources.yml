@@ -132,6 +132,6 @@ sources:
           external_location: "read_parquet('../data/raw/players/profiles.parquet')"
       - name: exchange_rates
         description: >
-          The portal's cube-to-Qredit exchange rate from the login-only `/Depot/Exchange` page, one row per UTC date, the day's latest read. `qredits_per_cube` is what one cube buys. `source` is 'portal' for our own reads and 'neon-ninja' for the one-time backfill of 2023-10-16 to 2026-11-15 from `neon-ninja/QONQR_zonedata`, which has no `observed_at`.
+          The portal's cube-to-Qredit exchange rate from the login-only `/Depot/Exchange` page, one row per UTC date, the day's latest read. `qredits_per_cube` is what one cube buys. `source` is 'portal' for our own reads and 'neon-ninja' for dates backfilled from `neon-ninja/QONQR_zonedata`, which have no `observed_at`.
         meta:
           external_location: "read_parquet('../data/raw/depot/exchange_rates.parquet')"

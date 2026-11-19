@@ -9,7 +9,7 @@ headings, and prose. The slug is for the repo, URL, and package only.
 
 **This repo is self-contained.** It reads QONQR's own published data and nothing else — no
 third-party mirror, no other repository, no server that belongs to a person rather than the
-game — with two exceptions: the Internet Archive's cached copies of QONQR's own Atlantis page, which are that page verbatim rather than a mirror's reprocessing, and a one-time backfill of the daily exchange rate from `neon-ninja/QONQR_zonedata` for dates before we collected it ourselves, tagged `source = 'neon-ninja'`. Live collection, including the login-only portal pages, stays QONQR's own. See "Where the data comes from".
+game — with two exceptions: the Internet Archive's cached copies of QONQR's own Atlantis page, which are that page verbatim rather than a mirror's reprocessing, and backfills of the daily exchange rate from `neon-ninja/QONQR_zonedata` for dates we did not read ourselves, tagged `source = 'neon-ninja'` and never overriding a portal read. Live collection, including the login-only portal pages, stays QONQR's own. See "Where the data comes from".
 
 ## Tech Stack
 

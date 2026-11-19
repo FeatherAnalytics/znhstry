@@ -32,7 +32,7 @@ import os
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import duckdb
 import httpx
@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 BASE = "https://portal.qonqr.com"
 LOGIN_PATH = "/Home/Login"
 PROFILE_PATH = "/Player/Details/{name}"
+SELF_PATH = "/Player"
+# The own-account view shows no status line; the owner set this account's.
+SELF_STATUS = "Retired"
 ERROR_PATH = "/500.html"
 LEADERBOARD_PATH = "/Leaderboard"
 LEADERBOARDS = ["", "/BotKills", "/Captures", "/ZoneLeads", "/Harvest", "/Recruit", "/Ordnance"]
@@ -154,8 +157,13 @@ def login(client: httpx.Client) -> None:
     )
 
 
+def _is_self(name: str) -> bool:
+    return name.lower() == os.environ.get("QONQR_USERNAME", "").lower()
+
+
 def fetch_profile(client: httpx.Client, name: str) -> str | None:
-    return _fetch_page(client, PROFILE_PATH.format(name=name))
+    # The signed-in account's /Player/Details page redirects to /Player, its own-account view.
+    return _fetch_page(client, SELF_PATH if _is_self(name) else PROFILE_PATH.format(name=name))
 
 
 def _fetch_page(client: httpx.Client, path: str) -> str | None:
@@ -167,9 +175,14 @@ def _fetch_page(client: httpx.Client, path: str) -> str | None:
         landed = response.url.path
         if landed.startswith(LOGIN_PATH):
             raise SessionExpired(path)
-        if landed != ERROR_PATH:
-            response.raise_for_status()
-            return response.text
+        if landed == ERROR_PATH:
+            continue
+        # A page that lands somewhere other than requested is not the page we can parse.
+        if landed.lower() != urlsplit(path).path.lower():
+            log.warning("profiles: %s redirected to %s; recorded as unavailable", path, landed)
+            return None
+        response.raise_for_status()
+        return response.text
     return None
 
 
@@ -192,12 +205,17 @@ def _int(text: str) -> int:
 
 
 def _parse_card(soup: BeautifulSoup, name: str) -> dict:
-    card = soup.select_one(".page-content .col-xs-7")
-    if card is None:
+    # Found by its Level heading: a profile and the own-account view nest it differently.
+    level = soup.select_one(".page-content").find(
+        "h3", string=lambda s: s and s.strip().startswith("Level ")
+    )
+    if level is None:
         raise ValueError(f"{name}: no profile card; the page layout has changed")
+    card = level.parent
     headings = [h.get_text(" ", strip=True) for h in card.find_all("h3")]
     level_at = next(i for i, text in enumerate(headings) if text.startswith("Level "))
-    status = card.find("div").find(string=True, recursive=False)
+    status_line = card.find("div")
+    status = status_line.find(string=True, recursive=False).strip() if status_line else SELF_STATUS
     medal_heading = next(
         h for h in soup.find_all("h1") if h.get_text(strip=True).startswith("Medals")
     )
@@ -205,13 +223,17 @@ def _parse_card(soup: BeautifulSoup, name: str) -> dict:
         "display_name": card.find("h2").get_text(strip=True),
         "level": _int(headings[level_at]),
         "faction": headings[level_at + 1],
-        "status": status.strip(),
+        "status": status,
         "rank_points": _int(medal_heading.find("small").get_text()),
     }
 
 
 def _parse_medals(soup: BeautifulSoup, name: str) -> dict[str, bool]:
-    earned = {item.find("h3").get_text(strip=True) for item in soup.select("li.list-group-item")}
+    # The heading's own text: the own-account view also puts the points inside the h3.
+    earned = {
+        item.find("h3").find(string=True, recursive=False).strip()
+        for item in soup.select("li.list-group-item.blue")
+    }
     unknown = earned - MEDALS.keys()
     if unknown:
         raise ValueError(f"{name}: medals not in MEDALS: {sorted(unknown)}")
@@ -342,7 +364,7 @@ def _merge(rows: list[dict]) -> None:
     tmp.replace(PATH)
 
 
-def ensure_tables() -> None:
+def ensure_table() -> None:
     """An empty file, so dbt's source and the target query resolve before any scrape."""
     if not PATH.exists():
         PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -404,7 +426,7 @@ def seed_names() -> int:
     leaderboards; their numbers sit behind decoy columns and are not collected.
     Resumable: finished pages are recorded in SEED_DONE_PATH.
     """
-    ensure_tables()
+    ensure_table()
     seed = _Seed()
     fetched = 0
     with _client() as client:
@@ -462,18 +484,21 @@ def named_targets(text: str) -> list[str]:
     return names
 
 
+def _run_targets(limit: int | None, names: str | None, new_only: bool) -> list[str]:
+    if names:
+        return named_targets(names)
+    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    if new_only:
+        # Every never-fetched name unless --limit says otherwise; the per-run cap is for refreshes.
+        return _targets(now, limit or 1_000_000, new_only=True)
+    return _targets(now, limit or config.PROFILES_MAX_PER_RUN)
+
+
 def scrape_profiles(
     limit: int | None = None, names: str | None = None, new_only: bool = False
 ) -> int:
-    ensure_tables()
-    now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
-    if names:
-        targets = named_targets(names)
-    elif new_only:
-        # Every never-fetched name unless --limit says otherwise; the per-run cap is for refreshes.
-        targets = _targets(now, limit or 1_000_000, new_only=True)
-    else:
-        targets = _targets(now, limit or config.PROFILES_MAX_PER_RUN)
+    ensure_table()
+    targets = _run_targets(limit, names, new_only)
     log.info("profiles: %d due this run", len(targets))
     rows: list[dict] = []
     found = 0

@@ -101,7 +101,6 @@ export const CUBE_PACKS: CubePack[] = [
   { cents: 10099, cubes: 550, subscriberBonus: 0 },
 ];
 
-export const SUBSCRIPTION_CENTS = 4999;
 const BULK_THRESHOLD = 5_000;
 
 export interface Purchase {

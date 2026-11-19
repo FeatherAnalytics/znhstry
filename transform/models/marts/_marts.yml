@@ -351,7 +351,7 @@ models:
         description: Every faction the player placed in.
 
   - name: fct_exchange_rate_daily
-    description: "Grain: one row per UTC date: how many Qredits one Cube bought that day. Dates before 2026-11-16 come from the one-time `neon-ninja/QONQR_zonedata` backfill (`source = 'neon-ninja'`); from then on, our own read of the portal's Exchange page (`source = 'portal'`). Join on the date, e.g. `fct_zone_battles.battle_date = rate_date`."
+    description: "Grain: one row per UTC date: how many Qredits one Cube bought that day. Each date is either our own read of the portal's Exchange page (`source = 'portal'`) or, for dates we did not read, a backfill from `neon-ninja/QONQR_zonedata` (`source = 'neon-ninja'`). Join on the date, e.g. `fct_zone_battles.battle_date = rate_date`."
     columns:
       - name: rate_date
         data_tests: [unique, not_null]

@@ -1,7 +1,7 @@
 // Cron triggers that dispatch the data workflows, because GitHub's own scheduler does not
 // run them on time: it dropped the Atlantis cron outright for hours and runs the
 // nightly about five hours late. Cloudflare crons fire on time. The Worker does nothing
-// else - each workflow still decides for itself whether there is work.
+// else - each workflow still decides for itself whether there is work. The :07 tick at 03, 09, 15 and 21 UTC also starts the player-refresh batch, so it needs no cron of its own; the Free plan allows five per account.
 //
 // Deployed by .github/workflows/deploy-trigger.yml, which also sets the GITHUB_TOKEN secret
 // from the repository secret ATLANTIS_DISPATCH_TOKEN.

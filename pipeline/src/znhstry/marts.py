@@ -4,8 +4,9 @@ The export under `dist/data` is the map's own format: packed bytes, delta-encode
 the way the viewer fetches. Nothing else can read it without the decoder. This is the
 other shape - one zstd Parquet file per table under `dist/marts/`, uploaded to the bucket
 under `marts/`, so `read_parquet('https://.../marts/fct_zone_events.parquet')` works from
-any DuckDB with nothing installed and no key. The nightly writes every table; the half-hourly
-Atlantis job writes `config.LIVE_ATLANTIS_MARTS` between nightlies.
+any DuckDB with nothing installed and no key. The nightly writes every table; between
+nightlies the half-hourly Atlantis job and the player-refresh batches write their sets in
+`config.LIVE_MARTS`.
 
 Every file is written from a query that sorts on a key which is unique for that table.
 Uniqueness is what makes the order total, and a total order is what makes the file
@@ -293,19 +294,18 @@ def export_marts(out: Path | None = None) -> None:
     log.info("marts complete: %s tables under %s", len(tables), out)
 
 
-def export_live_atlantis_marts(out: Path | None = None) -> None:
-    """Write the half-hourly marts and their manifest entries, and nothing else.
+def export_live_marts(live: str, out: Path | None = None) -> None:
+    """Write one between-nightlies set of marts and their manifest entries, and nothing else.
 
-    The half-hourly warehouse holds only the Atlantis build, so this must not touch a table
-    outside the set. The entries go to their own file because the published manifest also
-    describes marts this run cannot see: `upload_live_atlantis_marts` patches them into it.
+    The job's warehouse holds only that set's build, so this must not touch a table outside
+    it. The entries go to their own file because the published manifest also describes marts
+    this run cannot see: `upload_live_marts` patches them into it.
     """
-    out = out or config.LIVE_ATLANTIS_MARTS_OUT
-    tables = [t for t in TABLES if t.name in config.LIVE_ATLANTIS_MARTS]
-    if len(tables) != len(config.LIVE_ATLANTIS_MARTS):
-        raise ValueError(
-            f"LIVE_ATLANTIS_MARTS names a table TABLES does not: {config.LIVE_ATLANTIS_MARTS}"
-        )
+    names = config.LIVE_MARTS[live]
+    out = out or config.live_marts_out(live)
+    tables = [t for t in TABLES if t.name in names]
+    if len(tables) != len(names):
+        raise ValueError(f"LIVE_MARTS[{live!r}] names a table TABLES does not: {names}")
     out.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
     try:
@@ -315,7 +315,7 @@ def export_live_atlantis_marts(out: Path | None = None) -> None:
         con.close()
 
     # Last, so the upload can tell a finished run from one that died part way.
-    tmp = out / (config.LIVE_ATLANTIS_ENTRIES + ".tmp")
+    tmp = out / (config.LIVE_ENTRIES + ".tmp")
     tmp.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(out / config.LIVE_ATLANTIS_ENTRIES)
-    log.info("live Atlantis marts complete: %s tables under %s", len(entries), out)
+    tmp.replace(out / config.LIVE_ENTRIES)
+    log.info("live %s marts complete: %s tables under %s", live, len(entries), out)

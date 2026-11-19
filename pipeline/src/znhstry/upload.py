@@ -74,12 +74,13 @@ ARCHIVE = "no-store"
 # a pull-request runner - learns what to fetch and how to check it arrived whole.
 MANIFEST_KEY = ARCHIVE_PREFIX + "_manifest.json"
 
-# Written only by the hourly Atlantis job. Any other checkout holds a stale copy, so a full
-# archive neither uploads nor sweeps this subtree; only a run scoped to it may write it.
-HOURLY_PREFIX = "atlantis/"
+# Each written only by its own job: the half-hourly Atlantis job and the player-refresh batches.
+# Any other checkout holds a stale copy, so a full archive neither uploads nor sweeps these
+# subtrees; only a run scoped to one may write it.
+OWNED_PREFIXES = ("atlantis/", "players/")
 
 # The marts as Parquet, written by `upload_marts` and, for the half-hourly tables,
-# `upload_live_atlantis_marts`. Fenced from the export's sweep
+# `upload_live_marts`. Fenced from the export's sweep
 # for the same reason as `raw/`: it lives in this bucket and the export does not name it.
 MARTS_PREFIX = "marts/"
 MARTS_MANIFEST_KEY = MARTS_PREFIX + "_meta.json"
@@ -209,18 +210,18 @@ def _sub_prefix(prefix: str) -> str:
     return f"{prefix}/" if prefix else ""
 
 
-def _hourly_only(relative: str, prefix: str) -> bool:
-    """Whether a run must leave this `data/raw`-relative path to the hourly job."""
-    return not prefix and relative.startswith(HOURLY_PREFIX)
+def _owned_elsewhere(relative: str, prefix: str) -> bool:
+    """Whether a full run must leave this `data/raw`-relative path to the job that owns it."""
+    return not prefix and relative.startswith(OWNED_PREFIXES)
 
 
 def _archive_files(root: Path, prefix: str) -> list[Path]:
-    """What a run scoped to `prefix` may archive: no temp files, no hourly subtree, and
+    """What a run scoped to `prefix` may archive: no temp files, no owned subtree, and
     never a manifest that a restore happened to leave on disk."""
     files = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(config.RAW).as_posix()
-        if not path.is_file() or path.suffix == ".tmp" or _hourly_only(relative, prefix):
+        if not path.is_file() or path.suffix == ".tmp" or _owned_elsewhere(relative, prefix):
             continue
         if ARCHIVE_PREFIX + relative != MANIFEST_KEY:
             files.append(path)
@@ -284,7 +285,7 @@ def archive_raw(bucket: str | None = None, prefix: str = "") -> None:
 
     # Only within the archive's own prefix, so this can never touch the export.
     stale = {k for k in remote if k.startswith(ARCHIVE_PREFIX + prefix)} - set(key_of.values())
-    stale = {k for k in stale if not _hourly_only(k[len(ARCHIVE_PREFIX) :], prefix)}
+    stale = {k for k in stale if not _owned_elsewhere(k[len(ARCHIVE_PREFIX) :], prefix)}
     stale.discard(MANIFEST_KEY)
     if stale:
         log.info("removing %s stale archive objects", f"{len(stale):,}")
@@ -467,7 +468,7 @@ def upload_marts(source: Path | None = None, bucket: str | None = None) -> None:
     _delete_keys(s3, bucket, set(remote) - set(key_of.values()))
 
 
-def _read_marts_manifest(s3, bucket: str) -> tuple[dict, str]:
+def _read_marts_manifest(s3, bucket: str, names: tuple[str, ...]) -> tuple[dict, str]:
     """The published manifest and its ETag, refusing one this run could not patch whole.
 
     The bucket copy is the only record of the marts the half-hourly warehouse does not
@@ -479,7 +480,7 @@ def _read_marts_manifest(s3, bucket: str) -> tuple[dict, str]:
     tables = manifest.get("tables") if isinstance(manifest, dict) else None
     if not isinstance(tables, dict):
         raise SystemExit(f"{MARTS_MANIFEST_KEY} has no tables object - refusing to patch it.")
-    missing = sorted(set(config.LIVE_ATLANTIS_MARTS) - set(tables))
+    missing = sorted(set(names) - set(tables))
     if missing:
         raise SystemExit(f"{MARTS_MANIFEST_KEY} does not name {missing} - refusing to patch it.")
     return manifest, reply["ETag"]
@@ -494,7 +495,7 @@ def _patch_marts_manifest(s3, bucket: str, entries: dict[str, dict]) -> bool:
     from botocore.exceptions import ClientError
 
     for _ in range(MANIFEST_WRITE_ATTEMPTS):
-        manifest, etag = _read_marts_manifest(s3, bucket)
+        manifest, etag = _read_marts_manifest(s3, bucket, tuple(entries))
         patched = {**manifest, "tables": {**manifest["tables"], **entries}}
         if patched == manifest:
             return False
@@ -516,37 +517,39 @@ def _patch_marts_manifest(s3, bucket: str, entries: dict[str, dict]) -> bool:
     )
 
 
-def upload_live_atlantis_marts(source: Path | None = None, bucket: str | None = None) -> None:
-    """Push the half-hourly marts and patch only their entries into the published manifest.
+def upload_live_marts(live: str, source: Path | None = None, bucket: str | None = None) -> None:
+    """Push one between-nightlies set of marts and patch only its entries into the manifest.
 
     Never sweeps: this run holds a few of the marts, so `upload_marts` would delete the rest.
     The manifest is checked before the first write, so a broken one sends nothing at all,
     and is patched even when no file changed, which repairs entries a nightly overwrote.
     """
-    source = source or config.LIVE_ATLANTIS_MARTS_OUT
+    names = config.LIVE_MARTS[live]
+    source = source or config.live_marts_out(live)
     bucket = _bucket(bucket)
-    entries_file = source / config.LIVE_ATLANTIS_ENTRIES
-    tables = [source / f"{name}.parquet" for name in config.LIVE_ATLANTIS_MARTS]
+    entries_file = source / config.LIVE_ENTRIES
+    tables = [source / f"{name}.parquet" for name in names]
     absent = [p.name for p in (*tables, entries_file) if not p.is_file()]
     if absent:
-        raise SystemExit(f"{absent} missing under {source} - run `marts --only atlantis` first.")
+        raise SystemExit(f"{absent} missing under {source} - run `marts --only {live}` first.")
     _refuse_a_half_written_export(
-        source, [*tables, entries_file], manifest_name=config.LIVE_ATLANTIS_ENTRIES
+        source, [*tables, entries_file], manifest_name=config.LIVE_ENTRIES
     )
 
     entries = json.loads(entries_file.read_text(encoding="utf-8"))
-    if set(entries) != set(config.LIVE_ATLANTIS_MARTS):
-        raise SystemExit(f"{entries_file} does not describe exactly the live Atlantis marts.")
+    if set(entries) != set(names):
+        raise SystemExit(f"{entries_file} does not describe exactly the live {live} marts.")
     key_of = {p: MARTS_PREFIX + p.name for p in tables}
 
     s3 = _client()
-    _read_marts_manifest(s3, bucket)
+    _read_marts_manifest(s3, bucket, names)
     pending = _changed(tables, _existing(s3, bucket, MARTS_PREFIX), key_of)
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         sent = sum(pool.map(lambda p: _put(s3, bucket, p, key_of[p]), pending))
     wrote_manifest = _patch_marts_manifest(s3, bucket, entries)
     log.info(
-        "live Atlantis marts: %s of %s tables sent (%s bytes), manifest %s",
+        "live %s marts: %s of %s tables sent (%s bytes), manifest %s",
+        live,
         len(pending),
         len(tables),
         f"{sent:,}",

@@ -89,10 +89,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--only",
-        choices=["atlantis"],
+        choices=sorted(config.LIVE_MARTS),
         help=(
-            "Export, marts and upload steps only. Rebuild or push only the named tree; with "
-            "marts or upload --marts, only the half-hourly Atlantis marts."
+            "Marts and upload --marts: only that set of between-nightlies marts. Export and "
+            "upload without --marts: atlantis only, the Atlantis tree."
         ),
     )
     return parser
@@ -104,12 +104,24 @@ def _run_ingest(args: argparse.Namespace) -> None:
 
 
 def _run_upload(args: argparse.Namespace) -> None:
-    if args.marts and args.only == "atlantis":
-        upload.upload_live_atlantis_marts()
+    if args.marts and args.only:
+        upload.upload_live_marts(args.only)
     elif args.only == "atlantis":
         upload.upload_atlantis()
+    elif args.only:
+        # Falling through to upload_all would publish and sweep the whole export.
+        raise SystemExit(f"upload --only {args.only} needs --marts")
     else:
         (upload.upload_marts if args.marts else upload.upload_all)()
+
+
+def _run_export(args: argparse.Namespace) -> None:
+    if args.only == "atlantis":
+        export.export_atlantis_only(args.scope)
+    elif args.only:
+        raise SystemExit(f"export has no --only {args.only}; it only rebuilds atlantis")
+    else:
+        export.export_all(args.scope)
 
 
 def _run_wayback() -> None:
@@ -120,10 +132,7 @@ def _run_wayback() -> None:
 
 
 _DISPATCH = {
-    "export": lambda a: (
-        export.export_atlantis_only(a.scope) if a.only == "atlantis"
-        else export.export_all(a.scope)
-    ),
+    "export": _run_export,
     "ingest": _run_ingest,
     "battlestats": lambda _: _emit(reports=portal.scrape_battlestats()),
     "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),
@@ -140,7 +149,7 @@ _DISPATCH = {
     "restore": lambda a: upload.restore_raw(prefix=a.prefix),
     "boundaries": lambda _: boundaries.export_boundaries(),
     "marts": lambda a: (
-        marts.export_live_atlantis_marts() if a.only == "atlantis" else marts.export_marts()
+        marts.export_live_marts(a.only) if a.only else marts.export_marts()
     ),
 }
 

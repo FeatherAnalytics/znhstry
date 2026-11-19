@@ -367,6 +367,8 @@ models:
       - name: player_key
         description: Lowercased player name; the join key to every other player table.
         data_tests: [not_null]
+      - name: start_date
+        description: When the player reached Private, the first rank every player starts at, so a proxy for when the account started. Null on fetches made before it was collected; each refresh fills it in.
 
   - name: dim_player
     description: "Grain: one row per player we hold a name for and have fetched, case-insensitive. Profile fields are from the newest fetch that found a profile; null when none ever did. Join on `player_key` = `lower(player_name)` of any other player table."
@@ -376,6 +378,8 @@ models:
         data_tests: [unique, not_null]
       - name: found_on_last_check
         description: False when the newest fetch hit the error page, though an older one found the player — usually a rename.
+      - name: start_date
+        description: When the player reached Private, a proxy for when the account started. Null until the player's first refresh after it was collected.
 
   - name: fct_battle_player
     description: "Grain: one row per player per battle report, every Most Active Zones report, tournament ones included (`is_tournament`). Who launched in which zone on which day, with rank, launches, bots killed and bots lost. A battle report is a daily top-ten-zones list, so a player missing from it may still have launched there. `faction` and the two badge columns are known only where the scraper kept per-player rows, mostly tournament reports; elsewhere they are null. Join to `dim_player` on `player_key` and to `fct_zone_battles` on `battle_report_number`."

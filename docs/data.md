@@ -12,7 +12,7 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 | `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 30 minutes, tournament days only |
-| `portal.qonqr.com/Player/Details` | player level, faction, status, current rank and 35 medal flags; login-only, one page per player | nightly after the map upload, up to 300 per run, queued by `profiles._targets`; skipped without the `QONQR_*` secrets |
+| `portal.qonqr.com/Player/Details` | player level, faction, status, current rank, start date (Private) and 35 medal flags; login-only, one page per player | four batches a day (`player-refresh.yml`), 175 per batch, queued by `profiles._targets` |
 | `portal.qonqr.com/Leaderboard/*` | player names only from the seven boards, every country and every region page, a one-time seed (`seed-names`) that writes each new name into the profile table as a placeholder for the queue; the numbers sit behind decoy columns and are not collected | once |
 | `portal.qonqr.com/Depot/Exchange` | the day's cube-to-Qredit exchange rate; login-only | nightly, before the warehouse build; skipped without the `QONQR_*` secrets |
 | `neon-ninja/QONQR_zonedata` | `exchange_rates.csv`, a one-time backfill of 2023-10-16 to 2026-11-15; agreed with our own read on 2026-11-16 | once |
@@ -112,7 +112,7 @@ The gate fails the run when `DATA_ORIGIN` is unset or the state file returns any
 GitHub's cron skipped the Atlantis schedule outright for hours at a time and runs the nightly
 about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
 `scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and :37 and on `nightly.yml`
-at 00:45 UTC, deployed by `deploy-trigger.yml`. Both workflows keep their own `schedule:`
+at 00:45 UTC, deployed by `deploy-trigger.yml`. On the :07 tick at 03, 09, 15 and 21 UTC it also starts `player-refresh.yml`; every dispatch is attempted before any failure is raised. The nightly and Atlantis workflows keep their own `schedule:`
 as the fallback. The Atlantis gate reads `next_run_at`, the next :00 or :30 after a collection, so the second run of a half hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
 Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
@@ -343,9 +343,11 @@ against a threshold, because thresholds on upstream drift are brittle.
 
 ## Player profiles
 
+**`start_date` is when the player reached Private.** Every player starts at that rank, so it stands in for the account's start. It was added after the initial fill, so older fetches have it null and each refresh fills it in; one full rotation (about 28 days) covers everyone.
+
 **Status is the portal's, never ours.** The portal's own tooltips define it: Active has launched recently, On Leave has not launched in 2 weeks, Missing in Action in a month, Retired in 3 months, and Fallen "was reported as deceased". Fallen is the only permanent status; a Retired player who launches again goes back to Active. We cannot derive it, because most launches happen in zones no battle report or Atlantis board covers.
 
-**Each run fetches 300, in this order** (`profiles._targets`):
+**Each batch fetches 175, in this order** (`profiles._targets`):
 
 1. Never fetched, most recently seen first.
 2. Seen in a battle report or on the Atlantis board after their last fetch while their stored status was not Active. The sighting is a reason to look, not a status.
@@ -354,7 +356,11 @@ against a threshold, because thresholds on upstream drift are brittle.
 
 Fallen players are never fetched again.
 
-At ~8,700 names and 300 a run, a full pass takes about a month.
+At ~19,400 names and four batches a day (~700), a full pass takes about 28 days.
+
+**The refresh runs on its own, not in the nightly.** `player-refresh.yml` is one batch: restore, fetch up to 175, rebuild the player models, publish the `players` set of marts (`fct_player_profile`, `dim_player`) by patching only their manifest entries, and archive `players/`. The trigger Worker starts it on the Atlantis cron's :07 tick at 03, 09, 15 and 21 UTC, so it adds no cron trigger (the Workers Free plan allows five per account). It has no GitHub `schedule:` fallback: a doubled batch fetches 175 more profiles instead of doing nothing. The publish, build and archive steps run even when the fetch fails or times out, so a partial batch is kept. It and the by-name workflow share the `players` concurrency group, and a full `archive` skips `players/` (`OWNED_PREFIXES`), so the nightly never pushes its older restored copy over a batch's.
+
+**One race is accepted because it heals.** The nightly republishes every mart, the player marts included, from the data it restored at its start. A batch that finishes between that restore and the nightly's marts upload has its two player marts overwritten with slightly older ones; the next batch, within six hours, republishes them. The raw profiles are never at risk.
 
 **`profiles --new-only` fetches every never-fetched name and stops**, for a catch-up after new names arrive; without it the run fills its cap with refreshes once the new names run out.
 

@@ -109,6 +109,7 @@ SCHEMA = {
     "rank_points": pl.Int32,
     "current_rank": pl.String,
     "current_rank_achieved_on": pl.Date,
+    "start_date": pl.Date,
     **{column: pl.Boolean for column in MEDALS.values()},
 }
 KEY = ["player_name", "scraped_at"]
@@ -218,15 +219,24 @@ def _parse_medals(soup: BeautifulSoup, name: str) -> dict[str, bool]:
 
 
 def _parse_rank(soup: BeautifulSoup) -> dict:
-    """The highest tier with a date; the page lists every tier, reached or not."""
-    rank, achieved_on = None, None
+    """The highest tier with a date, and when the first tier (Private) was reached.
+
+    The page lists every tier, reached or not. Every player starts at Private, so its
+    date stands in for when the account started.
+    """
+    reached = []
     for block in soup.select(".media"):
         title = block.find("h1")
         achieved = title.find("small").get_text(strip=True)
         if achieved:
-            rank = title.find(string=True, recursive=False).strip()
-            achieved_on = datetime.strptime(achieved, _DATE_FORMAT).date()
-    return {"current_rank": rank, "current_rank_achieved_on": achieved_on}
+            name = title.find(string=True, recursive=False).strip()
+            reached.append((name, datetime.strptime(achieved, _DATE_FORMAT).date()))
+    current = reached[-1] if reached else (None, None)
+    return {
+        "current_rank": current[0],
+        "current_rank_achieved_on": current[1],
+        "start_date": reached[0][1] if reached else None,
+    }
 
 
 def parse_profile(html: str, name: str) -> dict:
@@ -320,8 +330,10 @@ def _targets(now: datetime, limit: int, new_only: bool = False) -> list[str]:
 
 def _merge(rows: list[dict]) -> None:
     incoming = pl.DataFrame(rows, schema=SCHEMA)
+    # Diagonal: rows written before a column existed get it as null.
     merged = (
-        pl.concat([pl.read_parquet(PATH), incoming])
+        pl.concat([pl.read_parquet(PATH), incoming], how="diagonal_relaxed")
+        .select(list(SCHEMA))
         .unique(subset=KEY, keep="last")
         .sort(KEY)
     )

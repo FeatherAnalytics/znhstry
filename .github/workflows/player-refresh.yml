@@ -1,0 +1,76 @@
+name: Player refresh batch
+
+# One batch of the player-profile queue: up to PROFILES_MAX_PER_RUN (175) profiles in queue order, then the two player marts and the raw file. Four batches a day, about 700 profiles, refresh every known player roughly every 28 days.
+#
+# ## Who starts it
+#
+# The Cloudflare Worker in `trigger/` dispatches it on its :07 tick at 03, 09, 15 and 21 UTC, the same cron that starts the Atlantis job, so it needs no cron trigger of its own (the Free plan allows five per account). There is deliberately no `schedule:` fallback: a doubled run is not a no-op here, it fetches another batch, so a missed batch just makes that day ~525 instead of ~700.
+#
+# ## What it owns
+#
+# This job and the by-name workflow are the only writers of `raw/players/`. A full `archive` skips that subtree (`OWNED_PREFIXES` in upload.py), so the nightly can never push its older restored copy over a batch's. The marts are published as the `players` set of LIVE_MARTS: only `fct_player_profile` and `dim_player`, with their manifest entries patched in, never a full republish.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Its own group, shared with the by-name workflow: both write raw/players/. Not the nightly's group, which the battle-report backfill also holds for hours at a time.
+concurrency:
+  group: players
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      QONQR_USERNAME: ${{ secrets.QONQR_USERNAME }}
+      QONQR_PASSWORD: ${{ secrets.QONQR_PASSWORD }}
+
+    steps:
+      - name: Check the portal account is configured
+        run: test -n "$QONQR_USERNAME" || { echo "::error::QONQR_USERNAME secret is not set"; exit 1; }
+
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Everything, not just players/: the queue reads battle-report and Atlantis names to decide who is due.
+      - name: Restore extracted data
+        working-directory: pipeline
+        run: uv run python -m znhstry restore
+
+      # A failure or a timeout keeps every profile merged before it (every 25, and again on the way out), and the steps below run regardless, so a partial batch is still published and archived instead of vanishing with the runner.
+      - name: Fetch a batch of profiles
+        continue-on-error: true
+        timeout-minutes: 45
+        working-directory: pipeline
+        run: uv run python -m znhstry profiles
+
+      - name: Build the player models
+        if: always()
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt build --select stg_player_profiles+
+
+      - name: Publish the player marts
+        if: always()
+        working-directory: pipeline
+        run: |
+          uv run python -m znhstry marts --only players
+          uv run python -m znhstry upload --marts --only players
+
+      - name: Archive the profiles
+        if: always()
+        working-directory: pipeline
+        run: uv run python -m znhstry archive --prefix players/

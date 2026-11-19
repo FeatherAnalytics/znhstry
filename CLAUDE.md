@@ -37,8 +37,8 @@ cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under
 cd pipeline  && uv run python -m znhstry archive      # push data/raw to R2 under raw/
 ```
 
-**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, and the half-hourly
-Atlantis job at :07 and :37 by the same Worker.** GitHub's own `schedule:` lines stay as fallbacks;
+**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, the half-hourly
+Atlantis job at :07 and :37 by the same Worker, and a player-refresh batch on the :07 tick at 03, 09, 15 and 21 UTC.** GitHub's own `schedule:` lines stay as fallbacks;
 GitHub has been firing the 02:30 cron around 07:20 and dropping the Atlantis one entirely. The Atlantis gate makes its doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
 
 Other steps:
@@ -47,7 +47,7 @@ Other steps:
 cd pipeline
 uv run python -m znhstry restore          # pull data/raw back from R2 — first step on a clone, no key needed
 uv run python -m znhstry atlantis         # pull the tournament page if a tournament is running
-uv run python -m znhstry profiles         # fetch up to 300 player profiles (login-only; QONQR_USERNAME/PASSWORD)
+uv run python -m znhstry profiles         # fetch up to 175 player profiles in queue order (login-only; QONQR_USERNAME/PASSWORD); one player-refresh batch
 uv run python -m znhstry profiles --names "a, b"  # fetch named players now; also the "Fetch player profiles by name" workflow
 uv run python -m znhstry profiles --new-only  # fetch every never-fetched player, then stop (no refreshes)
 uv run python -m znhstry seed-names       # one-time: queue every name on the boards, country and region leaderboards (~11 h)

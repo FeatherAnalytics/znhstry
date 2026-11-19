@@ -127,7 +127,7 @@ sources:
           external_location: "read_parquet('../data/raw/lookups/regions.parquet')"
       - name: player_profiles
         description: >
-          One row per player per fetch of the login-only `portal.qonqr.com/Player/Details/<name>` page: level, faction, status, current rank and one boolean per medal, as of `scraped_at`. `found` is false when every retry ended on the portal's error page, which is how it answers both a transient fault and a player that no longer exists; those rows carry nothing else. `player_name` is the spelling we asked for, `display_name` the page's own. A row with no `scraped_at` is a queue placeholder: a name seen on a leaderboard page and not fetched yet, dropped once its first fetch lands. Written snake_case by the scraper, unlike the other raw tables, because there is no upstream header to mirror.
+          One row per player per fetch of the login-only `portal.qonqr.com/Player/Details/<name>` page: level, faction, status, current rank, `start_date` (when the player reached Private) and one boolean per medal, as of `scraped_at`. `found` is false when every retry ended on the portal's error page, which is how it answers both a transient fault and a player that no longer exists; those rows carry nothing else. `player_name` is the spelling we asked for, `display_name` the page's own. A row with no `scraped_at` is a queue placeholder: a name seen on a leaderboard page and not fetched yet, dropped once its first fetch lands. Written snake_case by the scraper, unlike the other raw tables, because there is no upstream header to mirror.
         meta:
           external_location: "read_parquet('../data/raw/players/profiles.parquet')"
       - name: exchange_rates

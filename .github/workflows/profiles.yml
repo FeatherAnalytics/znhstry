@@ -1,6 +1,6 @@
 name: Fetch player profiles by name
 
-# By hand, for one player or a few: fetch their portal profiles now instead of waiting for the nightly queue, then republish the player marts and archive the raw file. Names are validated in Python before any request (letters, digits, _ . - only; at most 50).
+# By hand, for one player or a few: fetch their portal profiles now instead of waiting for the refresh queue, then republish the player marts and archive the raw file. Names are validated in Python before any request (letters, digits, _ . - only; at most 50).
 
 on:
   workflow_dispatch:
@@ -13,9 +13,9 @@ on:
 permissions:
   contents: read
 
-# The nightly writes raw/players/ too; sharing its group means the two never write the profiles file at once. A run started during the nightly waits for it.
+# Shared with player-refresh.yml, the other writer of raw/players/, so the two never write the profiles file at once. A run started during a batch waits for it.
 concurrency:
-  group: battlestats-players
+  group: players
   cancel-in-progress: false
 
 jobs:
@@ -51,18 +51,18 @@ jobs:
           test -n "$QONQR_USERNAME" || { echo "::error::QONQR_USERNAME secret is not set"; exit 1; }
           uv run python -m znhstry profiles --names "$NAMES"
 
-      # Marts are published as one complete set, so the whole warehouse is rebuilt, not just the player models.
-      - name: Build warehouse
+      - name: Build the player models
         working-directory: transform
         env:
           DBT_PROFILES_DIR: .
-        run: uv run dbt build
+        run: uv run dbt build --select stg_player_profiles+
 
-      - name: Publish marts as Parquet
+      # Only the two player marts, patched into the published manifest; the rest are left as the nightly wrote them.
+      - name: Publish the player marts
         working-directory: pipeline
         run: |
-          uv run python -m znhstry marts
-          uv run python -m znhstry upload --marts
+          uv run python -m znhstry marts --only players
+          uv run python -m znhstry upload --marts --only players
 
       - name: Archive the profiles
         working-directory: pipeline

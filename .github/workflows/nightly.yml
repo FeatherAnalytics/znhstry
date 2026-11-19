@@ -78,8 +78,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    # 90 for the publish, plus up to 60 for the player-profile step at its 10 s floor.
-    timeout-minutes: 150
+    timeout-minutes: 90
 
     env:
       R2_BUCKET: ${{ vars.R2_BUCKET }}
@@ -199,28 +198,6 @@ jobs:
         if: steps.changed.outputs.any == 'true'
         working-directory: pipeline
         run: uv run python -m znhstry upload
-
-      # After the map is live, so its ~50 minutes at the 10 s floor never delays the publish. Up to 300 profiles in queue order (see profiles._targets). A failure or timeout keeps every profile saved before it, because the scraper merges every 25 and again on the way out; the next night continues the queue.
-      - name: Collect player profiles
-        id: profiles
-        if: steps.changed.outputs.any == 'true'
-        continue-on-error: true
-        timeout-minutes: 60
-        working-directory: pipeline
-        run: |
-          if [ -z "$QONQR_USERNAME" ]; then
-            echo "QONQR_USERNAME not set - skipping player profiles" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          uv run python -m znhstry profiles
-
-      # The player marts are tables over a view of the raw file, so the profiles collected above reach them only through a rebuild. Scoped to those models: seconds, not the full build.
-      - name: Rebuild player models
-        if: steps.changed.outputs.any == 'true'
-        working-directory: transform
-        env:
-          DBT_PROFILES_DIR: .
-        run: uv run dbt build --select stg_player_profiles+
 
       # The same marts as Parquet, under `marts/`, for anything that reads the warehouse
       # from outside the map. Its own tree and its own prefix: the export's manifest and

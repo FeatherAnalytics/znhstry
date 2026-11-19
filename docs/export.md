@@ -159,6 +159,10 @@ Series in the month payload are positional over `observations` with `null` where
 
 Derived months (source "reports") write one `YYYY-MM.json.br` per month without hourly data: zones as a list ordered by triangle (Central, Legion, Swarm, Faceless) then position then name, and players grouped by attributed faction with `faction_source`, `is_mercenary`, and `qredits_estimate` (null for Unconfirmed). `index.json` carries them in `tournaments_derived` separately from collected entries, with `first_report_date`/`last_report_date` instead of observation timestamps, plus `end_tolerance_days`, `schedule_note`, and `placement_tiebreak`. `all_time` gains `players_derived` and `factions_derived` from non-board months. The tree is cleared and rewritten each run; determinism is verified by the md5 recipe.
 
+### `depot.json.br` — the Calculator's exchange rates
+
+One small file: `exchange_rate` is the newest row of `stg_exchange_rates` (`date`, `qredits_per_cube`), the Calculator's default, and `rates_seen` is every distinct rate in the record, ascending, the Calculator's dropdown. `exchange_rate` is null before the first read. Written by `export_all`, so the upload's sweep keeps it.
+
 ### Immutability and nightly updates
 
 `dist/` is gitignored and the nightly run uploads it. A bucket has no history, so git bloat
@@ -253,6 +257,8 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
 | `zones/zones.parquet` | one file | 2,682,442 |
 | `battlestats/battlestats.parquet` | one file, 77 columns verbatim | 61,517 |
 | `lookups/`, `boundaries/` | | 251 countries, 3,799 regions |
+| `players/profiles.parquet` | one file, one row per player per profile fetch, plus name-only placeholders the queue has not fetched yet | grows each run |
+| `depot/exchange_rates.parquet` | one file, one row per UTC date | one per day |
 
 - **Year partitions, because an append should rewrite one file.** The old 88-shard layout
   sized API responses; there is no API to size for. DuckDB prunes on the directory name.
@@ -354,12 +360,18 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_pla
 | `dim_atlantis_tournament` | `tournament_month` |
 | `fct_atlantis_payout` | `tournament_month, faction, player_name` |
 | `fct_atlantis_zone_player_daily` | `battle_date, battle_report_number, rank, player_name` |
+| `fct_exchange_rate_daily` | `rate_date` |
+| `fct_player_profile` | `player_key, scraped_at` |
+| `dim_player` | `player_key` |
+| `fct_battle_player` | `player_key, battle_report_number` |
 
 Row counts and byte sizes are in `marts/_meta.json`, which names every table with its path, row count, bytes, sort key and columns, plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
 
 **Five marts also publish every half hour during a tournament.** `stg_atlantis_zones`, `stg_atlantis_leaderboard`, `fct_atlantis_zone_interval`, `fct_atlantis_player_interval` and `fct_atlantis_faction_hourly` are built from half-hourly snapshots, so a nightly-only publish left them up to a day behind the raw layer. `marts --only atlantis` writes them to `dist/marts-atlantis/`, and `upload --marts --only atlantis` sends the changed ones, about 450 kB in total. The rest of the nightly's rules hold: total-order check, ETag skip, files before manifest.
 
-**The scoped publish never sweeps and never rebuilds the manifest.** Its warehouse holds only the Atlantis build, so the bucket is the only record of the other marts. It reads the live `_meta.json`, replaces only those five entries and writes it back with `If-Match`. A missing, unparsable or incomplete manifest stops the step before its first write. The separate directory keeps a partial set away from `upload_marts`, which treats `dist/marts/` as the complete list of live tables.
+**The player marts also publish four times a day.** `fct_player_profile` and `dim_player` are the `players` set of `LIVE_MARTS`: each player-refresh batch runs `marts --only players` (to `dist/marts-players/`) and `upload --marts --only players`, the same scoped path as the Atlantis five.
+
+**The scoped publish never sweeps and never rebuilds the manifest.** Its warehouse holds only its own set's build, so the bucket is the only record of the other marts. It reads the live `_meta.json`, replaces only its set's entries and writes it back with `If-Match`. A missing, unparsable or incomplete manifest stops the step before its first write. The separate directory keeps a partial set away from `upload_marts`, which treats `dist/marts/` as the complete list of live tables.
 
 **The nightly and the half-hourly job can overlap, and each case resolves itself.** A nightly that started before a collection can overwrite the five files with older bytes; the next half-hourly run sends them again and repairs the manifest entries even when no file changed. The final pull lands before the 00:45 UTC nightly restores the raw layer, so that nightly carries it, and any later nightly that opens the gate does the same. A half-hourly write that loses the race to a nightly gets a 412, re-reads and patches again, so it cannot revert the nightly's entries. A manifest that briefly disagrees with a file affects only the row count and size the console displays.
 

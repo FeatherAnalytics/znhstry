@@ -12,16 +12,33 @@ from . import (
     attribute,
     boundaries,
     config,
+    depot,
     export,
     ingest,
     marts,
     portal,
+    profiles,
     upload,
     wayback,
 )
 
 
 def main() -> int:
+    args = _parser().parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # httpx logs every request at INFO, which drowns out progress.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    _run_step(args)
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="znhstry", description="Zone History pipeline.")
     parser.add_argument("step", choices=sorted(_DISPATCH), nargs="?", default="ingest")
     parser.add_argument(
@@ -57,25 +74,28 @@ def main() -> int:
         help="Backfill step only. Print targets without fetching.",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        help="Profiles step only. Players to fetch this run, overriding PROFILES_MAX_PER_RUN.",
+    )
+    parser.add_argument(
+        "--new-only",
+        action="store_true",
+        help="Profiles step only. Fetch only players never fetched before, then stop.",
+    )
+    parser.add_argument(
+        "--names",
+        help="Profiles step only. Comma-separated player names to fetch now, instead of the queue.",
+    )
+    parser.add_argument(
         "--only",
-        choices=["atlantis"],
+        choices=sorted(config.LIVE_MARTS),
         help=(
-            "Export, marts and upload steps only. Rebuild or push only the named tree; with "
-            "marts or upload --marts, only the half-hourly Atlantis marts."
+            "Marts and upload --marts: only that set of between-nightlies marts. Export and "
+            "upload without --marts: atlantis only, the Atlantis tree."
         ),
     )
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    # httpx logs every request at INFO, which drowns out progress.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
-    _run_step(args)
-    return 0
+    return parser
 
 
 def _run_ingest(args: argparse.Namespace) -> None:
@@ -84,12 +104,24 @@ def _run_ingest(args: argparse.Namespace) -> None:
 
 
 def _run_upload(args: argparse.Namespace) -> None:
-    if args.marts and args.only == "atlantis":
-        upload.upload_live_atlantis_marts()
+    if args.marts and args.only:
+        upload.upload_live_marts(args.only)
     elif args.only == "atlantis":
         upload.upload_atlantis()
+    elif args.only:
+        # Falling through to upload_all would publish and sweep the whole export.
+        raise SystemExit(f"upload --only {args.only} needs --marts")
     else:
         (upload.upload_marts if args.marts else upload.upload_all)()
+
+
+def _run_export(args: argparse.Namespace) -> None:
+    if args.only == "atlantis":
+        export.export_atlantis_only(args.scope)
+    elif args.only:
+        raise SystemExit(f"export has no --only {args.only}; it only rebuilds atlantis")
+    else:
+        export.export_all(args.scope)
 
 
 def _run_wayback() -> None:
@@ -100,14 +132,16 @@ def _run_wayback() -> None:
 
 
 _DISPATCH = {
-    "export": lambda a: (
-        export.export_atlantis_only(a.scope) if a.only == "atlantis"
-        else export.export_all(a.scope)
-    ),
+    "export": _run_export,
     "ingest": _run_ingest,
     "battlestats": lambda _: _emit(reports=portal.scrape_battlestats()),
     "backfill": lambda a: _emit(pages=portal.backfill_players(dry_run=a.dry_run)),
     "atlantis": lambda _: _emit(rows=atlantis.scrape_atlantis()),
+    "profiles": lambda a: _emit(profiles=profiles.scrape_profiles(
+        limit=a.limit, names=a.names, new_only=a.new_only
+    )),
+    "seed-names": lambda _: _emit(names=profiles.seed_names()),
+    "exchange": lambda _: _emit(rate=depot.scrape_exchange_rate()),
     "wayback": lambda _: _run_wayback(),
     "attribute": lambda _: attribute.attribute_factions(),
     "upload": _run_upload,
@@ -115,7 +149,7 @@ _DISPATCH = {
     "restore": lambda a: upload.restore_raw(prefix=a.prefix),
     "boundaries": lambda _: boundaries.export_boundaries(),
     "marts": lambda a: (
-        marts.export_live_atlantis_marts() if a.only == "atlantis" else marts.export_marts()
+        marts.export_live_marts(a.only) if a.only else marts.export_marts()
     ),
 }
 

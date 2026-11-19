@@ -76,6 +76,18 @@ PORTAL_MIN_INTERVAL = 2.0
 # crawl of thousands of pages in one. Four days' worth.
 PORTAL_MAX_PER_RUN = 40
 
+# Player profiles: login-only pages, one per player, ~19,400 names known. player-refresh.yml
+# runs four batches a day, so ~700 a day refreshes everyone about every 28 days. A batch is
+# about 30 minutes.
+PROFILE_INTERVAL = 10.0
+PROFILE_RETRIES = 3
+PROFILES_MAX_PER_RUN = 175
+PROFILE_FLUSH_EVERY = 25
+PROFILE_BACKOFF = 60.0
+# A changed status is re-checked a week on; the portal's own steps are 2 weeks, 1 month
+# and 3 months without a launch, so a week catches each step soon after it lands.
+PROFILE_RECHECK_DAYS = 7
+
 BACKFILL_INTERVAL = 10.0
 BACKFILL_BUDGET = 5 * 3600
 
@@ -105,18 +117,24 @@ WEB_DATA = ROOT / "dist" / "data"
 # warehouse from outside the map. Uploaded under `marts/`, apart from the export.
 MARTS_OUT = ROOT / "dist" / "marts"
 
-# The marts built from half-hourly snapshots, which the Atlantis job publishes between
-# nightlies. Their own directory: a partial set inside MARTS_OUT would reach `upload_marts`,
-# which treats that directory as the complete list of live tables and sweeps the rest.
-LIVE_ATLANTIS_MARTS = (
-    "stg_atlantis_zones",
-    "stg_atlantis_leaderboard",
-    "fct_atlantis_zone_interval",
-    "fct_atlantis_player_interval",
-    "fct_atlantis_faction_hourly",
-)
-LIVE_ATLANTIS_MARTS_OUT = ROOT / "dist" / "marts-atlantis"
-LIVE_ATLANTIS_ENTRIES = "_entries.json"
+# Marts a job publishes between nightlies: the half-hourly Atlantis job and the player-refresh
+# batches. Each set has its own directory: a partial set inside MARTS_OUT would reach
+# `upload_marts`, which treats that directory as the complete list of tables and sweeps the rest.
+LIVE_MARTS = {
+    "atlantis": (
+        "stg_atlantis_zones",
+        "stg_atlantis_leaderboard",
+        "fct_atlantis_zone_interval",
+        "fct_atlantis_player_interval",
+        "fct_atlantis_faction_hourly",
+    ),
+    "players": ("fct_player_profile", "dim_player"),
+}
+LIVE_ENTRIES = "_entries.json"
+
+
+def live_marts_out(live: str) -> Path:
+    return ROOT / "dist" / f"marts-{live}"
 
 # Written by `dbt build`. `marts` reads the model and column descriptions out of it so
 # the published dictionary is dbt's own text rather than a second copy that can drift.

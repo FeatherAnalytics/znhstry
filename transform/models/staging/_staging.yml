@@ -100,11 +100,21 @@ models:
       - name: source
         description: "'portal' for live scrapes, 'wayback' for Internet Archive snapshots."
 
+  - name: stg_battle_players
+    description: "Grain: one row per player per battle report, every report, tournament ones included. Per-player scraper rows where they exist (with faction and badges); otherwise unpacked from the report's comma-separated players string in groups of five fields (rank, player_name, launches, bots_killed, bots_lost), capped at 50 per report. The per-player rows were backfilled for tournament reports only, so faction and badges are null for most regular reports."
+    data_tests:
+      - unique:
+          column_name: "battle_report_number || '|' || lower(player_name)"
+    columns:
+      - name: battle_report_number
+        data_tests: [not_null]
+      - name: player_name
+        data_tests: [not_null]
+
   - name: stg_atlantis_battle_players
     description: >
       Grain: one row per player per battle report for Atlantis tournament zones.
-      Unpacked from the comma-separated players string: groups of five fields
-      (rank, player_name, launches, bots_killed, bots_lost), capped at 50 per report.
+      `stg_battle_players` filtered to tournament reports.
     columns:
       - name: battle_report_number
         data_tests: [not_null]
@@ -118,3 +128,33 @@ models:
       rows, and no other report reconciles the difference. A review queue, not a
       finding: a row here means the attribution could not be confirmed, never that
       it is wrong.
+
+  - name: stg_player_profiles
+    description: >
+      Grain: one row per player per fetch of their portal profile. Snapshots, never overwrites: faction, level and rank hold only at `scraped_at`. Rows with `found` false carry no profile fields. One boolean column per medal, 35 in all, a list the game does not extend. `rank_points` can differ from the sum of the medal points: per the QONQR wiki, holiday medals (Turing's Birthday, Skynet Anniversary, Hal's Birthday, Ypres Peace) and faction-switch medals (Spy, Double Agent, Mercenary at -20; Renegade, Loyalist, Patriot at +20) count toward rank points but the portal never lists them.
+    data_tests:
+      - unique:
+          column_name: "lower(player_name) || '|' || scraped_at"
+    columns:
+      - name: player_name
+        data_tests: [not_null]
+      - name: scraped_at
+        data_tests: [not_null]
+      - name: faction
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Swarm', 'Legion', 'Faceless']
+      - name: current_rank
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Private', 'Private First Class', 'Corporal', 'Sergeant', 'Staff Sergeant', 'Sergeant First Class', 'Master Sergeant', 'Sergeant Major']
+
+  - name: stg_exchange_rates
+    description: "Grain: one row per UTC date. Qredits one cube buys on that date."
+    columns:
+      - name: rate_date
+        data_tests: [unique, not_null]
+      - name: qredits_per_cube
+        data_tests: [not_null]

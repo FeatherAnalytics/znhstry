@@ -228,6 +228,7 @@ const GROUPS: { label: string; has: (name: string) => boolean }[] = [
   },
   { label: "Most Active Zones", has: (n) => !n.includes("atlantis") && n.includes("battle") },
   { label: "Atlantis tournament", has: (n) => n.includes("atlantis") },
+  { label: "Players", has: (n) => !n.includes("atlantis") && n.includes("player") },
 ];
 
 /** Staging, then dimensions, then facts. Anything unprefixed sorts last. */

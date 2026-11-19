@@ -12,6 +12,10 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
 | `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 30 minutes, tournament days only |
+| `portal.qonqr.com/Player/Details` | player level, faction, status, current rank, start date (Private) and 35 medal flags; login-only, one page per player | four batches a day (`player-refresh.yml`), 175 per batch, queued by `profiles._targets` |
+| `portal.qonqr.com/Leaderboard/*` | player names only from the seven boards, every country and every region page, a one-time seed (`seed-names`) that writes each new name into the profile table as a placeholder for the queue; the numbers sit behind decoy columns and are not collected | once |
+| `portal.qonqr.com/Depot/Exchange` | the day's cube-to-Qredit exchange rate; login-only | nightly, before the warehouse build; skipped without the `QONQR_*` secrets |
+| `neon-ninja/QONQR_zonedata` | `exchange_rates.csv`, backfills for dates we did not read ourselves (2023-10-16 onward); only missing dates are added, and it has agreed with every date we read | by hand, when the nightly has missed days |
 | `web.archive.org` | cached copies of the Atlantis page | one-off, 31 snapshots 2019-07 to 2026-06 |
 
 **Slot `NN` is the day of the month and QONQR overwrites it in place.** Nothing in the
@@ -76,6 +80,7 @@ numbers it does not already have. A normal run costs one index page and stops.
   row faction and compare against `Legion/Swarm/Faceless Total Launches`. Reports scraped
   near their battle date match exactly; old ones put launches under factions the header
   says never launched at all.
+- **Every report's player list is in `battlestats.parquet` as one string; the per-player rows under `battlestats/players/` cover mostly tournament reports.** The backfill walks tournament reports only, so 690 of the 46,680 regular reports have per-player rows. `stg_battle_players` reads the rows where they exist and unpacks the string for the rest (groups of five: rank, name, launches, bots killed, bots lost), and `fct_battle_player` publishes every player in every report. Faction and badges exist only on the per-player rows, so they are null for most regular reports. The profile queue reads names from the string too; reading the rows alone missed thousands of regular-report players.
 - The parser builds column names from the page's own stat labels and each cell's CSS
   class, which is what makes new rows land in the seeded history's exact 77 columns.
   `pipeline/tests/test_portal.py` pins that contract against a real saved page.
@@ -107,7 +112,7 @@ The gate fails the run when `DATA_ORIGIN` is unset or the state file returns any
 GitHub's cron skipped the Atlantis schedule outright for hours at a time and runs the nightly
 about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
 `scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and :37 and on `nightly.yml`
-at 00:45 UTC, deployed by `deploy-trigger.yml`. Both workflows keep their own `schedule:`
+at 00:45 UTC, deployed by `deploy-trigger.yml`. On the :07 tick at 03, 09, 15 and 21 UTC it also starts `player-refresh.yml`; every dispatch is attempted before any failure is raised. The nightly and Atlantis workflows keep their own `schedule:`
 as the fallback. The Atlantis gate reads `next_run_at`, the next :00 or :30 after a collection, so the second run of a half hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
 Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
@@ -335,3 +340,32 @@ around 2026-08-25, so they now join `dim_zone` normally and the gap has narrowed
 The remaining gap is immaterial for a visualization. It is documented rather than tested
 against a threshold, because thresholds on upstream drift are brittle.
 
+
+## Player profiles
+
+**`start_date` is when the player reached Private.** Every player starts at that rank, so it stands in for the account's start. It was added after the initial fill, so older fetches have it null and each refresh fills it in; one full rotation (about 28 days) covers everyone.
+
+**Status is the portal's, never ours.** The portal's own tooltips define it: Active has launched recently, On Leave has not launched in 2 weeks, Missing in Action in a month, Retired in 3 months, and Fallen "was reported as deceased". Fallen is the only permanent status; a Retired player who launches again goes back to Active. We cannot derive it, because most launches happen in zones no battle report or Atlantis board covers.
+
+**Each batch fetches 175, in this order** (`profiles._targets`):
+
+1. Never fetched, most recently seen first.
+2. Seen in a battle report or on the Atlantis board after their last fetch while their stored status was not Active. The sighting is a reason to look, not a status.
+3. Status changed between the last two fetches, re-checked after 7 days, which catches each step of the ladder soon after it lands.
+4. Everyone else, Retired included, oldest fetch first. Retired players come back often, so they get no slower schedule.
+
+Fallen players are never fetched again.
+
+At ~19,400 names and four batches a day (~700), a full pass takes about 28 days.
+
+**The refresh runs on its own, not in the nightly.** `player-refresh.yml` is one batch: restore, fetch up to 175, rebuild the player models, publish the `players` set of marts (`fct_player_profile`, `dim_player`) by patching only their manifest entries, and archive `players/`. The trigger Worker starts it on the Atlantis cron's :07 tick at 03, 09, 15 and 21 UTC, so it adds no cron trigger (the Workers Free plan allows five per account). It has no GitHub `schedule:` fallback: a doubled batch fetches 175 more profiles instead of doing nothing. The publish, build and archive steps run even when the fetch fails or times out, so a partial batch is kept. It and the by-name workflow share the `players` concurrency group, and a full `archive` skips `players/` (`OWNED_PREFIXES`), so the nightly never pushes its older restored copy over a batch's.
+
+**One race is accepted because it heals.** The nightly republishes every mart, the player marts included, from the data it restored at its start. A batch that finishes between that restore and the nightly's marts upload has its two player marts overwritten with slightly older ones; the next batch, within six hours, republishes them. The raw profiles are never at risk.
+
+**`profiles --new-only` fetches every never-fetched name and stops**, for a catch-up after new names arrive; without it the run fills its cap with refreshes once the new names run out.
+
+**One player or a few can be fetched at once by name:** `profiles --names "a, b"`, or the "Fetch player profiles by name" workflow, which also republishes the marts and archives the file. Names are checked before any request (letters, digits, `_ . -`, at most 50).
+
+**The signed-in account is fetched from `/Player`.** Its `/Player/Details` page redirects to its own-account view, which nests the card differently, lists unearned medals as progress panels and shows no status line. The parser finds the card by its Level heading and reads only earned medals, so one parser serves both layouts, and the account whose name is `QONQR_USERNAME` gets status `Retired` (`SELF_STATUS`, set by the owner). Any other profile request that lands on a different page than it asked for is recorded as unavailable rather than parsed.
+
+**The portal's error page doubles as "no such player".** Both redirect to `/500.html` with status 200. Three retries, then a `found = false` row, and the name goes back into the oldest-first rotation.

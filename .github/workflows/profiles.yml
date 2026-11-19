@@ -1,0 +1,69 @@
+name: Fetch player profiles by name
+
+# By hand, for one player or a few: fetch their portal profiles now instead of waiting for the refresh queue, then republish the player marts and archive the raw file. Names are validated in Python before any request (letters, digits, _ . - only; at most 50).
+
+on:
+  workflow_dispatch:
+    inputs:
+      names:
+        description: "Player names, separated by commas (e.g. poopascoopa, BScared)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Shared with player-refresh.yml, the other writer of raw/players/, so the two never write the profiles file at once. A run started during a batch waits for it.
+concurrency:
+  group: players
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      QONQR_USERNAME: ${{ secrets.QONQR_USERNAME }}
+      QONQR_PASSWORD: ${{ secrets.QONQR_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Restore extracted data
+        working-directory: pipeline
+        run: uv run python -m znhstry restore
+
+      # The input reaches the shell through the environment, never through `${{ }}`, so whatever is typed in the box cannot run as a command here.
+      - name: Fetch the named profiles
+        working-directory: pipeline
+        env:
+          NAMES: ${{ inputs.names }}
+        run: |
+          test -n "$QONQR_USERNAME" || { echo "::error::QONQR_USERNAME secret is not set"; exit 1; }
+          uv run python -m znhstry profiles --names "$NAMES"
+
+      - name: Build the player models
+        working-directory: transform
+        env:
+          DBT_PROFILES_DIR: .
+        run: uv run dbt build --select stg_player_profiles+
+
+      # Only the two player marts, patched into the published manifest; the rest are left as the nightly wrote them.
+      - name: Publish the player marts
+        working-directory: pipeline
+        run: |
+          uv run python -m znhstry marts --only players
+          uv run python -m znhstry upload --marts --only players
+
+      - name: Archive the profiles
+        working-directory: pipeline
+        run: uv run python -m znhstry archive --prefix players/

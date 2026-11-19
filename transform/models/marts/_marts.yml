@@ -349,3 +349,49 @@ models:
         description: Top-three finishes with no known first, second or third.
       - name: factions
         description: Every faction the player placed in.
+
+  - name: fct_exchange_rate_daily
+    description: "Grain: one row per UTC date: how many Qredits one Cube bought that day. Each date is either our own read of the portal's Exchange page (`source = 'portal'`) or, for dates we did not read, a backfill from `neon-ninja/QONQR_zonedata` (`source = 'neon-ninja'`). Join on the date, e.g. `fct_zone_battles.battle_date = rate_date`."
+    columns:
+      - name: rate_date
+        data_tests: [unique, not_null]
+      - name: qredits_per_cube
+        data_tests: [not_null]
+
+  - name: fct_player_profile
+    description: "Grain: one row per player per fetch of their login-only portal profile. Snapshots, never overwrites: level, faction, status and rank hold only at `scraped_at`, so faction switches and status changes are the difference between rows. `found` false means every retry hit the portal's error page (a renamed or deleted player, or a fault); those rows carry no profile fields. One boolean column per medal, 35 in all. Join to other player tables on `player_key`, the lowercased name, because spelling case varies across the portal's pages."
+    data_tests:
+      - unique:
+          column_name: "player_key || '|' || scraped_at"
+    columns:
+      - name: player_key
+        description: Lowercased player name; the join key to every other player table.
+        data_tests: [not_null]
+      - name: start_date
+        description: When the player reached Private, the first rank every player starts at, so a proxy for when the account started. Null on fetches made before it was collected; each refresh fills it in.
+
+  - name: dim_player
+    description: "Grain: one row per player we hold a name for and have fetched, case-insensitive. Profile fields are from the newest fetch that found a profile; null when none ever did. Join on `player_key` = `lower(player_name)` of any other player table."
+    columns:
+      - name: player_key
+        description: Lowercased player name; the join key to every other player table.
+        data_tests: [unique, not_null]
+      - name: found_on_last_check
+        description: False when the newest fetch hit the error page, though an older one found the player — usually a rename.
+      - name: start_date
+        description: When the player reached Private, a proxy for when the account started. Null until the player's first refresh after it was collected.
+
+  - name: fct_battle_player
+    description: "Grain: one row per player per battle report, every Most Active Zones report, tournament ones included (`is_tournament`). Who launched in which zone on which day, with rank, launches, bots killed and bots lost. A battle report is a daily top-ten-zones list, so a player missing from it may still have launched there. `faction` and the two badge columns are known only where the scraper kept per-player rows, mostly tournament reports; elsewhere they are null. Join to `dim_player` on `player_key` and to `fct_zone_battles` on `battle_report_number`."
+    data_tests:
+      - unique:
+          column_name: "battle_report_number || '|' || player_key"
+    columns:
+      - name: player_key
+        description: Lowercased player name; the join key to every other player table.
+        data_tests: [not_null]
+      - name: battle_report_number
+        data_tests: [not_null]
+      - name: zone_id
+        description: Negative for Atlantis tournament zones, which exist only for their month.
+        data_tests: [not_null]

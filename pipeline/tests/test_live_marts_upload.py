@@ -16,7 +16,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from znhstry import config
-from znhstry.upload import MARTS_MANIFEST_KEY, MARTS_PREFIX, upload_live_atlantis_marts
+from znhstry.upload import MARTS_MANIFEST_KEY, MARTS_PREFIX, upload_live_marts
 
 
 class FakeR2:
@@ -59,25 +59,26 @@ class FakeR2:
 
 
 def _published() -> dict:
-    tables = {name: {"path": f"{name}.parquet", "rows": 1} for name in config.LIVE_ATLANTIS_MARTS}
+    live = config.LIVE_MARTS["atlantis"]
+    tables = {name: {"path": f"{name}.parquet", "rows": 1} for name in live}
     tables["fct_zone_events"] = {"path": "fct_zone_events.parquet", "rows": 9}
     return {"newest_event_date": "2026-11-04", "future_key": 1, "tables": tables}
 
 
 def _bucket(manifest: bytes) -> dict[str, bytes]:
-    objects = {MARTS_PREFIX + f"{n}.parquet": b"old" for n in config.LIVE_ATLANTIS_MARTS}
+    objects = {MARTS_PREFIX + f"{n}.parquet": b"old" for n in config.LIVE_MARTS["atlantis"]}
     objects[MARTS_PREFIX + "fct_zone_events.parquet"] = b"untouched"
     objects[MARTS_MANIFEST_KEY] = manifest
     return objects
 
 
 def _run(tmp_path: Path, monkeypatch, s3: FakeR2) -> None:
-    for name in config.LIVE_ATLANTIS_MARTS:
+    for name in config.LIVE_MARTS["atlantis"]:
         (tmp_path / f"{name}.parquet").write_bytes(b"new")
-    entries = {n: {"path": f"{n}.parquet", "rows": 2} for n in config.LIVE_ATLANTIS_MARTS}
-    (tmp_path / config.LIVE_ATLANTIS_ENTRIES).write_text(json.dumps(entries), encoding="utf-8")
+    entries = {n: {"path": f"{n}.parquet", "rows": 2} for n in config.LIVE_MARTS["atlantis"]}
+    (tmp_path / config.LIVE_ENTRIES).write_text(json.dumps(entries), encoding="utf-8")
     monkeypatch.setattr("znhstry.upload._client", lambda: s3)
-    upload_live_atlantis_marts(tmp_path, "bucket")
+    upload_live_marts("atlantis", tmp_path, "bucket")
 
 
 def test_writes_only_the_live_marts_then_the_manifest_and_deletes_nothing(tmp_path, monkeypatch):
@@ -88,7 +89,7 @@ def test_writes_only_the_live_marts_then_the_manifest_and_deletes_nothing(tmp_pa
     assert s3.deletes == []
     assert s3.writes[-1] == MARTS_MANIFEST_KEY
     assert set(s3.writes[:-1]) == {
-        MARTS_PREFIX + f"{n}.parquet" for n in config.LIVE_ATLANTIS_MARTS
+        MARTS_PREFIX + f"{n}.parquet" for n in config.LIVE_MARTS["atlantis"]
     }
     assert s3.objects[MARTS_PREFIX + "fct_zone_events.parquet"] == b"untouched"
 
@@ -108,7 +109,7 @@ def test_patch_keeps_everything_else_including_a_nightly_landing_mid_write(tmp_p
     assert written["newest_event_date"] == "2026-11-05"
     assert written["future_key"] == 1
     assert written["tables"]["fct_zone_events"] == {"path": "fct_zone_events.parquet", "rows": 10}
-    assert all(written["tables"][n]["rows"] == 2 for n in config.LIVE_ATLANTIS_MARTS)
+    assert all(written["tables"][n]["rows"] == 2 for n in config.LIVE_MARTS["atlantis"])
 
 
 @pytest.mark.parametrize(

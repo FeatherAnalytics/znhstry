@@ -85,6 +85,8 @@ jobs:
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      QONQR_USERNAME: ${{ secrets.QONQR_USERNAME }}
+      QONQR_PASSWORD: ${{ secrets.QONQR_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -135,6 +137,17 @@ jobs:
         continue-on-error: true
         working-directory: pipeline
         run: uv run python -m znhstry battlestats
+
+      # Login-only, so it needs the portal account; without the secrets it skips rather than failing the night. Like battle reports it may fail without stopping the publish: a stale rate only means the Calculator defaults to yesterday's. It does not open the gate below, because a new rate alone is not worth a full export, and events arrive nearly every night anyway.
+      - name: Collect exchange rate
+        continue-on-error: true
+        working-directory: pipeline
+        run: |
+          if [ -z "$QONQR_USERNAME" ]; then
+            echo "QONQR_USERNAME not set - skipping the exchange rate" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          uv run python -m znhstry exchange
 
       # One place to decide, because six copies of the same expression is six chances
       # to get it wrong. A failed battlestats step leaves its output empty, and empty

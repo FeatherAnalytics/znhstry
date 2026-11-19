@@ -119,6 +119,7 @@ uvx --from "git+https://github.com/FeatherAnalytics/znhstry#subdirectory=mcp" zn
 |---|---|
 | `/` | the map — every zone, every date |
 | `/atlantis` | Atlantis tournament dashboard, history and all-time standings |
+| `/calculator` | Cubes and Qredits needed for a number of launches of one formation |
 | `/query` | SQL console over the published marts (DuckDB-WASM in the browser) |
 
 ## License

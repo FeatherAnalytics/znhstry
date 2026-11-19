@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const PAGES = [
   { href: "/", label: "Map" },
   { href: "/atlantis/", label: "Atlantis" },
+  { href: "/calculator/", label: "Calculator" },
   { href: "/query/", label: "Query" },
 ];
 

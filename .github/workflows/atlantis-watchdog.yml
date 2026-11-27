@@ -1,0 +1,65 @@
+name: Atlantis watchdog
+
+# Fails red when an Atlantis collection is overdue, so GitHub's failure email is the alarm.
+#
+# `atlantis.yml` has no schedule: a Cloudflare Worker dispatches it, and a Worker that
+# stops dispatching, or a dispatch token that stops working, leaves no failed run
+# anywhere in this repository. This workflow reads the same `state.json` the Worker
+# does and fails when `next_run_at` is well in the past. That one check covers the Worker
+# being down, the dispatch being refused and the collection runs themselves failing,
+# because in all three nothing moves `next_run_at` forward.
+#
+# ## Why GitHub's scheduler, which is the thing that was unreliable
+#
+# It has to be independent of Cloudflare to notice Cloudflare failing, and lateness does
+# not matter here: an alarm an hour late is still an alarm.
+#
+# ## Why days 1 to 8 only
+#
+# A tournament opens on the 1st and lasts at most seven days, and after the final pull
+# `next_run_at` is the 1st of the next month, which cannot be overdue. Running all month
+# would add about 700 green runs that can never fail.
+#
+# GitHub disables a schedule after 60 days without a commit to the repository, and emails
+# before it does.
+
+on:
+  schedule:
+    - cron: "23 * 1-8 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Twenty minutes is four missed ticks: one slow or failed run is not an alarm.
+      - name: Is a collection overdue?
+        env:
+          DATA_ORIGIN: ${{ vars.DATA_ORIGIN }}
+          OVERDUE_AFTER_SECONDS: "1200"
+        run: |
+          if [ -z "$DATA_ORIGIN" ]; then
+            echo "::error::DATA_ORIGIN is not set"
+            exit 1
+          fi
+          url="$DATA_ORIGIN/raw/atlantis/state.json"
+          code="$(curl -s -o "$RUNNER_TEMP/state.json" -w '%{http_code}' "$url")"
+          if [ "$code" != "200" ]; then
+            echo "::error::$url returned $code"
+            exit 1
+          fi
+          next="$(jq -r '.next_run_at // empty' "$RUNNER_TEMP/state.json")"
+          due="$(date -u -d "$next" +%s 2>/dev/null || true)"
+          if [ -z "$next" ] || [ -z "$due" ]; then
+            echo "::error::state.json has no readable next_run_at"
+            exit 1
+          fi
+          late=$(( $(date -u +%s) - due ))
+          if [ "$late" -gt "$OVERDUE_AFTER_SECONDS" ]; then
+            echo "::error::Atlantis collection is $(( late / 60 )) minutes overdue (next_run_at $next). Check the Worker's cron log in Cloudflare and the Atlantis workflow runs."
+            exit 1
+          fi
+          echo "next collection due $next" >> "$GITHUB_STEP_SUMMARY"

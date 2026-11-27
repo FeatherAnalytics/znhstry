@@ -11,7 +11,7 @@ The column reference is in `pipeline/src/znhstry/schema.py` (dtypes) and the CSV
 | `dailyzoneupdates-NN.csv` | every zone that changed that day, 31-slot ring | daily |
 | `Countries.csv`, `Regions.csv` | lookups | rarely |
 | `portal.qonqr.com` | battle reports, one HTML page per report | ten a day |
-| `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 30 minutes, tournament days only |
+| `portal.qonqr.com/Atlantis` | the monthly tournament leaderboard and zone counts | every 5 minutes, tournament days only |
 | `portal.qonqr.com/Player/Details` | player level, faction, status, current rank, start date (Private) and 35 medal flags; login-only, one page per player | four batches a day (`player-refresh.yml`), 175 per batch, queued by `profiles._targets` |
 | `portal.qonqr.com/Leaderboard/*` | player names only from the seven boards, every country and every region page, a one-time seed (`seed-names`) that writes each new name into the profile table as a placeholder for the queue; the numbers sit behind decoy columns and are not collected | once |
 | `portal.qonqr.com/Depot/Exchange` | the day's cube-to-Qredit exchange rate; login-only | nightly, before the warehouse build; skipped without the `QONQR_*` secrets |
@@ -101,26 +101,27 @@ Parquet tables under `data/raw/atlantis/`, which R2 holds under `raw/atlantis/` 
 
 **The schedule is read off the page, not configured.** A tournament starts 00:00 UTC on the
 1st of each month and the page states `Stacking Days: N  Battle Days: M`; the end is start
-plus N+M days. The job fetches every half hour while a tournament is running and not at all
+plus N+M days. The job fetches every five minutes while a tournament is running and not at all
 between them. The first run at or after the end is the final pull. A `state.json` beside the
-data carries `next_run_at`, and the workflow's gate reads it from the public bucket before
-deciding whether to run, so an idle run costs one small read and no request to the game.
-The gate fails the run when `DATA_ORIGIN` is unset or the state file returns anything but
-200 or 404, so a broken origin cannot turn into a half-hourly scrape between tournaments.
+data carries `next_run_at`, and the Worker reads it from the public bucket before deciding
+whether to dispatch, so an idle tick costs one small read, no workflow run and no request to
+the game. The workflow's own gate applies the same rule and stops a doubled dispatch before
+checkout. Both fail when the state file returns anything but 200 or 404, so a broken origin
+cannot turn into a five-minute scrape between tournaments.
 
 **A Cloudflare Worker dispatches the Atlantis workflow, because GitHub's scheduler does not.**
 GitHub's cron skipped the Atlantis schedule outright for hours at a time and runs the nightly
 about five hours late; Cloudflare cron triggers fire on time. `trigger/` is a Worker whose
-`scheduled` handler calls `workflow_dispatch` on `atlantis.yml` at :07 and :37 and on `nightly.yml`
-at 00:45 UTC, deployed by `deploy-trigger.yml`. On the :07 tick at 03, 09, 15 and 21 UTC it also starts `player-refresh.yml`; every dispatch is attempted before any failure is raised. The nightly and Atlantis workflows keep their own `schedule:`
-as the fallback. The Atlantis gate reads `next_run_at`, the next :00 or :30 after a collection, so the second run of a half hour reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
+`scheduled` handler calls `workflow_dispatch` on `atlantis.yml` every five minutes (:02, :07, … :57) when a collection is due and on `nightly.yml`
+at 00:45 UTC, deployed by `deploy-trigger.yml`. On the :07 tick at 03, 09, 15 and 21 UTC it also starts `player-refresh.yml`; every dispatch is attempted before any failure is raised. The nightly keeps its own `schedule:`
+as the fallback. Atlantis has none: GitHub cannot hold a five-minute cadence, and in November 2026 its half-hourly fallback fired 22 of 288 ticks and covered nothing the Worker missed. A Worker that stops dispatching leaves no red run, so `atlantis-watchdog.yml` is the alarm: hourly on days 1 to 8, on GitHub's own scheduler so it does not depend on Cloudflare, it fails when `next_run_at` is more than twenty minutes in the past. That covers a dead Worker, a refused dispatch and failing collection runs alike. The Worker also throws when a dispatch or the state read fails, which marks the invocation failed in its cron log. `next_run_at` is the next five-minute boundary after a collection, so a second run inside the same five minutes reads `run=false` — a true no-op. The nightly's `plan_slots` asks only for missing days, but "Collect battle reports" can open the publish gate when new reports arrived, so a doubled nightly republishes in that case — harmless, not a no-op. The Worker's `GITHUB_TOKEN` is a fine-grained token with Actions:
 Read and write on this repository, pushed from the repository secret
 `ATLANTIS_DISPATCH_TOKEN` on every deploy. It has no expiry; rotating it is replacing that
 secret and re-running `deploy-trigger.yml`.
 
-**The half-hourly job also publishes the marts built from its snapshots.** After the Atlantis export it writes and uploads the five half-hourly marts under `marts/`, so `read_parquet` on them is as fresh as the last collection rather than the last nightly. See "The marts, as Parquet" in [export.md](export.md). A failure there turns the run red after the raw data is archived, so no collected row depends on it.
+**Every Atlantis run publishes what it collected, to the site and to the marts.** After archiving the raw rows it builds the Atlantis models, exports `global/atlantis/` for the Atlantis page, and writes and uploads the five live marts under `marts/`, so the page, the query console and the MCP server's `read_parquet` on those tables are as fresh as the last collection, about five minutes during a tournament, rather than the last nightly. The other Atlantis marts (`fct_atlantis_placement`, `dim_atlantis_tournament_derived`, `fct_atlantis_zone_month_derived`) are the nightly's. See "The marts, as Parquet" in [export.md](export.md). A failure there turns the run red after the raw data is archived, so no collected row depends on it.
 
-**The half-hourly job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite collected rows or delete keys it never fetched.
+**The Atlantis job and `wayback.yml` are the two writers of `raw/atlantis/`.** Both share the `atlantis` concurrency group so they never run in parallel. A full `archive` with no `--prefix` neither uploads nor sweeps that subtree, so a laptop or the nightly holding a stale copy cannot overwrite collected rows or delete keys it never fetched.
 
 **The banner names the winner, and only after the end.** During the battle the page's
 `main-banner` h1 reads "The battle for Atlantis is under way."; afterwards it reads "The
@@ -149,7 +150,7 @@ on its formation zones, not from position.
 - **`CubesAllowed`** is true when the zone's rule text that month says use of refresh and
   recharge is allowed. Rules are per position, so `Swarm 1` and `Legion 1` share one.
 - **Counts use a plain space for thousands**, the same as the battle reports.
-- **One request every half hour and no retries in a run.** It is the game's live server.
+- **One request every five minutes and no retries in a run.** It is the game's live server.
 
 **`Source` is `'portal'` for rows from the live page and `'wayback'` for rows from the Internet Archive.** The `wayback` command is rerunnable; the merge is keyed so re-ingesting a snapshot is a no-op. Formation zones in 2021-era snapshots were named `Swarm Grunt`, `Legion Melee` etc. rather than `S DEF SHOCK`; `_triangle_faction` recognizes both the letter prefix and the full faction-word prefix. When a triangle has no formation zone (every December so far, and 2021-01) the faction is read from the page's own leaderboard, unanimously over at least three of its six names. A wayback month has one observation per snapshot, so it has no intervals.
 

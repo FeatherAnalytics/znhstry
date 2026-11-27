@@ -5,6 +5,7 @@ import { MultiSeries } from "@/components/charts/MultiSeries";
 import { useChartPointer } from "@/components/charts/useChartPointer";
 import {
   deriveIntervals,
+  rollingHourRates,
   formatObs,
   factionColor,
   factionHex,
@@ -31,11 +32,20 @@ const section: CSSProperties = {
   background: "var(--ink-raised)",
 };
 
-function topIntervals(intervals: Interval[], count: number): Interval[] {
-  return [...intervals].sort((a, b) => b.perHour - a.perHour).slice(0, count);
+// The best hours, by the rolling rate at each interval's end. Windows ending within an
+// hour of a better one overlap it, so they are skipped: otherwise the top three are one
+// burst counted three times.
+function topHours(intervals: Interval[], hourRates: (number | null)[], obsTs: number[], count: number): Interval[] {
+  const ranked = [...intervals].sort((a, b) => (hourRates[b.index] ?? 0) - (hourRates[a.index] ?? 0));
+  const top: Interval[] = [];
+  for (const iv of ranked) {
+    if (top.length === count) break;
+    if (top.every((t) => Math.abs(obsTs[t.index] - obsTs[iv.index]) >= 3600)) top.push(iv);
+  }
+  return top;
 }
 
-function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: number[]; color: string }) {
+function GainsBars({ intervals, hourRates, obsTs, color }: { intervals: Interval[]; hourRates: (number | null)[]; obsTs: number[]; color: string }) {
   const n = obsTs.length;
   const plotW = WIDTH - PAD.left - PAD.right;
   const plotH = BAR_HEIGHT - PAD.top - 10;
@@ -55,7 +65,7 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
   if (!n || intervals.length === 0) return null;
 
   const maxGain = Math.max(1, ...intervals.map((iv) => iv.gained));
-  const top3 = topIntervals(intervals, 3);
+  const top3 = topHours(intervals, hourRates, obsTs, 3);
   const hovered = hoverIdx !== null ? intervals[hoverIdx] : undefined;
 
   return (
@@ -85,7 +95,7 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
                 fill="var(--text)"
                 className="tabular"
               >
-                {Math.round(iv.perHour)}/hr
+                {Math.round(hourRates[iv.index] ?? 0)}/hr
               </text>
             ) : null}
           </g>
@@ -97,7 +107,7 @@ function GainsBars({ intervals, obsTs, color }: { intervals: Interval[]; obsTs: 
         <>
           {formatObs(obsTs[hovered.prevIndex])} to {formatObs(obsTs[hovered.index])}
           <span style={{ color: "var(--text)", marginLeft: 8 }}>+{compact(hovered.gained)}</span>
-          <span style={{ marginLeft: 8 }}>{compact(hovered.perHour)}/hr</span>
+          <span style={{ marginLeft: 8 }}>{compact(hourRates[hovered.index] ?? 0)}/hr over the hour to here</span>
         </>
       ) : null}
     </div>
@@ -117,6 +127,11 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
 
   const intervals = useMemo(
     () => (data ? deriveIntervals(data.launches, obsTimestamps) : []),
+    [data, obsTimestamps],
+  );
+
+  const hourRates = useMemo(
+    () => (data ? rollingHourRates(data.launches, obsTimestamps) : []),
     [data, obsTimestamps],
   );
 
@@ -146,7 +161,7 @@ export default function PlayerDetail({ faction, playerName, month, obsTimestamps
       <MultiSeries x={obsTimestamps} series={[{ label: "Launches", color, values: data.launches }]} title="" labelOf={formatObs} height={180} />
 
       <div className="display" style={{ fontSize: 11, marginBottom: 4, marginTop: 12 }} title="Launches gained between the first and last observation we hold — see the coverage line for this month's window">Gains per interval</div>
-      <GainsBars intervals={intervals} obsTs={obsTimestamps} color={color} />
+      <GainsBars intervals={intervals} hourRates={hourRates} obsTs={obsTimestamps} color={color} />
       <span className="compact-footnote eyebrow" style={{ color: "var(--text-dim)", marginTop: 4, fontSize: 9 }}>
         Gains cover observed hours only
       </span>

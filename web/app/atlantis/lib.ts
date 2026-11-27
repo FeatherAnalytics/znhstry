@@ -196,6 +196,31 @@ export function deriveIntervals(values: (number | null)[], obsTs: number[]): Int
   return result;
 }
 
+const ROLLING_WINDOW_S = 3600;
+// Two observations the cron puts an hour apart are a few seconds short of 3,600 on the
+// server's clock. Half the collector's five-minute step keeps them a window.
+const ROLLING_SLACK_S = 150;
+
+/** Launches per hour over the 60 minutes ending at each observation. */
+export function rollingHourRates(values: (number | null)[], obsTs: number[]): (number | null)[] {
+  const result: (number | null)[] = new Array(values.length).fill(null);
+  const seen: number[] = [];
+  let base = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (values[i] === null) continue;
+    seen.push(i);
+    if (seen.length === 1) continue;
+    const windowStart = obsTs[i] - ROLLING_WINDOW_S + ROLLING_SLACK_S;
+    while (base + 2 < seen.length && obsTs[seen[base + 1]] <= windowStart) base++;
+    const from = seen[base];
+    // A gap wider than the window averages down to an hour. A span shorter than it is
+    // not scaled up: ten minutes of data is that many launches, not six times as many.
+    const span = Math.max(obsTs[i] - obsTs[from], ROLLING_WINDOW_S);
+    result[i] = ((values[i]! - values[from]!) / span) * ROLLING_WINDOW_S;
+  }
+  return result;
+}
+
 const utcDateFmt = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",

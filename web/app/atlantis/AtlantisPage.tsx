@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { SiteNav } from "@/components/SiteNav";
 import { BASE } from "@/lib/dataOrigin";
@@ -94,6 +94,11 @@ function SubTabs({ views, active, onSelect }: { views: [string, string][]; activ
   );
 }
 
+// The collector publishes every five minutes while a tournament runs, and the final pull
+// lands a few minutes after the end.
+const REFRESH_MS = 5 * 60_000;
+const FINAL_PULL_GRACE_MS = 15 * 60_000;
+
 export default function AtlantisPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -102,6 +107,8 @@ export default function AtlantisPage() {
   const [monthData, setMonthData] = useState<MonthPayload | DerivedMonthPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const shownMonth = useRef<string | null>(null);
 
   const selectedMonth = searchParams.get("t");
   const playerParam = searchParams.get("player");
@@ -133,10 +140,11 @@ export default function AtlantisPage() {
     let live = true;
     fetchIndex(BASE).then(
       (idx) => { if (live) setIndex(idx); },
-      (err: unknown) => { if (live) setError(err instanceof Error ? err.message : String(err)); },
+      // A refresh that fails keeps what is on screen; the next tick tries again.
+      (err: unknown) => { if (live && refreshTick === 0) setError(err instanceof Error ? err.message : String(err)); },
     ).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, []);
+  }, [refreshTick]);
 
   const allTournaments = useMemo(() => index ? mergedTournaments(index) : [], [index]);
 
@@ -150,18 +158,35 @@ export default function AtlantisPage() {
   const derivedSelected = selectedTournament && isDerived(selectedTournament);
 
   useEffect(() => {
-    if (!resolvedMonth || !selectedTournament) return;
+    if (!resolvedMonth || derivedSelected === null) return;
     let live = true;
-    setMonthData(null);
-    const fetcher = isDerived(selectedTournament)
+    // Keyed on the month and whether it is derived, not on the tournament object: a
+    // refreshed index is a new object, and clearing on it would blank the page every tick.
+    const refreshing = shownMonth.current === resolvedMonth;
+    if (!refreshing) setMonthData(null);
+    shownMonth.current = resolvedMonth;
+    const fetcher = derivedSelected
       ? fetchDerivedMonth(BASE, resolvedMonth)
       : fetchMonth(BASE, resolvedMonth);
     fetcher.then(
       (m) => { if (live) setMonthData(m); },
-      (err: unknown) => { if (live) setError(err instanceof Error ? err.message : String(err)); },
+      (err: unknown) => { if (live && !refreshing) setError(err instanceof Error ? err.message : String(err)); },
     );
     return () => { live = false; };
-  }, [resolvedMonth, selectedTournament]);
+  }, [resolvedMonth, derivedSelected, refreshTick]);
+
+  const liveUntil = selectedTournament && !derivedSelected
+    ? new Date(selectedTournament.ends_at).getTime() + FINAL_PULL_GRACE_MS
+    : null;
+
+  useEffect(() => {
+    if (liveUntil === null || Date.now() > liveUntil) return;
+    const timer = setInterval(() => {
+      if (Date.now() > liveUntil) clearInterval(timer);
+      else if (!document.hidden) setRefreshTick((t) => t + 1);
+    }, REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [liveUntil]);
 
   const boardMonth = !derivedSelected && monthData && "observations" in monthData ? monthData as MonthPayload : null;
   const derivedMonth = derivedSelected && monthData && "zones" in monthData && Array.isArray((monthData as DerivedMonthPayload).zones) ? monthData as DerivedMonthPayload : null;

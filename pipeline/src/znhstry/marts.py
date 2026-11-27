@@ -5,7 +5,7 @@ the way the viewer fetches. Nothing else can read it without the decoder. This i
 other shape - one zstd Parquet file per table under `dist/marts/`, uploaded to the bucket
 under `marts/`, so `read_parquet('https://.../marts/fct_zone_events.parquet')` works from
 any DuckDB with nothing installed and no key. The nightly writes every table; between
-nightlies the half-hourly Atlantis job and the player-refresh batches write their sets in
+nightlies the Atlantis job and the player-refresh batches write their sets in
 `config.LIVE_MARTS`.
 
 Every file is written from a query that sorts on a key which is unique for that table.

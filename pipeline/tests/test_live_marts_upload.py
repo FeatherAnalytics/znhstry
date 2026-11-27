@@ -1,4 +1,4 @@
-"""The half-hourly marts publish must leave every other mart exactly as it found it.
+"""The live marts publish must leave every other mart exactly as it found it.
 
 This run's warehouse holds five of the marts, so the bucket is the only record of the rest.
 A sweep, or a manifest rebuilt from what is on disk, would remove them from the console and

@@ -1,7 +1,9 @@
 // Cron triggers that dispatch the data workflows, because GitHub's own scheduler does not
 // run them on time: it dropped the Atlantis cron outright for hours and runs the
-// nightly about five hours late. Cloudflare crons fire on time. The Worker does nothing
-// else - each workflow still decides for itself whether there is work. The :07 tick at 03, 09, 15 and 21 UTC also starts the player-refresh batch, so it needs no cron of its own; the Free plan allows five per account.
+// nightly about five hours late. Cloudflare crons fire on time. For Atlantis the Worker
+// also reads state.json and dispatches only when a collection is due, so the weeks between
+// tournaments produce no workflow runs. The :07 tick at 03, 09, 15 and 21 UTC also starts
+// the player-refresh batch, so it needs no cron of its own; the Free plan allows five per account.
 //
 // Deployed by .github/workflows/deploy-trigger.yml, which also sets the GITHUB_TOKEN secret
 // from the repository secret ATLANTIS_DISPATCH_TOKEN.
@@ -9,10 +11,12 @@
   "name": "znhstry-atlantis-trigger",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-04",
-  // Each line maps to one workflow in src/index.ts. :07 and :37 match atlantis.yml, where a
-  // run firing a little before :00 or :30 would read the previous half hour's page. 00:45 is for the
+  // Each line is matched by name in src/index.ts. Atlantis ticks at :02, :07, ... :57, two
+  // minutes past each five-minute boundary that `next_run_at` names. 00:45 is for the
   // nightly: QONQR writes the day's slot just after 00:00 UTC.
-  "triggers": { "crons": ["7,37 * * * *", "45 0 * * *"] },
+  "triggers": { "crons": ["2-59/5 * * * *", "45 0 * * *"] },
+  // The public bucket, where the Atlantis job archives raw/atlantis/state.json.
+  "vars": { "DATA_ORIGIN": "https://data.znhstry.com" },
   "observability": { "enabled": true },
   "workers_dev": false
 }

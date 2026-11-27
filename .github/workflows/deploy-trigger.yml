@@ -1,7 +1,8 @@
 name: Deploy the Atlantis trigger
 
-# The Cloudflare Worker whose crons dispatch atlantis.yml every half hour and nightly.yml at
-# 00:45 UTC, because GitHub's scheduler drops the one and runs the other hours late. Only
+# The Cloudflare Worker whose crons dispatch atlantis.yml every five minutes while a
+# tournament runs and nightly.yml at 00:45 UTC, because GitHub's scheduler drops the one
+# and runs the other hours late. Only
 # the Worker: the site is deploy.yml and the data is nightly.yml and atlantis.yml.
 #
 # The Worker needs one secret, a fine-grained GitHub token with Actions: Read and write on

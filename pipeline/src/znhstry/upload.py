@@ -74,12 +74,12 @@ ARCHIVE = "no-store"
 # a pull-request runner - learns what to fetch and how to check it arrived whole.
 MANIFEST_KEY = ARCHIVE_PREFIX + "_manifest.json"
 
-# Each written only by its own job: the half-hourly Atlantis job and the player-refresh batches.
+# Each written only by its own job: the Atlantis job and the player-refresh batches.
 # Any other checkout holds a stale copy, so a full archive neither uploads nor sweeps these
 # subtrees; only a run scoped to one may write it.
 OWNED_PREFIXES = ("atlantis/", "players/")
 
-# The marts as Parquet, written by `upload_marts` and, for the half-hourly tables,
+# The marts as Parquet, written by `upload_marts` and, for the live tables,
 # `upload_live_marts`. Fenced from the export's sweep
 # for the same reason as `raw/`: it lives in this bucket and the export does not name it.
 MARTS_PREFIX = "marts/"
@@ -471,7 +471,7 @@ def upload_marts(source: Path | None = None, bucket: str | None = None) -> None:
 def _read_marts_manifest(s3, bucket: str, names: tuple[str, ...]) -> tuple[dict, str]:
     """The published manifest and its ETag, refusing one this run could not patch whole.
 
-    The bucket copy is the only record of the marts the half-hourly warehouse does not
+    The bucket copy is the only record of the marts the Atlantis warehouse does not
     hold. Treating a missing or broken one as empty would publish a manifest naming only
     the live tables, and the console and MCP server would lose all the others.
     """

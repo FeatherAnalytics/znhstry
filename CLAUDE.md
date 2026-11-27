@@ -37,9 +37,7 @@ cd pipeline  && uv run python -m znhstry upload --marts  # push them to R2 under
 cd pipeline  && uv run python -m znhstry archive      # push data/raw to R2 under raw/
 ```
 
-**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, the half-hourly
-Atlantis job at :07 and :37 by the same Worker, and a player-refresh batch on the :07 tick at 03, 09, 15 and 21 UTC.** GitHub's own `schedule:` lines stay as fallbacks;
-GitHub has been firing the 02:30 cron around 07:20 and dropping the Atlantis one entirely. The Atlantis gate makes its doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
+**The nightly is started at 00:45 UTC by a Cloudflare Worker in `trigger/`, the Atlantis job every five minutes (:02, :07, … :57) by the same Worker while a tournament runs, and a player-refresh batch on the :07 tick at 03, 09, 15 and 21 UTC.** The Worker reads `raw/atlantis/state.json` and dispatches Atlantis only when `next_run_at` has passed, so the weeks between tournaments produce no workflow runs; `atlantis.yml` has no `schedule:` of its own, so `atlantis-watchdog.yml` runs hourly on days 1–8 and fails red when a collection is more than twenty minutes overdue. The nightly's `schedule:` stays as a fallback; GitHub has been firing the 02:30 cron around 07:20. The Atlantis gate makes a doubled run a no-op; the nightly's doubled run republishes when new battle reports arrived, which is harmless.
 
 Other steps:
 

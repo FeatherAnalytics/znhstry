@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type CSSProperties } from "react";
 import {
-  deriveIntervals,
+  rollingHourRates,
   factionColor,
   compact,
   FACTION_ORDER,
@@ -55,12 +55,12 @@ function lastBool(arr: (boolean | null)[], idx: number): boolean {
 function playerToRow(faction: string, name: string, data: MonthPayload["players"][""][""], obsTs: number[]): Row {
   const lastIdx = lastNonNull(data.launches);
   const launches = lastIdx >= 0 ? (data.launches[lastIdx] ?? 0) : 0;
-  const intervals = deriveIntervals(data.launches, obsTs);
+  const hourRates = rollingHourRates(data.launches, obsTs).filter((r): r is number => r !== null);
   return {
     faction,
     name,
     launches,
-    bestHr: intervals.length > 0 ? intervals.reduce((m, iv) => Math.max(m, iv.perHour), 0) : null,
+    bestHr: hourRates.length > 0 ? Math.max(0, ...hourRates) : null,
     tm: lastBool(data.tm, lastIdx),
     wm: lastBool(data.wm, lastIdx),
     qredits: data.qredits ?? 0,

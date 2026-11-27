@@ -274,7 +274,7 @@ back 31 days and the record starts in 2012. R2 holds the only other copy, under 
   what to fetch. Without R2 credentials `restore` reads it over plain HTTP from
   `PUBLIC_DATA_ORIGIN` and refuses any body whose MD5 does not match; a truncated Parquet
   file decodes into plausible rows for however many arrived, and nothing downstream would
-  notice. `tests/test_restore_public.py` pins the refusal. Both the nightly and the half-hourly
+  notice. `tests/test_restore_public.py` pins the refusal. Both the nightly and the Atlantis
   Atlantis job rewrite the manifest, each from a complete listing, so whichever runs last
   leaves it whole.
 - **`schema.py` is the dtype contract, not documentation.** Two paths write this Parquet and
@@ -367,15 +367,15 @@ select * from read_parquet('https://data.znhstry.com/marts/fct_atlantis_zone_pla
 
 Row counts and byte sizes are in `marts/_meta.json`, which names every table with its path, row count, bytes, sort key and columns, plus `newest_event_date`. Written last, so a reader that finds it finds every file it names.
 
-**Five marts also publish every half hour during a tournament.** `stg_atlantis_zones`, `stg_atlantis_leaderboard`, `fct_atlantis_zone_interval`, `fct_atlantis_player_interval` and `fct_atlantis_faction_hourly` are built from half-hourly snapshots, so a nightly-only publish left them up to a day behind the raw layer. `marts --only atlantis` writes them to `dist/marts-atlantis/`, and `upload --marts --only atlantis` sends the changed ones, about 450 kB in total. The rest of the nightly's rules hold: total-order check, ETag skip, files before manifest.
+**Five marts also publish every five minutes during a tournament.** `stg_atlantis_zones`, `stg_atlantis_leaderboard`, `fct_atlantis_zone_interval`, `fct_atlantis_player_interval` and `fct_atlantis_faction_hourly` are built from the five-minute snapshots, so a nightly-only publish left them up to a day behind the raw layer. `marts --only atlantis` writes them to `dist/marts-atlantis/`, and `upload --marts --only atlantis` sends the changed ones, about 450 kB in total. The rest of the nightly's rules hold: total-order check, ETag skip, files before manifest.
 
 **The player marts also publish four times a day.** `fct_player_profile` and `dim_player` are the `players` set of `LIVE_MARTS`: each player-refresh batch runs `marts --only players` (to `dist/marts-players/`) and `upload --marts --only players`, the same scoped path as the Atlantis five.
 
 **The scoped publish never sweeps and never rebuilds the manifest.** Its warehouse holds only its own set's build, so the bucket is the only record of the other marts. It reads the live `_meta.json`, replaces only its set's entries and writes it back with `If-Match`. A missing, unparsable or incomplete manifest stops the step before its first write. The separate directory keeps a partial set away from `upload_marts`, which treats `dist/marts/` as the complete list of live tables.
 
-**The nightly and the half-hourly job can overlap, and each case resolves itself.** A nightly that started before a collection can overwrite the five files with older bytes; the next half-hourly run sends them again and repairs the manifest entries even when no file changed. The final pull lands before the 00:45 UTC nightly restores the raw layer, so that nightly carries it, and any later nightly that opens the gate does the same. A half-hourly write that loses the race to a nightly gets a 412, re-reads and patches again, so it cannot revert the nightly's entries. A manifest that briefly disagrees with a file affects only the row count and size the console displays.
+**The nightly and the Atlantis job can overlap, and each case resolves itself.** A nightly that started before a collection can overwrite the five files with older bytes; the next Atlantis run sends them again and repairs the manifest entries even when no file changed. The final pull lands before the 00:45 UTC nightly restores the raw layer, so that nightly carries it, and any later nightly that opens the gate does the same. An Atlantis write that loses the race to a nightly gets a 412, re-reads and patches again, so it cannot revert the nightly's entries. A manifest that briefly disagrees with a file affects only the row count and size the console displays.
 
-**A console tab left open across any publish keeps serving what it first read, until reload.** DuckDB-WASM holds the footer for the session. Measured with a replaced file: columns already read return the old version, a footer-only read followed by a column read fails with `TProtocolException: Invalid data`, and a shrunken file fails with a 416. Turning `parquet_metadata_cache` off does not change this. Half-hourly publishing makes it more frequent for these five tables on tournament days.
+**A console tab left open across any publish keeps serving what it first read, until reload.** DuckDB-WASM holds the footer for the session. Measured with a replaced file: columns already read return the old version, a footer-only read followed by a column read fails with `TProtocolException: Invalid data`, and a shrunken file fails with a 416. Turning `parquet_metadata_cache` off does not change this. Five-minute publishing makes it more frequent for these five tables on tournament days.
 
 **`is_latest` is how a reader reaches the newest rows without a subquery.** On
 `fct_country_daily` and `fct_global_daily` it is true on the newest day in the record; on

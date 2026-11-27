@@ -117,7 +117,7 @@ WEB_DATA = ROOT / "dist" / "data"
 # warehouse from outside the map. Uploaded under `marts/`, apart from the export.
 MARTS_OUT = ROOT / "dist" / "marts"
 
-# Marts a job publishes between nightlies: the half-hourly Atlantis job and the player-refresh
+# Marts a job publishes between nightlies: the Atlantis job and the player-refresh
 # batches. Each set has its own directory: a partial set inside MARTS_OUT would reach
 # `upload_marts`, which treats that directory as the complete list of tables and sweeps the rest.
 LIVE_MARTS = {

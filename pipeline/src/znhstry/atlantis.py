@@ -7,7 +7,7 @@ up to three hundred leaderboard rows come back together.
 
 The page also says when it ends. "Stacking Days: N  Battle Days: M" plus the start at
 00:00 UTC on the 1st gives `ends_at`, and the run after that instant is the final pull.
-`state.json` records `next_run_at` for the workflow gate: every half hour while the battle is on,
+`state.json` records `next_run_at` for the gate: every five minutes while the battle is on,
 then the 1st of the following month. It is the only thing the gate reads, so every run
 writes it, including the ones that parse nothing.
 
@@ -72,11 +72,19 @@ _FORMATION_PREFIX = {"L ": "Legion", "S ": "Swarm", "F ": "Faceless"}
 _CUBES_ALLOWED = "refresh/recharge is allowed"
 
 
-def _next_half_hour(moment: datetime) -> datetime:
-    # The next :00 or :30, not observed_at + 30m: the cron fires at the same minutes every
-    # half hour, so a due time a few seconds past that minute would skip every other run.
-    floor = moment.replace(minute=moment.minute // 30 * 30, second=0, microsecond=0)
-    return floor + timedelta(minutes=30)
+COLLECT_EVERY_MINUTES = 5
+
+
+def _next_collection(moment: datetime) -> datetime:
+    # The next clock boundary, not observed_at + 5m: the Worker's cron fires at the same
+    # minutes every time, so a due time a few seconds past that minute would skip every
+    # other run.
+    floor = moment.replace(
+        minute=moment.minute // COLLECT_EVERY_MINUTES * COLLECT_EVERY_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+    return floor + timedelta(minutes=COLLECT_EVERY_MINUTES)
 
 
 class LayoutChanged(Exception):
@@ -508,7 +516,7 @@ def scrape_atlantis() -> int:
 
     ends_at = page.schedule.ends_at if page.schedule else None
     final = ends_at is not None and observed_at >= ends_at
-    next_run_at = _next_month(month) if final else _next_half_hour(observed_at)
+    next_run_at = _next_month(month) if final else _next_collection(observed_at)
     _write_state(
         {
             "month": month.isoformat(),
